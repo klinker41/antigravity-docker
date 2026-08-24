@@ -98,31 +98,79 @@ case "$1" in
             echo "==================================================================="
         fi
 
-        # Background watchdog to detect dynamic port from agy and bind socat to fixed TARGET_PORT
+        # Background watchdog: detects agy dynamic port & launches internal reverse proxy with Host header rewriting
         (
-            socat_bound=false
-            while [ "$socat_bound" = "false" ]; do
+            proxy_started=false
+            while [ "$proxy_started" = "false" ]; do
                 sleep 0.5
-                
-                # Check for listening TCP ports on 127.0.0.1 or 0.0.0.0 excluding TARGET_PORT and 7681
+
+                # Detect listening TCP ports on 127.0.0.1 or 0.0.0.0 excluding TARGET_PORT and 7681
                 dyn_port=$(ss -tlnH 2>/dev/null | awk '{print $4}' | sed -E 's/.*:([0-9]+)/\1/' | grep -v -E "^(${TARGET_PORT}|7681|0)$" | head -n 1)
-                
+
                 if [ -z "$dyn_port" ]; then
                     dyn_port=$(netstat -tln 2>/dev/null | awk '{print $4}' | sed -E 's/.*:([0-9]+)/\1/' | grep -v -E "^(${TARGET_PORT}|7681|0)$" | head -n 1)
                 fi
 
                 if [ -n "$dyn_port" ] && [ "$dyn_port" != "$TARGET_PORT" ]; then
                     echo "==================================================================="
-                    echo " 🔗 Port Forwarder Active: Exposing dynamic port $dyn_port on port $TARGET_PORT"
+                    echo " 🔗 Reverse Proxy Bridge Active: Exposing dynamic port $dyn_port on port $TARGET_PORT"
+                    echo " ➜ Rewriting Host header to 'localhost' to authorize external access"
                     echo " ➜ Reverse proxy & direct URL: http://<your-server-ip>:${TARGET_PORT}"
                     echo "==================================================================="
-                    pkill -f "socat TCP-LISTEN:${TARGET_PORT}" 2>/dev/null || true
-                    if command -v socat >/dev/null 2>&1; then
-                        socat TCP-LISTEN:"${TARGET_PORT}",fork,reuseaddr TCP:127.0.0.1:"${dyn_port}" &
-                        socat_bound=true
+
+                    if command -v nginx >/dev/null 2>&1; then
+                        # Stop any previous nginx instance
+                        nginx -s stop 2>/dev/null || pkill nginx 2>/dev/null || true
+
+                        # Create dedicated Nginx config that rewrites Host & Origin headers to localhost
+                        cat <<EOF > /tmp/antigravity_proxy.conf
+pid /tmp/nginx.pid;
+events {
+    worker_connections 1024;
+}
+http {
+    access_log /tmp/nginx_access.log;
+    error_log /tmp/nginx_error.log;
+
+    map \$http_upgrade \$connection_upgrade {
+        default upgrade;
+        ''      close;
+    }
+
+    server {
+        listen ${TARGET_PORT};
+        server_name _;
+
+        location / {
+            proxy_pass http://127.0.0.1:${dyn_port};
+            proxy_http_version 1.1;
+
+            # Rewrite Host & Origin to satisfy Antigravity localhost security check
+            proxy_set_header Host localhost;
+            proxy_set_header Origin "http://localhost";
+
+            # WebSocket & SSE Streaming Support
+            proxy_set_header Upgrade \$http_upgrade;
+            proxy_set_header Connection \$connection_upgrade;
+
+            proxy_set_header X-Real-IP \$remote_addr;
+            proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto \$scheme;
+
+            proxy_read_timeout 86400s;
+            proxy_send_timeout 86400s;
+            proxy_buffering off;
+        }
+    }
+}
+EOF
+                        nginx -c /tmp/antigravity_proxy.conf
+                        proxy_started=true
                         break
-                    else
-                        echo "[ERROR] 'socat' is not installed in the container! Please run: docker compose build --no-cache" >&2
+                    elif command -v socat >/dev/null 2>&1; then
+                        pkill -f "socat TCP-LISTEN:${TARGET_PORT}" 2>/dev/null || true
+                        socat TCP-LISTEN:"${TARGET_PORT}",fork,reuseaddr TCP:127.0.0.1:"${dyn_port}" &
+                        proxy_started=true
                         break
                     fi
                 fi

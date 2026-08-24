@@ -38,6 +38,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     xz-utils \
     gosu \
     socat \
+    nginx \
     && rm -rf /var/lib/apt/lists/*
 
 # 2. Install Docker CLI and Docker Compose plugin (Official Docker repository)
