@@ -53,7 +53,6 @@ RUN install -m 0755 -d /etc/apt/keyrings && \
 # 3. Install Node.js 26 (Latest release line) and Package Managers (npm, pnpm, yarn, bun)
 RUN curl -fsSL https://deb.nodesource.com/setup_26.x | bash - && \
     apt-get install -y --no-install-recommends nodejs && \
-    corepack enable && \
     npm install -g pnpm yarn bun && \
     rm -rf /var/lib/apt/lists/*
 
