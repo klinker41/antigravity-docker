@@ -1353,8 +1353,26 @@ const server = http.createServer(async (req, res) => {
             return;
         }
 
-        // Ensure useWebSocket=true query param is present for browser UI to use multiplexed WebSocket transport
-        if (req.method === 'GET' && (parsedUrl.pathname === '/' || parsedUrl.pathname === '/index.html')) {
+// Helper to determine if a request path corresponds to a browser SPA frontend route
+function isSpaRoute(pathname) {
+    if (/\.[a-zA-Z0-9]+$/.test(pathname)) {
+        return pathname === '/index.html';
+    }
+    if (
+        pathname.startsWith('/__auth') ||
+        pathname.startsWith('/status') ||
+        pathname.startsWith('/connect-websocket') ||
+        pathname.startsWith('/exa.') ||
+        pathname.startsWith('/google.') ||
+        pathname.startsWith('/static')
+    ) {
+        return false;
+    }
+    return true;
+}
+
+        // Ensure useWebSocket=true query param is present for all browser SPA routes (/c/..., /history, /, etc.)
+        if (req.method === 'GET' && isSpaRoute(parsedUrl.pathname)) {
             if (parsedUrl.searchParams.get('useWebSocket') !== 'true') {
                 parsedUrl.searchParams.set('useWebSocket', 'true');
                 res.writeHead(302, {
