@@ -43,12 +43,12 @@ else
         -v "${SCRIPT_DIR}/data/antigravity:/home/developer/.antigravity" \
         -v "${WORKSPACE_PATH}:/workspace" \
         -e RC_NAME="${INSTANCE_NAME}" \
-        antigravity-headless:latest setup
+        jklinker/antigravity-docker:latest setup
 fi
 
 echo ""
 echo "==================================================================="
 echo "✓ Authentication completed successfully!"
 echo "Now you can start the background daemon with:"
-echo "  docker compose up -d (or ./scripts/start-daemon.sh)"
+echo "  docker compose up -d"
 echo "==================================================================="

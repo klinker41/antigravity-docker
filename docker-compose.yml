@@ -2,15 +2,16 @@ version: '3.8'
 
 services:
   antigravity-agent:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      args:
-        BASE_IMAGE: ${BASE_IMAGE:-ubuntu:26.04}
-        USERNAME: developer
-        USER_UID: ${PUID:-1000}
-        USER_GID: ${PGID:-1000}
-    image: antigravity-headless:latest
+    image: jklinker/antigravity-docker:latest
+    # (Optional) Uncomment to build locally:
+    # build:
+    #   context: .
+    #   dockerfile: Dockerfile
+    #   args:
+    #     BASE_IMAGE: ${BASE_IMAGE:-ubuntu:26.04}
+    #     USERNAME: developer
+    #     USER_UID: ${PUID:-1000}
+    #     USER_GID: ${PGID:-1000}
     container_name: antigravity-agent
     restart: unless-stopped
     stdin_open: true

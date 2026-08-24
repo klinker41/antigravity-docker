@@ -50,7 +50,7 @@ elif command -v docker-compose >/dev/null 2>&1; then
 else
     docker run --rm \
         -v /var/run/docker.sock:/var/run/docker.sock \
-        antigravity-headless:latest bash -c "$TEST_CMD"
+        jklinker/antigravity-docker:latest bash -c "$TEST_CMD"
 fi
 
 echo "==================================================================="

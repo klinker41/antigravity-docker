@@ -66,14 +66,15 @@ Connect to your server's agent anytime from any device (phone, tablet, laptop) v
 
 ## 🚀 Quickstart Guide
 
+The pre-built image is published on Docker Hub at [`jklinker/antigravity-docker:latest`](https://hub.docker.com/r/jklinker/antigravity-docker). You can copy the configuration files directly to your server without needing to build the image locally.
+
 ### Step 1: Copy Files & Configure `.env`
-Copy this directory to your remote server:
+Copy `docker-compose.yml` and `.env.example` to your remote server:
 ```bash
 cp .env.example .env
 ```
 Edit `.env` to configure your instance name, password, and workspace directory:
 ```ini
-BASE_IMAGE=ubuntu:26.04
 RC_NAME=my-server-agent
 AGY_PORT=4400
 AGY_PORT_BINDING=4400
@@ -91,6 +92,14 @@ Run the interactive setup command:
 ./scripts/setup-auth.sh
 # Or directly via docker compose:
 docker compose run --rm antigravity-agent setup
+# Or via standalone docker run:
+docker run -it --rm \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v $(pwd)/data/gemini:/home/developer/.gemini \
+  -v $(pwd)/data/antigravity:/home/developer/.antigravity \
+  -v /home/ubuntu/projects:/workspace \
+  -e RC_NAME=my-server-agent \
+  jklinker/antigravity-docker:latest setup
 ```
 1. A Google sign-in URL will appear in the terminal.
 2. Open the URL in your browser on any device.
@@ -150,6 +159,17 @@ If you want to access the container's shell directly from a web browser without 
    docker compose up -d
    ```
 3. Access the terminal at `http://<your-server-ip>:7681`.
+
+---
+
+## 🛠️ Building & Pushing to Docker Hub
+
+If you make modifications to the `Dockerfile` or source files and want to rebuild and publish the container image to Docker Hub:
+
+```bash
+docker build -t jklinker/antigravity-docker:latest .
+docker push jklinker/antigravity-docker:latest
+```
 
 ---
 
