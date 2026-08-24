@@ -81,8 +81,18 @@ ARG USERNAME=developer
 ARG USER_UID=1000
 ARG USER_GID=1000
 
-RUN groupadd --gid ${USER_GID} ${USERNAME} && \
-    useradd --uid ${USER_UID} --gid ${USER_GID} -m -s /bin/bash ${USERNAME} && \
+RUN if id -u ubuntu >/dev/null 2>&1; then userdel -f -r ubuntu || true; fi && \
+    if getent group ubuntu >/dev/null 2>&1; then groupdel ubuntu || true; fi && \
+    if ! getent group ${USER_GID} >/dev/null 2>&1; then \
+        groupadd --gid ${USER_GID} ${USERNAME}; \
+    else \
+        groupmod -n ${USERNAME} $(getent group ${USER_GID} | cut -d: -f1); \
+    fi && \
+    if ! id -u ${USER_UID} >/dev/null 2>&1; then \
+        useradd --uid ${USER_UID} --gid ${USER_GID} -m -s /bin/bash ${USERNAME}; \
+    else \
+        usermod -l ${USERNAME} -d /home/${USERNAME} -m $(id -un ${USER_UID}); \
+    fi && \
     echo "${USERNAME} ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers.d/${USERNAME} && \
     chmod 0440 /etc/sudoers.d/${USERNAME}
 
