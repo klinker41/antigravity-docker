@@ -24,6 +24,8 @@ services:
       - RC_NAME=<remote-control-name>
       - AGY_PORT=4400
       - AUTH_PASSWORD=<password-for-login>
+      - ENABLE_IDE=true
+      - ENABLE_TERMINAL=true
       - HOST_SSH_USER=<host-username>
       - HOST_SSH_HOST=host.docker.internal
       - HOST_SSH_PORT=22
@@ -49,6 +51,8 @@ services:
 | `RC_NAME` | `server-agent` | Identifier name for this server instance. |
 | `AGY_PORT` | `4400` | Port exposed by the built-in web gateway. |
 | `AUTH_PASSWORD` | *(empty)* | Optional password to protect web access. When set, prompts for login and remembers session for 30 days. |
+| `ENABLE_IDE` | `true` | Set to `false` to disable the VS Code Web IDE service and hide its UI button. |
+| `ENABLE_TERMINAL` | `true` | Set to `false` to disable the Host Web Terminal service and hide its UI button. |
 | `HOST_SSH_USER` | *(workspace owner)* | Host username used by the Web Terminal to connect to the host machine via SSH. |
 | `HOST_SSH_HOST` | `host.docker.internal` | Hostname/IP used by Web Terminal to reach the host machine. |
 | `HOST_SSH_PORT` | `22` | SSH port on the host machine. |

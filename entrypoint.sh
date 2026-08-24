@@ -216,29 +216,42 @@ case "$1" in
     daemon)
         rm -f /tmp/antigravity_port
 
-        # 1. Start code-server (VS Code Web IDE) on 127.0.0.1:8080
-        echo " 🟢 Starting code-server Web IDE on internal port 8080"
-        gosu "$DEVELOPER_USER" code-server \
-            --bind-addr 127.0.0.1:8080 \
-            --auth none \
-            --disable-telemetry \
-            --disable-update-check \
-            "$WORKSPACE_DIR" > /tmp/code-server.log 2>&1 &
+        ENABLE_IDE="${ENABLE_IDE:-true}"
+        ENABLE_TERMINAL="${ENABLE_TERMINAL:-true}"
 
-        # 2. Start ttyd (Web Terminal) on 127.0.0.1:7681
-        echo " 🟢 Starting ttyd Web Terminal on internal port 7681"
-        gosu "$DEVELOPER_USER" ttyd \
-            -p 7681 \
-            -i 127.0.0.1 \
-            -b /terminal \
-            -t fontSize=14 \
-            -t fontFamily="Google Sans Code, monospace" \
-            -t theme='{"background": "#08090d", "foreground": "#f0f4fc", "cursor": "#38bdf8"}' \
-            /usr/local/bin/host-terminal.sh > /tmp/ttyd.log 2>&1 &
+        # 1. Start code-server (VS Code Web IDE) on 127.0.0.1:8080 if enabled
+        if [ "$ENABLE_IDE" = "true" ] || [ "$ENABLE_IDE" = "1" ] || [ "$ENABLE_IDE" = "yes" ] || [ "$ENABLE_IDE" = "on" ]; then
+            echo " 🟢 Starting code-server Web IDE on internal port 8080"
+            gosu "$DEVELOPER_USER" code-server \
+                --bind-addr 127.0.0.1:8080 \
+                --auth none \
+                --disable-telemetry \
+                --disable-update-check \
+                "$WORKSPACE_DIR" > /tmp/code-server.log 2>&1 &
+        else
+            echo " ⚪ Web IDE is DISABLED (ENABLE_IDE=false)"
+        fi
+
+        # 2. Start ttyd (Web Terminal) on 127.0.0.1:7681 if enabled
+        if [ "$ENABLE_TERMINAL" = "true" ] || [ "$ENABLE_TERMINAL" = "1" ] || [ "$ENABLE_TERMINAL" = "yes" ] || [ "$ENABLE_TERMINAL" = "on" ]; then
+            echo " 🟢 Starting ttyd Web Terminal on internal port 7681"
+            gosu "$DEVELOPER_USER" ttyd \
+                -p 7681 \
+                -i 127.0.0.1 \
+                -b /terminal \
+                -t fontSize=14 \
+                -t fontFamily="Google Sans Code, monospace" \
+                -t theme='{"background": "#08090d", "foreground": "#f0f4fc", "cursor": "#38bdf8"}' \
+                /usr/local/bin/host-terminal.sh > /tmp/ttyd.log 2>&1 &
+        else
+            echo " ⚪ Host Web Terminal is DISABLED (ENABLE_TERMINAL=false)"
+        fi
 
         # 3. Start Node.js Authentication & Reverse Proxy Gateway
         export AGY_PORT="${TARGET_PORT}"
         export AUTH_PASSWORD="${AUTH_PASSWORD:-}"
+        export ENABLE_IDE="${ENABLE_IDE}"
+        export ENABLE_TERMINAL="${ENABLE_TERMINAL}"
         export HOST_SSH_USER="${HOST_SSH_USER:-}"
         export HOST_SSH_HOST="${HOST_SSH_HOST:-host.docker.internal}"
         export HOST_SSH_PORT="${HOST_SSH_PORT:-22}"

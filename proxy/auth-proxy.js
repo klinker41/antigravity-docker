@@ -5,6 +5,12 @@ const crypto = require('node:crypto');
 const url = require('node:url');
 const fs = require('node:fs');
 
+function isFeatureEnabled(val, defaultVal = true) {
+    if (val === undefined || val === null || val === '') return defaultVal;
+    const s = String(val).trim().toLowerCase();
+    return s === 'true' || s === '1' || s === 'yes' || s === 'on';
+}
+
 const LISTEN_PORT = parseInt(process.env.AGY_PORT || '4400', 10);
 const AUTH_PASSWORD = process.env.AUTH_PASSWORD || '';
 const PORT_FILE = process.env.PORT_FILE || '/tmp/antigravity_port';
@@ -12,6 +18,9 @@ const INSTANCE_NAME = process.env.RC_NAME || 'server-agent';
 let TARGET_PORT = parseInt(process.env.INITIAL_TARGET_PORT || '0', 10);
 const TERMINAL_PORT = parseInt(process.env.TERMINAL_PORT || '7681', 10);
 const IDE_PORT = parseInt(process.env.IDE_PORT || '8080', 10);
+
+const ENABLE_IDE = isFeatureEnabled(process.env.ENABLE_IDE, true);
+const ENABLE_TERMINAL = isFeatureEnabled(process.env.ENABLE_TERMINAL, true);
 
 // In-Memory Session Store: Map<sessionToken, { createdAt: number, expiresAt: number }>
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
@@ -1072,6 +1081,14 @@ function renderStatusPage(health) {
                 <div class="grid-label">Gateway Port</div>
                 <div class="grid-value"><code>${LISTEN_PORT}</code></div>
             </div>
+            <div class="grid-item">
+                <div class="grid-label">Web IDE</div>
+                <div class="grid-value"><code>${ENABLE_IDE ? 'ENABLED (/ide/)' : 'DISABLED'}</code></div>
+            </div>
+            <div class="grid-item">
+                <div class="grid-label">Host Terminal</div>
+                <div class="grid-value"><code>${ENABLE_TERMINAL ? 'ENABLED (/terminal/)' : 'DISABLED'}</code></div>
+            </div>
         </div>
 
         <div class="action-row">
@@ -1287,12 +1304,38 @@ const INJECTED_UI_STYLES = `
 }
 `;
 
-// Injected JavaScript for Antigravity UI buttons
-const INJECTED_UI_SCRIPT = `
-(function initAntigravityCustomTools() {
-    const IDE_URL = '/ide/';
-    const TERMINAL_URL = '/terminal/';
+// Build dynamically injected script based on ENABLE_IDE and ENABLE_TERMINAL flags
+function buildInjectedScript() {
+    if (!ENABLE_IDE && !ENABLE_TERMINAL) return '';
 
+    const ideButtonHtml = ENABLE_IDE ? `
+            <a href="/ide/" target="_blank" rel="noopener noreferrer" class="agy-injected-btn agy-injected-btn-ide" title="Open VS Code Web IDE in a new tab">
+                \${IDE_ICON_SVG}
+                <span class="agy-injected-btn-text">Web IDE</span>
+                \${EXTERNAL_ICON_SVG}
+            </a>` : '';
+
+    const termButtonHtml = ENABLE_TERMINAL ? `
+            <a href="/terminal/" target="_blank" rel="noopener noreferrer" class="agy-injected-btn agy-injected-btn-terminal" title="Open Host Terminal in a new tab">
+                \${TERMINAL_ICON_SVG}
+                <span class="agy-injected-btn-text">Host Terminal</span>
+                \${EXTERNAL_ICON_SVG}
+            </a>` : '';
+
+    const ideDockHtml = ENABLE_IDE ? `
+            <a href="/ide/" target="_blank" rel="noopener noreferrer" class="agy-dock-btn" title="Open VS Code Web IDE">
+                \${IDE_ICON_SVG}
+                <span>IDE</span>
+            </a>` : '';
+
+    const termDockHtml = ENABLE_TERMINAL ? `
+            <a href="/terminal/" target="_blank" rel="noopener noreferrer" class="agy-dock-btn" title="Open Host Terminal">
+                \${TERMINAL_ICON_SVG}
+                <span>Terminal</span>
+            </a>` : '';
+
+    return `
+(function initAntigravityCustomTools() {
     const IDE_ICON_SVG = '<svg class="agy-injected-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg>';
     const TERMINAL_ICON_SVG = '<svg class="agy-injected-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>';
     const EXTERNAL_ICON_SVG = '<svg class="agy-injected-external-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>';
@@ -1301,19 +1344,7 @@ const INJECTED_UI_SCRIPT = `
         const container = document.createElement('div');
         container.id = 'agy-injected-tools-group';
         container.className = 'agy-injected-tools-group';
-        container.innerHTML = \`
-            <div class="agy-injected-tools-label">Workspace Tools</div>
-            <a href="\${IDE_URL}" target="_blank" rel="noopener noreferrer" class="agy-injected-btn agy-injected-btn-ide" title="Open VS Code Web IDE in a new tab">
-                \${IDE_ICON_SVG}
-                <span class="agy-injected-btn-text">Web IDE</span>
-                \${EXTERNAL_ICON_SVG}
-            </a>
-            <a href="\${TERMINAL_URL}" target="_blank" rel="noopener noreferrer" class="agy-injected-btn agy-injected-btn-terminal" title="Open Host Terminal in a new tab">
-                \${TERMINAL_ICON_SVG}
-                <span class="agy-injected-btn-text">Host Terminal</span>
-                \${EXTERNAL_ICON_SVG}
-            </a>
-        \`;
+        container.innerHTML = \`<div class="agy-injected-tools-label">Workspace Tools</div>${ideButtonHtml}${termButtonHtml}\`;
         return container;
     }
 
@@ -1321,16 +1352,7 @@ const INJECTED_UI_SCRIPT = `
         if (document.getElementById('agy-floating-dock')) return;
         const dock = document.createElement('div');
         dock.id = 'agy-floating-dock';
-        dock.innerHTML = \`
-            <a href="\${IDE_URL}" target="_blank" rel="noopener noreferrer" class="agy-dock-btn" title="Open VS Code Web IDE">
-                \${IDE_ICON_SVG}
-                <span>IDE</span>
-            </a>
-            <a href="\${TERMINAL_URL}" target="_blank" rel="noopener noreferrer" class="agy-dock-btn" title="Open Host Terminal">
-                \${TERMINAL_ICON_SVG}
-                <span>Terminal</span>
-            </a>
-        \`;
+        dock.innerHTML = \`${ideDockHtml}${termDockHtml}\`;
         document.body.appendChild(dock);
     }
 
@@ -1395,6 +1417,7 @@ const INJECTED_UI_SCRIPT = `
     observer.observe(document.body, { childList: true, subtree: true });
 })();
 `;
+}
 
 // Hop-by-hop headers defined in RFC 7230 / RFC 9110 to strip when proxying
 const HOP_BY_HOP_HEADERS = new Set([
@@ -1561,9 +1584,9 @@ const server = http.createServer(async (req, res) => {
                     gatewayPort: LISTEN_PORT,
                     targetPort: TARGET_PORT || null,
                     services: {
-                        antigravity: { port: TARGET_PORT || null, up: health.up },
-                        webIde: { port: IDE_PORT, path: '/ide/' },
-                        hostTerminal: { port: TERMINAL_PORT, path: '/terminal/' }
+                        antigravity: { port: TARGET_PORT || null, up: health.up, enabled: true },
+                        webIde: { port: ENABLE_IDE ? IDE_PORT : null, path: '/ide/', enabled: ENABLE_IDE },
+                        hostTerminal: { port: ENABLE_TERMINAL ? TERMINAL_PORT : null, path: '/terminal/', enabled: ENABLE_TERMINAL }
                     },
                     latencyMs: health.latency !== undefined ? health.latency : null,
                     error: health.error || null,
@@ -1660,23 +1683,33 @@ const server = http.createServer(async (req, res) => {
         }
 
         // 5. Handle /terminal and /terminal/* routes
-        if (parsedUrl.pathname === '/terminal') {
-            res.writeHead(302, { 'Location': '/terminal/' });
-            res.end();
-            return;
-        }
-        if (parsedUrl.pathname.startsWith('/terminal')) {
+        if (parsedUrl.pathname === '/terminal' || parsedUrl.pathname.startsWith('/terminal/')) {
+            if (!ENABLE_TERMINAL) {
+                res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+                res.end('Host Terminal is disabled (ENABLE_TERMINAL=false)');
+                return;
+            }
+            if (parsedUrl.pathname === '/terminal') {
+                res.writeHead(302, { 'Location': '/terminal/' });
+                res.end();
+                return;
+            }
             proxyToTerminal(req, res, req.url);
             return;
         }
 
         // 6. Handle /ide and /ide/* routes
-        if (parsedUrl.pathname === '/ide') {
-            res.writeHead(302, { 'Location': '/ide/' });
-            res.end();
-            return;
-        }
-        if (parsedUrl.pathname.startsWith('/ide')) {
+        if (parsedUrl.pathname === '/ide' || parsedUrl.pathname.startsWith('/ide/')) {
+            if (!ENABLE_IDE) {
+                res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+                res.end('Web IDE is disabled (ENABLE_IDE=false)');
+                return;
+            }
+            if (parsedUrl.pathname === '/ide') {
+                res.writeHead(302, { 'Location': '/ide/' });
+                res.end();
+                return;
+            }
             const strippedPath = req.url.replace(/^\/ide/, '') || '/';
             proxyToIde(req, res, strippedPath);
             return;
@@ -1749,6 +1782,7 @@ const server = http.createServer(async (req, res) => {
 
             const isHtmlResponse = (resHeaders['content-type'] || '').includes('text/html');
 
+            // INTERCEPT HTML RESPONSES TO INJECT WEB IDE & HOST TERMINAL BUTTONS
             if (isHtmlResponse && req.method === 'GET') {
                 const chunks = [];
                 proxyRes.on('data', (chunk) => {
@@ -1756,13 +1790,16 @@ const server = http.createServer(async (req, res) => {
                 });
                 proxyRes.on('end', () => {
                     let html = Buffer.concat(chunks).toString('utf8');
-                    const injection = `<style>${INJECTED_UI_STYLES}</style><script>${INJECTED_UI_SCRIPT}</script>`;
-                    if (html.includes('</body>')) {
-                        html = html.replace('</body>', `${injection}</body>`);
-                    } else if (html.includes('</html>')) {
-                        html = html.replace('</html>', `${injection}</html>`);
-                    } else {
-                        html += injection;
+                    const customScript = buildInjectedScript();
+                    if (customScript) {
+                        const injection = `<style>${INJECTED_UI_STYLES}</style><script id="agy-injected-tools-script">${customScript}</script>`;
+                        if (html.includes('</body>')) {
+                            html = html.replace('</body>', `${injection}</body>`);
+                        } else if (html.includes('</html>')) {
+                            html = html.replace('</html>', `${injection}</html>`);
+                        } else {
+                            html += injection;
+                        }
                     }
                     resHeaders['content-length'] = Buffer.byteLength(html, 'utf8');
                     delete resHeaders['content-encoding'];
@@ -1827,9 +1864,19 @@ server.on('upgrade', (req, clientSocket, head) => {
     let targetPath = req.url;
 
     if (parsedUrl.pathname.startsWith('/terminal')) {
+        if (!ENABLE_TERMINAL) {
+            clientSocket.write('HTTP/1.1 404 Not Found\r\n\r\n');
+            clientSocket.destroy();
+            return;
+        }
         targetPort = TERMINAL_PORT;
         targetPath = req.url;
     } else if (parsedUrl.pathname.startsWith('/ide')) {
+        if (!ENABLE_IDE) {
+            clientSocket.write('HTTP/1.1 404 Not Found\r\n\r\n');
+            clientSocket.destroy();
+            return;
+        }
         targetPort = IDE_PORT;
         targetPath = req.url.replace(/^\/ide/, '') || '/';
     } else {

@@ -13,6 +13,8 @@ services:
       - RC_NAME=server-agent
       - AGY_PORT=4400
       - AUTH_PASSWORD=changeme
+      - ENABLE_IDE=true
+      - ENABLE_TERMINAL=true
       - HOST_SSH_USER=
       - HOST_SSH_HOST=host.docker.internal
       - HOST_SSH_PORT=22

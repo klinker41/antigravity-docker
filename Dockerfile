@@ -1,7 +1,7 @@
 ARG BASE_IMAGE=ubuntu:26.04
 FROM ${BASE_IMAGE}
 
-LABEL maintainer="Antigravity Team" \
+LABEL maintainer="Jake Klinker" \
       description="Headless Google Antigravity Remote Control Agent with Python, Node.js 26, VS Code Web IDE, and Host Web Terminal"
 
 # Prevent interactive prompts during apt installs
