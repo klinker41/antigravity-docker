@@ -19,12 +19,12 @@ Connect to your server's agent anytime from any device (phone, tablet, laptop) v
 │  Host Linux Server                                                       │
 │                                                                          │
 │  ┌────────────────────────────────────────────────────────────────────┐  │
-│  │ Antigravity Headless Container                                     │  │
+│  │ Antigravity Headless Container (Ubuntu 26.04 / Debian Slim)        │  │
 │  │                                                                    │  │
 │  │ • agy --remote-control (Cloud Relay Connection)                    │  │
 │  │ • Working Directory: /workspace (Mounted Host Git Projects)        │  │
-│  │ • Python 3.12 (pip, venv, uv, poetry)                              │  │
-│  │ • Node.js 22 LTS (npm, pnpm, yarn, bun)                            │  │
+│  │ • Python 3 (pip, venv, uv, poetry)                                 │  │
+│  │ • Node.js 26 (npm, pnpm, yarn, bun)                                │  │
 │  │ • Docker CLI + Compose Plugin                                      │  │
 │  │ • Optional Web Terminal (ttyd) for browser onboarding              │  │
 │  └───────────────────┬──────────────────────────────┬─────────────────┘  │
@@ -42,12 +42,13 @@ Connect to your server's agent anytime from any device (phone, tablet, laptop) v
 
 ---
 
-## ⚡ Features
+## ⚡ Features & Modern Stack
 
+- **Base Image**: **Ubuntu 26.04 LTS** (default) or **Debian Slim** (`debian:bookworm-slim`), providing full glibc compatibility for pre-compiled Python wheels and Node native addons.
 - **Google Antigravity Remote Control (`agy --remote-control`)**: Outbound cloud relay connectivity—no inbound open ports required on your server.
+- **Node.js 26**: Latest Node.js release line with `npm`, `pnpm`, `yarn`, and `bun`.
+- **Python Modern Stack**: Python 3 with `pip`, `venv`, ultra-fast `uv`, `poetry`, and `build-essential`.
 - **Git Projects Workspace**: Dedicated workspace mounted at `/workspace` for cloning, building, and managing Git codebases.
-- **Python Development Stack**: Python 3.12, `pip`, `venv`, `uv`, `poetry`, `build-essential`.
-- **Node.js Development Stack**: Node.js 22 LTS, `npm`, `pnpm`, `yarn`, `bun`.
 - **Host Docker Management**: Mounts `/var/run/docker.sock` with dynamic GID alignment so the agent can build and deploy containers directly on the host server.
 - **Persistent State**: OAuth tokens, configs, agent logs, and workspace files persist across container restarts in `./data/`.
 - **Two Authentication Options**:
@@ -65,6 +66,7 @@ cp .env.example .env
 ```
 Edit `.env` to configure your instance name and workspace directory:
 ```ini
+BASE_IMAGE=ubuntu:26.04
 RC_NAME=my-server-agent
 
 # Set this to where your Git repositories are stored on your server
@@ -144,8 +146,9 @@ Run the included health check script on your server:
 ./scripts/test-host-docker.sh
 ```
 This tests:
-- Python 3.12, `pip`, `uv`, and `poetry`
-- Node.js 22, `npm`, `pnpm`, `yarn`, and `bun`
+- Base OS version
+- Python 3, `pip`, `uv`, and `poetry`
+- Node.js 26, `npm`, `pnpm`, `yarn`, and `bun`
 - Antigravity CLI (`agy`)
 - Host Docker connectivity & ability to spawn sub-containers on the host
 
@@ -155,7 +158,7 @@ This tests:
 
 ```
 .
-├── Dockerfile                  # Base container image definition
+├── Dockerfile                  # Base container image definition (Ubuntu 26.04 / Debian Slim)
 ├── docker-compose.yml          # Container orchestration & volume bindings
 ├── entrypoint.sh               # Startup script: socket permissions & launch modes
 ├── .env.example                # Configuration parameters template

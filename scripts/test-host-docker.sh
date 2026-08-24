@@ -9,14 +9,18 @@ echo "  Testing Container Environment & Host Docker Connectivity"
 echo "==================================================================="
 
 docker compose run --rm antigravity-agent bash -c '
-    echo "--- 1. Python Environment ---"
+    echo "--- 1. Base OS ---"
+    cat /etc/os-release | grep PRETTY_NAME
+
+    echo ""
+    echo "--- 2. Python Environment ---"
     python3 --version
     pip --version
     uv --version
     poetry --version
 
     echo ""
-    echo "--- 2. Node.js Environment ---"
+    echo "--- 3. Node.js Environment (Node 26) ---"
     node --version
     npm --version
     pnpm --version
@@ -24,18 +28,18 @@ docker compose run --rm antigravity-agent bash -c '
     bun --version
 
     echo ""
-    echo "--- 3. Antigravity CLI ---"
+    echo "--- 4. Antigravity CLI ---"
     agy --version || true
 
     echo ""
-    echo "--- 4. Host Docker Access via /var/run/docker.sock ---"
+    echo "--- 5. Host Docker Access via /var/run/docker.sock ---"
     docker --version
     docker compose version
     echo "Checking host containers list:"
     docker ps --format "table {{.ID}}\t{{.Image}}\t{{.Status}}\t{{.Names}}"
 
     echo ""
-    echo "--- 5. Testing Spawn of Sub-container on Host ---"
+    echo "--- 6. Testing Spawn of Sub-container on Host ---"
     docker run --rm hello-world | grep "Hello from Docker!" && echo "✓ Successfully ran container on host Docker daemon from inside Antigravity agent container!"
 '
 

@@ -1,7 +1,8 @@
-FROM ubuntu:24.04
+ARG BASE_IMAGE=ubuntu:26.04
+FROM ${BASE_IMAGE}
 
 LABEL maintainer="Antigravity Team" \
-      description="Headless Google Antigravity Remote Control Agent with Python, Node.js, and Host Docker orchestration"
+      description="Headless Google Antigravity Remote Control Agent with Python, Node.js 26, and Host Docker orchestration"
 
 # Prevent interactive prompts during apt installs
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -49,14 +50,14 @@ RUN install -m 0755 -d /etc/apt/keyrings && \
     docker-buildx-plugin \
     && rm -rf /var/lib/apt/lists/*
 
-# 3. Install Node.js LTS (v22.x) and Package Managers (npm, pnpm, yarn, bun)
-RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
+# 3. Install Node.js 26 (Latest release line) and Package Managers (npm, pnpm, yarn, bun)
+RUN curl -fsSL https://deb.nodesource.com/setup_26.x | bash - && \
     apt-get install -y --no-install-recommends nodejs && \
     corepack enable && \
     npm install -g pnpm yarn bun && \
     rm -rf /var/lib/apt/lists/*
 
-# 4. Install Python 3.12, pip, venv, and modern Python package managers (uv, poetry)
+# 4. Install Python 3, pip, venv, and modern Python package managers (uv, poetry)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     python3-pip \
