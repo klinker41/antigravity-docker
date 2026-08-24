@@ -8,6 +8,8 @@ services:
     ports:
       - "4400:4400"
     environment:
+      - PUID=1000
+      - PGID=1000
       - RC_NAME=server-agent
       - AGY_PORT=4400
       - AUTH_PASSWORD=changeme

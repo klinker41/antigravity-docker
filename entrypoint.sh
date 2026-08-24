@@ -10,7 +10,26 @@ WORKSPACE_DIR="/workspace"
 INSTANCE_NAME="${RC_NAME:-server-agent}"
 TARGET_PORT="${AGY_PORT:-4400}"
 
-# 1. Handle Docker Socket GID dynamically
+# 1. Dynamically configure user/group UID and GID (PUID/PGID)
+PUID="${PUID:-1000}"
+PGID="${PGID:-1000}"
+
+CURRENT_GID=$(id -g "$DEVELOPER_USER" 2>/dev/null || echo "1000")
+if [ "$PGID" != "$CURRENT_GID" ]; then
+    EXISTING_GROUP=$(getent group "$PGID" | cut -d: -f1 || true)
+    if [ -n "$EXISTING_GROUP" ]; then
+        usermod -g "$PGID" "$DEVELOPER_USER"
+    else
+        groupmod -g "$PGID" "$DEVELOPER_USER" 2>/dev/null || (groupadd -g "$PGID" developer-group && usermod -g "$PGID" "$DEVELOPER_USER")
+    fi
+fi
+
+CURRENT_UID=$(id -u "$DEVELOPER_USER" 2>/dev/null || echo "1000")
+if [ "$PUID" != "$CURRENT_UID" ]; then
+    usermod -u "$PUID" "$DEVELOPER_USER"
+fi
+
+# 2. Handle Docker Socket GID dynamically
 if [ -S /var/run/docker.sock ]; then
     DOCKER_GID=$(stat -c '%g' /var/run/docker.sock 2>/dev/null || stat -f '%g' /var/run/docker.sock 2>/dev/null || true)
     if [ -n "$DOCKER_GID" ] && [ "$DOCKER_GID" != "0" ]; then
@@ -19,7 +38,7 @@ if [ -S /var/run/docker.sock ]; then
         if [ -n "$EXISTING_GROUP" ]; then
             usermod -aG "$EXISTING_GROUP" "$DEVELOPER_USER"
         else
-            groupadd -g "$DOCKER_GID" docker-host
+            groupadd -g "$DOCKER_GID" docker-host 2>/dev/null || true
             usermod -aG docker-host "$DEVELOPER_USER"
         fi
     else
@@ -28,10 +47,18 @@ if [ -S /var/run/docker.sock ]; then
     fi
 fi
 
-# 2. Fix ownership & initialize default configs on mounted volumes
+# 3. Initialize persistent directories and default configs on mounted volumes
 mkdir -p "$GEMINI_DIR/config/projects" \
-         "$GEMINI_DIR/antigravity-cli" \
+         "$GEMINI_DIR/antigravity-cli/conversations" \
+         "$GEMINI_DIR/antigravity-cli/brain" \
+         "$GEMINI_DIR/antigravity-cli/annotations" \
+         "$GEMINI_DIR/antigravity-cli/log" \
+         "$GEMINI_DIR/antigravity-cli/crashes" \
+         "$GEMINI_DIR/antigravity-cli/knowledge" \
          "$WORKSPACE_DIR"
+
+# Clean up any stray empty project file
+rm -f "$GEMINI_DIR/config/projects/.json"
 
 # Initialize config.json if not present
 if [ ! -f "$GEMINI_DIR/config/config.json" ]; then
@@ -67,7 +94,7 @@ const workspaceDir = process.argv[2];
 fs.mkdirSync(projectsDir, { recursive: true });
 
 // Check if projects directory is already populated
-const existingFiles = fs.readdirSync(projectsDir);
+const existingFiles = fs.readdirSync(projectsDir).filter(f => f.endsWith(".json") && f !== ".json");
 if (existingFiles.length > 0) {
     process.exit(0);
 }
@@ -126,8 +153,11 @@ if (fs.existsSync(workspaceDir)) {
 fi
 
 
-# Always ensure agent_onboarding_completed is set in antigravity-cli state file to bypass onboarding flow
-STATE_CONTENT='post_onboarding: {
+# Initialize antigravity_state.pbtxt only if not already present
+STATE_FILE="$GEMINI_DIR/antigravity-cli/antigravity_state.pbtxt"
+if [ ! -f "$STATE_FILE" ]; then
+    cat <<EOF > "$STATE_FILE"
+post_onboarding: {
   completed_steps: POST_ONBOARDING_STEP_TYPE_MANAGER_WELCOME
   completed_steps: POST_ONBOARDING_STEP_TYPE_USAGE_MODE
   completed_steps: POST_ONBOARDING_STEP_TYPE_AGENT_CONFIGURATION
@@ -142,23 +172,34 @@ seen_nuxs: {
 }
 agent_onboarding_completed: AGENT_ONBOARDING_STATE_COMPLETED
 migrate_convos_into_projects: MIGRATION_STATUS_COMPLETED
-migrate_retroactive_projects: RETROACTIVE_MIGRATION_STATUS_COMPLETED_UNNECESSARY'
+migrate_retroactive_projects: RETROACTIVE_MIGRATION_STATUS_COMPLETED_UNNECESSARY
+EOF
+else
+    # Ensure onboarding completion flag is present without wiping installation_uuid or migrations
+    if ! grep -q "agent_onboarding_completed" "$STATE_FILE"; then
+        echo "agent_onboarding_completed: AGENT_ONBOARDING_STATE_COMPLETED" >> "$STATE_FILE"
+    fi
+fi
 
-echo "$STATE_CONTENT" > "$GEMINI_DIR/antigravity-cli/antigravity_state.pbtxt"
+# Fix ownership and ensure read/write permissions on mounted volume
+chown -R ${DEVELOPER_USER}:${DEVELOPER_USER} "$GEMINI_DIR" "/home/${DEVELOPER_USER}"
+chmod -R u+rwX,g+rwX "$GEMINI_DIR" || true
 
-chown -R ${DEVELOPER_USER}:${DEVELOPER_USER} "$GEMINI_DIR"
 if [ "$(stat -c '%u' "$WORKSPACE_DIR" 2>/dev/null)" = "0" ]; then
     chown ${DEVELOPER_USER}:${DEVELOPER_USER} "$WORKSPACE_DIR" || true
 fi
 
-# 3. Export environment for developer
+# Set umask so newly created files and directories inside mounted volumes are group readable/writable
+umask 0002
+
+# 4. Export environment for developer
 export HOME="/home/${DEVELOPER_USER}"
 export PATH="/home/${DEVELOPER_USER}/.local/bin:/home/${DEVELOPER_USER}/.cargo/bin:/home/${DEVELOPER_USER}/.local/share/pnpm:${PATH}"
 
 # Configure git safe directory for mounted workspaces
 gosu "$DEVELOPER_USER" git config --global --add safe.directory '*' 2>/dev/null || true
 
-# 4. Mode dispatch
+# 5. Mode dispatch
 case "$1" in
     setup)
         echo "==================================================================="

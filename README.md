@@ -19,6 +19,8 @@ services:
     ports:
       - "4400:4400"
     environment:
+      - PUID=1000
+      - PGID=1000
       - RC_NAME=<remote-control-name>
       - AGY_PORT=4400
       - AUTH_PASSWORD=<password-for-login>
@@ -38,6 +40,8 @@ services:
 
 | Variable | Default | Description |
 | :--- | :--- | :--- |
+| `PUID` | `1000` | User ID for the internal developer user. Set to `99` for Unraid or your host user's UID to prevent file permission mismatches. |
+| `PGID` | `1000` | Group ID for the internal developer user. Set to `100` for Unraid (`users`) or your host group's GID. |
 | `RC_NAME` | `server-agent` | Identifier name for this server instance. |
 | `AGY_PORT` | `4400` | Port exposed by the built-in web gateway. |
 | `AUTH_PASSWORD` | *(empty)* | Optional password to protect web access. When set, prompts for login and remembers session for 30 days. |
