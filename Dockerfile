@@ -37,8 +37,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     tar \
     xz-utils \
     gosu \
-    socat \
-    nginx \
     && rm -rf /var/lib/apt/lists/*
 
 # 2. Install Docker CLI and Docker Compose plugin (Official Docker repository)
@@ -68,17 +66,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* && \
     pip install --no-cache-dir --break-system-packages uv poetry pipenv virtualenv
 
-# 5. Install ttyd for optional browser-based web terminal setup/fallback
-RUN ARCH=$(dpkg --print-architecture) && \
-    case "$ARCH" in \
-        amd64) TTYD_ARCH="x86_64" ;; \
-        arm64) TTYD_ARCH="aarch64" ;; \
-        *) TTYD_ARCH="$ARCH" ;; \
-    esac && \
-    curl -fsSL "https://github.com/tsl0922/ttyd/releases/download/1.7.7/ttyd.${TTYD_ARCH}" -o /usr/local/bin/ttyd && \
-    chmod +x /usr/local/bin/ttyd
-
-# 6. Create non-root developer user with sudo privileges
+# 5. Create non-root developer user with sudo privileges
 ARG USERNAME=developer
 ARG USER_UID=1000
 ARG USER_GID=1000
@@ -98,7 +86,7 @@ RUN if id -u ubuntu >/dev/null 2>&1; then userdel -f -r ubuntu || true; fi && \
     echo "${USERNAME} ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers.d/${USERNAME} && \
     chmod 0440 /etc/sudoers.d/${USERNAME}
 
-# 7. Install Antigravity CLI (agy) for developer user
+# 6. Install Antigravity CLI (agy) for developer user
 USER ${USERNAME}
 ENV HOME=/home/${USERNAME}
 WORKDIR /home/${USERNAME}
@@ -122,7 +110,7 @@ RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/auth-proxy.js
 
 WORKDIR /workspace
 
-EXPOSE 4400 7681
+EXPOSE 4400
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["daemon"]

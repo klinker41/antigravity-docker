@@ -44,9 +44,9 @@ TEST_CMD='
 '
 
 if docker compose version >/dev/null 2>&1; then
-    docker compose run --rm antigravity-agent bash -c "$TEST_CMD"
+    docker compose run --rm antigravity bash -c "$TEST_CMD"
 elif command -v docker-compose >/dev/null 2>&1; then
-    docker-compose run --rm antigravity-agent bash -c "$TEST_CMD"
+    docker-compose run --rm antigravity bash -c "$TEST_CMD"
 else
     docker run --rm \
         -v /var/run/docker.sock:/var/run/docker.sock \

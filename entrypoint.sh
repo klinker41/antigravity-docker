@@ -8,7 +8,7 @@ TOKEN_FILE="${GEMINI_DIR}/jetski-standalone-oauth-token"
 WORKSPACE_DIR="/workspace"
 
 # Instance name and target port
-INSTANCE_NAME="${RC_NAME:-headless-server}"
+INSTANCE_NAME="${RC_NAME:-server-agent}"
 TARGET_PORT="${AGY_PORT:-4400}"
 
 # 1. Handle Docker Socket GID dynamically
@@ -111,6 +111,18 @@ function registerProject(folderPath, folderName) {
     console.log(`[Project Registry] Registered project: "${folderName}" (${id})`);
 }
 
+// Create outside-of-project.json and .json default configurations
+const outsideOfProject = {
+    id: "outside-of-project",
+    name: "Outside of Project",
+    projectResources: { resources: [] },
+    settings: {},
+    updatedAt: new Date().toISOString(),
+    isWorkspaceOnly: false
+};
+fs.writeFileSync(path.join(projectsDir, "outside-of-project.json"), JSON.stringify(outsideOfProject, null, 2), "utf8");
+fs.writeFileSync(path.join(projectsDir, ".json"), JSON.stringify(outsideOfProject, null, 2), "utf8");
+
 if (fs.existsSync(workspaceDir)) {
     const entries = fs.readdirSync(workspaceDir, { withFileTypes: true });
     let subdirsFound = false;
@@ -161,17 +173,6 @@ export PATH="/home/${DEVELOPER_USER}/.local/bin:/home/${DEVELOPER_USER}/.cargo/b
 # Configure git safe directory for mounted workspaces
 gosu "$DEVELOPER_USER" git config --global --add safe.directory '*' 2>/dev/null || true
 
-# Optional Web Terminal (ttyd) launcher
-start_web_terminal() {
-    local auth_args=()
-    if [ -n "$WEB_TERMINAL_USER" ] && [ -n "$WEB_TERMINAL_PASS" ]; then
-        auth_args=("-c" "${WEB_TERMINAL_USER}:${WEB_TERMINAL_PASS}")
-    fi
-    local port="${WEB_TERMINAL_PORT:-7681}"
-    echo "🌐 Starting Web Terminal on port ${port}..."
-    gosu "$DEVELOPER_USER" ttyd -p "$port" -W "${auth_args[@]}" bash &
-}
-
 # 4. Mode dispatch
 case "$1" in
     setup)
@@ -184,20 +185,7 @@ case "$1" in
         exec gosu "$DEVELOPER_USER" agy --remote-control --remote-control-name "$INSTANCE_NAME"
         ;;
 
-    web-terminal)
-        echo "Starting standalone Web Terminal on port ${WEB_TERMINAL_PORT:-7681}..."
-        local auth_args=()
-        if [ -n "$WEB_TERMINAL_USER" ] && [ -n "$WEB_TERMINAL_PASS" ]; then
-            auth_args=("-c" "${WEB_TERMINAL_USER}:${WEB_TERMINAL_PASS}")
-        fi
-        exec gosu "$DEVELOPER_USER" ttyd -p "${WEB_TERMINAL_PORT:-7681}" -W "${auth_args[@]}" bash
-        ;;
-
     daemon)
-        if [ "${ENABLE_WEB_TERMINAL:-false}" = "true" ]; then
-            start_web_terminal
-        fi
-
         rm -f /tmp/antigravity_port
 
         # Start Node.js Authentication & Reverse Proxy Gateway
@@ -211,14 +199,16 @@ case "$1" in
             echo "-------------------------------------------------------------------"
             echo " The container is starting in Remote Control mode."
             echo " If this is your first run, check the logs or run the setup command:"
-            echo "   docker compose run --rm antigravity-agent setup"
+            echo "   docker compose run --rm antigravity setup"
+            echo " Or via standalone docker run:"
+            echo "   docker run -it --rm -v /path/to/data:/home/developer/.gemini jklinker/antigravity-docker:latest setup"
             echo " Or open the sign-in URL shown below in your browser."
             echo "==================================================================="
         else
             echo "==================================================================="
             echo " 🟢 Starting Antigravity Remote Control Daemon: '$INSTANCE_NAME'"
             echo " Exposing on Port: ${TARGET_PORT}"
-            echo " Password Protection: $([ -n "$AUTH_PASSWORD" ] && echo 'ENABLED 🔒' || echo 'DISABLED (Set AUTH_PASSWORD in .env to enable)')"
+            echo " Password Protection: $([ -n "$AUTH_PASSWORD" ] && echo 'ENABLED 🔒' || echo 'DISABLED (Set AUTH_PASSWORD to enable)')"
             echo "==================================================================="
         fi
 

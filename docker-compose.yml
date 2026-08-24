@@ -1,50 +1,19 @@
 version: '3.8'
 
 services:
-  antigravity-agent:
+  antigravity:
     image: jklinker/antigravity-docker:latest
-    # (Optional) Uncomment to build locally:
-    # build:
-    #   context: .
-    #   dockerfile: Dockerfile
-    #   args:
-    #     BASE_IMAGE: ${BASE_IMAGE:-ubuntu:26.04}
-    #     USERNAME: developer
-    #     USER_UID: ${PUID:-1000}
-    #     USER_GID: ${PGID:-1000}
-    container_name: antigravity-agent
+    container_name: antigravity
     restart: unless-stopped
-    stdin_open: true
-    tty: true
-    working_dir: /workspace
-    environment:
-      - RC_NAME=${RC_NAME:-server-agent}
-      - AGY_PORT=${AGY_PORT:-4400}
-      - AUTH_PASSWORD=${AUTH_PASSWORD:-}
-      - ENABLE_WEB_TERMINAL=${ENABLE_WEB_TERMINAL:-false}
-      - WEB_TERMINAL_PORT=7681
-      - WEB_TERMINAL_USER=${WEB_TERMINAL_USER:-}
-      - WEB_TERMINAL_PASS=${WEB_TERMINAL_PASS:-}
-      - HOST_WORKSPACE_PATH=${WORKSPACE_DIR:-./workspace}
-    volumes:
-      # 1. Mount Host Docker Socket to control Docker on the server
-      - /var/run/docker.sock:/var/run/docker.sock
-
-      # 2. Main Workspace: Where all your Git projects and codebases live
-      # Point WORKSPACE_DIR in .env to your host's projects folder (e.g., /home/ubuntu/projects or ./workspace)
-      - ${WORKSPACE_DIR:-./workspace}:/workspace
-
-      # 3. Persist Antigravity OAuth login token and configurations
-      - ./data/gemini:/home/developer/.gemini
-
-      # 4. Persist Antigravity daemon logs, caches, and telemetry
-      - ./data/antigravity:/home/developer/.antigravity
-
-      # 5. (Optional) Mount host Git & SSH configs for private repo access (GitHub, GitLab)
-      # - ~/.gitconfig:/home/developer/.gitconfig:ro
-      # - ~/.ssh:/home/developer/.ssh:ro
     ports:
-      # Fixed Antigravity Server port for direct reverse proxy / browser access
-      - "${AGY_PORT_BINDING:-4400}:${AGY_PORT:-4400}"
-      # Optional: Web Terminal port (for browser-based terminal access / initial login)
-      - "${WEB_PORT_BINDING:-127.0.0.1:7681}:7681"
+      - "4400:4400"
+    environment:
+      - RC_NAME=server-agent
+      - AGY_PORT=4400
+      - AUTH_PASSWORD=changeme
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./workspace:/workspace
+      - ./data/gemini:/home/developer/.gemini
+      - ~/.gitconfig:/home/developer/.gitconfig:ro
+      - ~/.ssh:/home/developer/.ssh:ro

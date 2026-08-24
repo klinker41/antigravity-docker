@@ -856,6 +856,18 @@ function renderStartingPage() {
 </html>`;
 }
 
+// Hop-by-hop headers defined in RFC 7230 / RFC 9110 to strip when proxying
+const HOP_BY_HOP_HEADERS = new Set([
+    'connection',
+    'keep-alive',
+    'proxy-authenticate',
+    'proxy-authorization',
+    'te',
+    'trailer',
+    'transfer-encoding',
+    'upgrade',
+]);
+
 // Create HTTP Proxy Server
 const server = http.createServer((req, res) => {
     const parsedUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
@@ -897,12 +909,21 @@ const server = http.createServer((req, res) => {
         return;
     }
 
+    // Enable TCP_NODELAY immediately for low latency streaming and instant completion signaling
+    if (req.socket) req.socket.setNoDelay(true);
+    if (res.socket) res.socket.setNoDelay(true);
+
     // Proxy HTTP Request with Host/Origin/Referer rewrite to localhost
-    const proxyHeaders = { ...req.headers };
+    const proxyHeaders = {};
+    for (const [key, value] of Object.entries(req.headers)) {
+        if (!HOP_BY_HOP_HEADERS.has(key.toLowerCase())) {
+            proxyHeaders[key] = value;
+        }
+    }
     proxyHeaders['host'] = `localhost:${TARGET_PORT}`;
     proxyHeaders['origin'] = `http://localhost:${TARGET_PORT}`;
-    if (proxyHeaders['referer']) {
-        proxyHeaders['referer'] = proxyHeaders['referer'].replace(/^https?:\/\/[^\/]+/, `http://localhost:${TARGET_PORT}`);
+    if (req.headers['referer']) {
+        proxyHeaders['referer'] = req.headers['referer'].replace(/^https?:\/\/[^\/]+/, `http://localhost:${TARGET_PORT}`);
     }
 
     const proxyReq = http.request({
@@ -912,15 +933,65 @@ const server = http.createServer((req, res) => {
         method: req.method,
         headers: proxyHeaders,
     }, (proxyRes) => {
-        res.writeHead(proxyRes.statusCode, proxyRes.headers);
-        proxyRes.pipe(res, { end: true });
+        if (proxyRes.socket) proxyRes.socket.setNoDelay(true);
+
+        const resHeaders = {};
+        for (const [key, value] of Object.entries(proxyRes.headers)) {
+            if (!HOP_BY_HOP_HEADERS.has(key.toLowerCase())) {
+                resHeaders[key] = value;
+            }
+        }
+
+        // Align CORS access-control-allow-origin to match client origin if upstream specified localhost
+        if (resHeaders['access-control-allow-origin'] && req.headers.origin) {
+            resHeaders['access-control-allow-origin'] = req.headers.origin;
+        }
+
+        res.writeHead(proxyRes.statusCode, resHeaders);
+
+        // Stream upstream response with flow control and backpressure
+        proxyRes.on('data', (chunk) => {
+            const canContinue = res.write(chunk);
+            if (!canContinue) {
+                proxyRes.pause();
+                res.once('drain', () => proxyRes.resume());
+            }
+        });
+
+        // Forward HTTP trailers for ConnectRPC / gRPC-Web clean stream termination
+        proxyRes.on('end', () => {
+            if (proxyRes.trailers && Object.keys(proxyRes.trailers).length > 0) {
+                try {
+                    res.addTrailers(proxyRes.trailers);
+                } catch (e) {}
+            }
+            res.end();
+        });
+
+        proxyRes.on('error', (err) => {
+            console.error('[Proxy Response Stream Error]', err.message);
+            res.destroy();
+        });
     });
+
+    // Cleanup handlers: destroy upstream proxy request if client disconnects or errors
+    const clientAbortHandler = () => {
+        if (!proxyReq.destroyed) {
+            proxyReq.destroy();
+        }
+    };
+
+    res.on('close', clientAbortHandler);
+    res.on('error', clientAbortHandler);
+    req.on('error', clientAbortHandler);
 
     proxyReq.on('error', (err) => {
         console.error('[HTTP Proxy Error]', err.message);
         if (!res.headersSent) {
             res.writeHead(502, { 'Content-Type': 'text/plain' });
             res.end('Antigravity upstream server unavailable.');
+        } else {
+            res.destroy();
         }
     });
 
@@ -941,6 +1012,8 @@ server.on('upgrade', (req, clientSocket, head) => {
         return;
     }
 
+    clientSocket.setNoDelay(true);
+
     const proxyHeaders = { ...req.headers };
     proxyHeaders['host'] = `localhost:${TARGET_PORT}`;
     proxyHeaders['origin'] = `http://localhost:${TARGET_PORT}`;
@@ -957,6 +1030,8 @@ server.on('upgrade', (req, clientSocket, head) => {
     });
 
     upstreamReq.on('upgrade', (upstreamRes, upstreamSocket, upstreamHead) => {
+        upstreamSocket.setNoDelay(true);
+
         let rawResponse = `HTTP/1.1 101 Switching Protocols\r\n`;
         for (const [key, value] of Object.entries(upstreamRes.headers)) {
             if (Array.isArray(value)) {
@@ -974,8 +1049,17 @@ server.on('upgrade', (req, clientSocket, head) => {
         upstreamSocket.pipe(clientSocket);
         clientSocket.pipe(upstreamSocket);
 
-        upstreamSocket.on('error', () => clientSocket.destroy());
-        clientSocket.on('error', () => upstreamSocket.destroy());
+        const cleanup = () => {
+            upstreamSocket.destroy();
+            clientSocket.destroy();
+        };
+
+        upstreamSocket.on('error', cleanup);
+        clientSocket.on('error', cleanup);
+        upstreamSocket.on('close', cleanup);
+        clientSocket.on('close', cleanup);
+        upstreamSocket.on('end', () => clientSocket.end());
+        clientSocket.on('end', () => upstreamSocket.end());
     });
 
     upstreamReq.on('error', (err) => {
@@ -992,14 +1076,37 @@ function setTargetPort(port) {
     console.log(`[Proxy Gateway] 🔗 Bridged port ${LISTEN_PORT} -> http://127.0.0.1:${TARGET_PORT}`);
 }
 
-// Watch port file for dynamic port detection
+// Watch port file and logs for dynamic port detection
 function checkPortFile() {
     try {
         if (fs.existsSync(PORT_FILE)) {
             const content = fs.readFileSync(PORT_FILE, 'utf8').trim();
             const port = parseInt(content, 10);
-            if (port && port !== TARGET_PORT) {
-                setTargetPort(port);
+            if (port) {
+                if (port !== TARGET_PORT) {
+                    setTargetPort(port);
+                }
+                return;
+            }
+        }
+
+        // Fallback: check ~/.gemini/antigravity-cli/cli.log if PORT_FILE is not available
+        const possibleLogs = [
+            '/home/developer/.gemini/antigravity-cli/cli.log',
+            '/home/developer/.gemini/antigravity/cli.log'
+        ];
+        for (const logPath of possibleLogs) {
+            if (fs.existsSync(logPath)) {
+                const logHead = fs.readFileSync(logPath, 'utf8').slice(0, 4096);
+                const match = logHead.match(/listening on random port at (\d+) for HTTP\s*$/m) ||
+                              logHead.match(/(?:http:\/\/localhost:|http:\/\/127\.0\.0\.1:)(\d+)/i);
+                if (match && match[1]) {
+                    const port = parseInt(match[1], 10);
+                    if (port && port !== TARGET_PORT) {
+                        setTargetPort(port);
+                    }
+                    return;
+                }
             }
         }
     } catch (e) {}
