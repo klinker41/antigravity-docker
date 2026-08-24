@@ -7,6 +7,14 @@ set -e
 HOST_USER="${HOST_SSH_USER:-}"
 HOST_ADDR="${HOST_SSH_HOST:-host.docker.internal}"
 HOST_PORT="${HOST_SSH_PORT:-22}"
+HOST_DIR="${HOST_SSH_DIR:-}"
+
+# Remote command to run upon login
+if [ -n "$HOST_DIR" ]; then
+    REMOTE_SHELL_CMD="cd '$HOST_DIR' 2>/dev/null || true; exec \${SHELL:-/bin/bash} -l"
+else
+    REMOTE_SHELL_CMD="exec \${SHELL:-/bin/bash} -l"
+fi
 
 # Auto-detect host username if not specified
 if [ -z "$HOST_USER" ]; then
@@ -25,6 +33,9 @@ echo -e "\033[1;34m=============================================================
 echo -e "\033[1;36m  🚀 Google Antigravity Host Terminal Gateway\033[0m"
 echo -e "\033[1;34m===================================================================\033[0m"
 echo -e " Connecting to Host Machine: \033[1;32m${HOST_USER}@${HOST_ADDR}:${HOST_PORT}\033[0m"
+if [ -n "$HOST_DIR" ]; then
+    echo -e " Initial Directory: \033[1;36m${HOST_DIR}\033[0m"
+fi
 echo -e "\033[1;34m-------------------------------------------------------------------\033[0m"
 
 # Prepare secure runtime SSH directory to fix any read-only volume permission issues
@@ -60,7 +71,7 @@ BASE_SSH_OPTS=(
 if ssh -n -o BatchMode=yes -o ConnectTimeout=3 "${BASE_SSH_OPTS[@]}" "${HOST_USER}@${HOST_ADDR}" "true" 2>/dev/null; then
     echo -e " \033[1;32m✓ SSH key authentication successful!\033[0m"
     echo -e "\033[1;34m===================================================================\033[0m"
-    exec ssh -t "${BASE_SSH_OPTS[@]}" "${HOST_USER}@${HOST_ADDR}"
+    exec ssh -t "${BASE_SSH_OPTS[@]}" "${HOST_USER}@${HOST_ADDR}" "$REMOTE_SHELL_CMD"
 else
     KEY_COUNT=${#IDENTITY_ARGS[@]}
     if [ "$KEY_COUNT" -eq 0 ]; then
@@ -82,7 +93,7 @@ else
     echo -e "\033[1;34m===================================================================\033[0m"
     
     # Try interactive SSH (password prompt will work interactively)
-    ssh -t "${BASE_SSH_OPTS[@]}" "${HOST_USER}@${HOST_ADDR}" || {
+    ssh -t "${BASE_SSH_OPTS[@]}" "${HOST_USER}@${HOST_ADDR}" "$REMOTE_SHELL_CMD" || {
         EXIT_CODE=$?
         echo ""
         echo -e "\033[1;31m===================================================================\033[0m"

@@ -248,7 +248,6 @@ case "$1" in
             echo " ⚪ Host Web Terminal is DISABLED (ENABLE_TERMINAL=false)"
         fi
 
-        # 3. Start Node.js Authentication & Reverse Proxy Gateway
         export AGY_PORT="${TARGET_PORT}"
         export AUTH_PASSWORD="${AUTH_PASSWORD:-}"
         export ENABLE_IDE="${ENABLE_IDE}"
@@ -256,6 +255,7 @@ case "$1" in
         export HOST_SSH_USER="${HOST_SSH_USER:-}"
         export HOST_SSH_HOST="${HOST_SSH_HOST:-host.docker.internal}"
         export HOST_SSH_PORT="${HOST_SSH_PORT:-22}"
+        export HOST_SSH_DIR="${HOST_SSH_DIR:-}"
         node /usr/local/bin/auth-proxy.js &
 
         if [ ! -s "$TOKEN_FILE" ]; then

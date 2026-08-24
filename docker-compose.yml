@@ -18,6 +18,7 @@ services:
       - HOST_SSH_USER=
       - HOST_SSH_HOST=host.docker.internal
       - HOST_SSH_PORT=22
+      - HOST_SSH_DIR=
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:

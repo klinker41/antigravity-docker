@@ -29,6 +29,7 @@ services:
       - HOST_SSH_USER=<host-username>
       - HOST_SSH_HOST=host.docker.internal
       - HOST_SSH_PORT=22
+      - HOST_SSH_DIR=<host-directory-path>
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
@@ -56,6 +57,7 @@ services:
 | `HOST_SSH_USER` | *(workspace owner)* | Host username used by the Web Terminal to connect to the host machine via SSH. |
 | `HOST_SSH_HOST` | `host.docker.internal` | Hostname/IP used by Web Terminal to reach the host machine. |
 | `HOST_SSH_PORT` | `22` | SSH port on the host machine. |
+| `HOST_SSH_DIR` | *(host user home)* | *(Optional)* Absolute directory on the host machine to automatically `cd` into when opening the Web Terminal. |
 
 ### Volumes
 
