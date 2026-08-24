@@ -236,6 +236,7 @@ case "$1" in
         if [ "$ENABLE_TERMINAL" = "true" ] || [ "$ENABLE_TERMINAL" = "1" ] || [ "$ENABLE_TERMINAL" = "yes" ] || [ "$ENABLE_TERMINAL" = "on" ]; then
             echo " 🟢 Starting ttyd Web Terminal on internal port 7681"
             gosu "$DEVELOPER_USER" ttyd \
+                -W \
                 -p 7681 \
                 -i 127.0.0.1 \
                 -b /terminal \
