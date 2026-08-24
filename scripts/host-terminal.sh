@@ -49,19 +49,18 @@ if [ -d "/home/developer/.ssh" ]; then
 fi
 
 # Base SSH Options
-SSH_OPTS=(
-    -t
+BASE_SSH_OPTS=(
     -o StrictHostKeyChecking=no
     -o UserKnownHostsFile=/dev/null
     -p "$HOST_PORT"
     "${IDENTITY_ARGS[@]}"
 )
 
-# Test SSH key-based connectivity first
-if ssh -q -o BatchMode=yes -o ConnectTimeout=3 "${SSH_OPTS[@]}" "${HOST_USER}@${HOST_ADDR}" exit 0 2>/dev/null; then
+# Test SSH key-based connectivity first (non-interactive batch mode)
+if ssh -n -o BatchMode=yes -o ConnectTimeout=3 "${BASE_SSH_OPTS[@]}" "${HOST_USER}@${HOST_ADDR}" "true" 2>/dev/null; then
     echo -e " \033[1;32m✓ SSH key authentication successful!\033[0m"
     echo -e "\033[1;34m===================================================================\033[0m"
-    exec ssh "${SSH_OPTS[@]}" "${HOST_USER}@${HOST_ADDR}"
+    exec ssh -t "${BASE_SSH_OPTS[@]}" "${HOST_USER}@${HOST_ADDR}"
 else
     KEY_COUNT=${#IDENTITY_ARGS[@]}
     if [ "$KEY_COUNT" -eq 0 ]; then
@@ -83,7 +82,7 @@ else
     echo -e "\033[1;34m===================================================================\033[0m"
     
     # Try interactive SSH (password prompt will work interactively)
-    ssh "${SSH_OPTS[@]}" "${HOST_USER}@${HOST_ADDR}" || {
+    ssh -t "${BASE_SSH_OPTS[@]}" "${HOST_USER}@${HOST_ADDR}" || {
         EXIT_CODE=$?
         echo ""
         echo -e "\033[1;31m===================================================================\033[0m"
