@@ -52,16 +52,42 @@ if [ ! -f "$GEMINI_DIR/config/config.json" ]; then
 EOF
 fi
 
-# Initialize projects.json to automatically mount /workspace as default project
-if [ ! -f "$GEMINI_DIR/projects.json" ]; then
-    cat <<EOF > "$GEMINI_DIR/projects.json"
-{
-  "projects": {
-    "/workspace": "workspace"
-  }
+# Scan /workspace and register all subfolders as individual projects in projects.json
+node -e '
+const fs = require("fs");
+const path = require("path");
+
+const projectsFile = process.argv[1];
+const workspaceDir = process.argv[2];
+
+let projectsData = { projects: {} };
+if (fs.existsSync(projectsFile)) {
+    try {
+        projectsData = JSON.parse(fs.readFileSync(projectsFile, "utf8")) || { projects: {} };
+        if (!projectsData.projects) projectsData.projects = {};
+    } catch (e) {
+        projectsData = { projects: {} };
+    }
 }
-EOF
-fi
+
+if (fs.existsSync(workspaceDir)) {
+    const entries = fs.readdirSync(workspaceDir, { withFileTypes: true });
+    let subdirsFound = false;
+    for (const entry of entries) {
+        if (entry.isDirectory() && !entry.name.startsWith(".") && entry.name !== "node_modules" && entry.name !== "dist" && entry.name !== "build") {
+            const fullPath = path.join(workspaceDir, entry.name);
+            projectsData.projects[fullPath] = entry.name;
+            subdirsFound = true;
+        }
+    }
+    // If no subdirectories exist yet, register /workspace itself
+    if (!subdirsFound && Object.keys(projectsData.projects).length === 0) {
+        projectsData.projects[workspaceDir] = "workspace";
+    }
+}
+
+fs.writeFileSync(projectsFile, JSON.stringify(projectsData, null, 2), "utf8");
+' "$GEMINI_DIR/projects.json" "$WORKSPACE_DIR"
 
 # Always ensure agent_onboarding_completed is set in antigravity_state.pbtxt to bypass onboarding flow
 STATE_CONTENT='post_onboarding: {
