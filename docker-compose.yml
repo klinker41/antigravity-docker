@@ -19,6 +19,7 @@ services:
     environment:
       - RC_NAME=${RC_NAME:-server-agent}
       - AGY_PORT=${AGY_PORT:-4400}
+      - AUTH_PASSWORD=${AUTH_PASSWORD:-}
       - ENABLE_WEB_TERMINAL=${ENABLE_WEB_TERMINAL:-false}
       - WEB_TERMINAL_PORT=7681
       - WEB_TERMINAL_USER=${WEB_TERMINAL_USER:-}

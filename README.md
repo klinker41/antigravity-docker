@@ -2,7 +2,7 @@
 
 A Docker container to run Google Antigravity in **headless Remote Control mode** on your remote server.
 
-Connect to your server's agent anytime from any device (phone, tablet, laptop) via [antigravity.google](https://antigravity.google) or directly via your reverse proxy / local network on a fixed port (default: `4400`).
+Connect to your server's agent anytime from any device (phone, tablet, laptop) via [antigravity.google](https://antigravity.google) or directly via your reverse proxy / local network on a fixed port (default: `4400`) with built-in password access control.
 
 ---
 
@@ -21,7 +21,15 @@ Connect to your server's agent anytime from any device (phone, tablet, laptop) v
 │  ┌────────────────────────────────────────────────────────────────────┐  │
 │  │ Antigravity Headless Container (Ubuntu 26.04 / Debian Slim)        │  │
 │  │                                                                    │  │
-│  │ • agy --remote-control --port 4400 (Fixed Port & Cloud Relay)      │  │
+│  │ ┌────────────────────────────────────────────────────────────────┐ │  │
+│  │ │ Built-in Auth Gateway (Port 4400)                              │ │  │
+│  │ │ • Password Login Form (30-Day Session Cookie)                  │ │  │
+│  │ │ • Automatic Host/Origin Header Rewriter                        │ │  │
+│  │ │ • WebSockets & SSE Streaming Proxy                             │ │  │
+│  │ └────────────────────────────────┬───────────────────────────────┘ │  │
+│  │                                  │ Proxies to Exact Web Port      │  │
+│  │                                  ▼                                │  │
+│  │ • agy --remote-control (Internal Session Server)                  │  │
 │  │ • Working Directory: /workspace (Mounted Host Git Projects)        │  │
 │  │ • Python 3 (pip, venv, uv, poetry)                                 │  │
 │  │ • Node.js 26 (npm, pnpm, yarn, bun)                                │  │
@@ -44,9 +52,10 @@ Connect to your server's agent anytime from any device (phone, tablet, laptop) v
 
 ## ⚡ Features & Modern Stack
 
-- **Fixed Port Support (`AGY_PORT=4400`)**: Binds `agy` to a fixed port rather than random ports, making reverse proxies and local network access predictable.
+- **Password Protection (`AUTH_PASSWORD`)**: Built-in landing page to authenticate before accessing your Antigravity session. Remembers access for 30 days via a secure cookie.
+- **Accurate Web Server Port Detection**: Automatically detects the exact port printed by `agy` (e.g. `45833`) and bridges it to port `4400`.
+- **Automatic Host Header Rewriting**: Passes `Host: localhost` to satisfy Antigravity's localhost security checks automatically, making reverse proxy integration zero-config.
 - **Base Image**: **Ubuntu 26.04 LTS** (default) or **Debian Slim** (`debian:bookworm-slim`), providing full glibc compatibility for pre-compiled Python wheels and Node native addons.
-- **Google Antigravity Remote Control (`agy --remote-control`)**: Outbound cloud relay connectivity and direct local web interface.
 - **Node.js 26**: Latest Node.js release line with `npm`, `pnpm`, `yarn`, and `bun`.
 - **Python Modern Stack**: Python 3 with `pip`, `venv`, ultra-fast `uv`, `poetry`, and `build-essential`.
 - **Git Projects Workspace**: Dedicated workspace mounted at `/workspace` for cloning, building, and managing Git codebases.
@@ -62,12 +71,15 @@ Copy this directory to your remote server:
 ```bash
 cp .env.example .env
 ```
-Edit `.env` to configure your instance name and workspace directory:
+Edit `.env` to configure your instance name, password, and workspace directory:
 ```ini
 BASE_IMAGE=ubuntu:26.04
 RC_NAME=my-server-agent
 AGY_PORT=4400
 AGY_PORT_BINDING=4400
+
+# Set a password to protect remote web access
+AUTH_PASSWORD=your_secret_password_here
 
 # Set this to where your Git repositories are stored on your server
 WORKSPACE_DIR=/home/ubuntu/projects
@@ -97,8 +109,8 @@ docker compose logs -f antigravity-agent
 
 ### Step 4: Accessing the Instance
 You can connect in two ways:
-1. **Via Cloud Dashboard**: Visit **[https://antigravity.google](https://antigravity.google)** and select your instance (`my-server-agent`) from the machine dropdown.
-2. **Via Reverse Proxy / Local Network**: Point your reverse proxy to `127.0.0.1:4400` or open `http://<your-server-ip>:4400` directly.
+1. **Via Reverse Proxy (e.g. Nginx / NPM)**: Point your proxy host to `http://127.0.0.1:4400` with WebSocket support enabled. When you open `https://your-domain.com`, enter your `AUTH_PASSWORD` to unlock your session for 30 days!
+2. **Via Cloud Dashboard**: Visit **[https://antigravity.google](https://antigravity.google)** and select your instance (`my-server-agent`) from the machine dropdown.
 
 ---
 
@@ -148,6 +160,8 @@ If you want to access the container's shell directly from a web browser without 
 ├── Dockerfile                  # Base container image definition (Ubuntu 26.04 / Debian Slim)
 ├── docker-compose.yml          # Container orchestration & volume bindings
 ├── entrypoint.sh               # Startup script: socket permissions & launch modes
+├── proxy/
+│   └── auth-proxy.js           # Password authentication & WebSocket proxy gateway
 ├── .env.example                # Configuration parameters template
 ├── README.md                   # Documentation & setup guide
 └── scripts/

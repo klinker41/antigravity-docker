@@ -117,7 +117,8 @@ RUN mkdir -p /home/${USERNAME}/.gemini \
     chown -R ${USERNAME}:${USERNAME} /home/${USERNAME} /workspace
 
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh
+COPY proxy/auth-proxy.js /usr/local/bin/auth-proxy.js
+RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/auth-proxy.js
 
 WORKDIR /workspace
 
