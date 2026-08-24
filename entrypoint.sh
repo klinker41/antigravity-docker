@@ -39,12 +39,9 @@ export PATH="/home/${DEVELOPER_USER}/.local/bin:/home/${DEVELOPER_USER}/.cargo/b
 # Configure git safe directory for mounted workspaces
 gosu "$DEVELOPER_USER" git config --global --add safe.directory '*' 2>/dev/null || true
 
-# Instance name and port
+# Instance name and target port
 INSTANCE_NAME="${RC_NAME:-headless-server}"
-PORT_ARG=()
-if [ -n "${AGY_PORT}" ]; then
-    PORT_ARG=("--port" "${AGY_PORT}")
-fi
+TARGET_PORT="${AGY_PORT:-4400}"
 
 # Optional Web Terminal (ttyd) launcher
 start_web_terminal() {
@@ -66,7 +63,7 @@ case "$1" in
         echo "Follow the prompt below to sign in to your Google Account."
         echo "Once authenticated, your token will be saved to persistent storage."
         echo "==================================================================="
-        exec gosu "$DEVELOPER_USER" agy --remote-control --remote-control-name "$INSTANCE_NAME" "${PORT_ARG[@]}"
+        exec gosu "$DEVELOPER_USER" agy --remote-control --remote-control-name "$INSTANCE_NAME"
         ;;
 
     web-terminal)
@@ -95,14 +92,36 @@ case "$1" in
         else
             echo "==================================================================="
             echo " 🟢 Starting Antigravity Remote Control Daemon: '$INSTANCE_NAME'"
-            echo " Listening on Port: ${AGY_PORT:-4400}"
+            echo " Exposing on Port: ${TARGET_PORT}"
             echo " Connect anytime from: https://antigravity.google"
-            echo " Or access directly via reverse proxy / local network on port ${AGY_PORT:-4400}"
+            echo " Or access directly via reverse proxy on port ${TARGET_PORT}"
             echo "==================================================================="
         fi
 
+        # Background watchdog to detect dynamic port from agy and bind socat to fixed TARGET_PORT
+        (
+            socat_bound=false
+            for i in $(seq 1 30); do
+                sleep 1
+                dyn_port=$(ss -tulpn 2>/dev/null | grep -E "agy|antigravity" | awk '{print $5}' | sed -E 's/.*:([0-9]+)/\1/' | head -n 1)
+                if [ -z "$dyn_port" ]; then
+                    dyn_port=$(netstat -tulpn 2>/dev/null | grep -E "agy|antigravity" | awk '{print $4}' | sed -E 's/.*:([0-9]+)/\1/' | head -n 1)
+                fi
+                if [ -n "$dyn_port" ] && [ "$dyn_port" != "$TARGET_PORT" ]; then
+                    echo "==================================================================="
+                    echo " 🔗 Port Forwarder: Mapping fixed port $TARGET_PORT -> dynamic port $dyn_port"
+                    echo " ➜ Access directly or via reverse proxy at: http://<your-server-ip>:${TARGET_PORT}"
+                    echo "==================================================================="
+                    pkill -f "socat TCP-LISTEN:${TARGET_PORT}" 2>/dev/null || true
+                    socat TCP-LISTEN:"${TARGET_PORT}",fork,reuseaddr TCP:127.0.0.1:"${dyn_port}" &
+                    socat_bound=true
+                    break
+                fi
+            done
+        ) &
+
         cd "$WORKSPACE_DIR"
-        exec gosu "$DEVELOPER_USER" agy --remote-control --remote-control-name "$INSTANCE_NAME" "${PORT_ARG[@]}"
+        exec gosu "$DEVELOPER_USER" agy --remote-control --remote-control-name "$INSTANCE_NAME"
         ;;
 
     *)
