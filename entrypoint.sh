@@ -7,6 +7,10 @@ ANTIGRAVITY_DIR="/home/${DEVELOPER_USER}/.antigravity"
 TOKEN_FILE="${GEMINI_DIR}/jetski-standalone-oauth-token"
 WORKSPACE_DIR="/workspace"
 
+# Instance name and target port
+INSTANCE_NAME="${RC_NAME:-headless-server}"
+TARGET_PORT="${AGY_PORT:-4400}"
+
 # 1. Handle Docker Socket GID dynamically
 if [ -S /var/run/docker.sock ]; then
     DOCKER_GID=$(stat -c '%g' /var/run/docker.sock 2>/dev/null || stat -f '%g' /var/run/docker.sock 2>/dev/null || true)
@@ -25,8 +29,61 @@ if [ -S /var/run/docker.sock ]; then
     fi
 fi
 
-# 2. Fix ownership on mounted volumes
-mkdir -p "$GEMINI_DIR" "$ANTIGRAVITY_DIR" "$WORKSPACE_DIR"
+# 2. Fix ownership & initialize default configs on mounted volumes
+mkdir -p "$GEMINI_DIR/config" "$GEMINI_DIR/antigravity" "$ANTIGRAVITY_DIR" "$WORKSPACE_DIR"
+
+# Initialize config.json if not present
+if [ ! -f "$GEMINI_DIR/config/config.json" ]; then
+    cat <<EOF > "$GEMINI_DIR/config/config.json"
+{
+  "userSettings": {
+    "artifactReviewMode": "ARTIFACT_REVIEW_MODE_ALWAYS",
+    "autoExecutionPolicy": "CASCADE_COMMANDS_AUTO_EXECUTION_EAGER",
+    "enableTerminalSandbox": false,
+    "nonWorkspaceFileAccessPolicy": "AGENT_SETTING_POLICY_ALLOW",
+    "queuedMessageDeliveryStrategy": "MESSAGE_DELIVERY_STRATEGY_NEXT_INVOCATION",
+    "remoteControlEnabled": true,
+    "cliRemoteControlHostname": "${INSTANCE_NAME}",
+    "remoteControlHostname": "${INSTANCE_NAME}",
+    "themeMode": "THEME_MODE_DARK",
+    "useAiCredits": true
+  }
+}
+EOF
+fi
+
+# Initialize projects.json to automatically mount /workspace as default project
+if [ ! -f "$GEMINI_DIR/projects.json" ]; then
+    cat <<EOF > "$GEMINI_DIR/projects.json"
+{
+  "projects": {
+    "/workspace": "workspace"
+  }
+}
+EOF
+fi
+
+# Always ensure agent_onboarding_completed is set in antigravity_state.pbtxt to bypass onboarding flow
+STATE_CONTENT='post_onboarding: {
+  completed_steps: POST_ONBOARDING_STEP_TYPE_MANAGER_WELCOME
+  completed_steps: POST_ONBOARDING_STEP_TYPE_USAGE_MODE
+  completed_steps: POST_ONBOARDING_STEP_TYPE_AGENT_CONFIGURATION
+  completed_steps: POST_ONBOARDING_STEP_TYPE_ADD_WORKSPACE
+}
+seen_nuxs: {
+  uids: 31
+  uids: 29
+  uids: 24
+  uids: 23
+  uids: 38
+}
+agent_onboarding_completed: AGENT_ONBOARDING_STATE_COMPLETED
+migrate_convos_into_projects: MIGRATION_STATUS_COMPLETED
+migrate_retroactive_projects: RETROACTIVE_MIGRATION_STATUS_COMPLETED_UNNECESSARY'
+
+echo "$STATE_CONTENT" > "$ANTIGRAVITY_DIR/antigravity_state.pbtxt"
+echo "$STATE_CONTENT" > "$GEMINI_DIR/antigravity/antigravity_state.pbtxt"
+
 chown -R ${DEVELOPER_USER}:${DEVELOPER_USER} "$GEMINI_DIR" "$ANTIGRAVITY_DIR"
 if [ "$(stat -c '%u' "$WORKSPACE_DIR" 2>/dev/null)" = "0" ]; then
     chown ${DEVELOPER_USER}:${DEVELOPER_USER} "$WORKSPACE_DIR" || true
@@ -38,10 +95,6 @@ export PATH="/home/${DEVELOPER_USER}/.local/bin:/home/${DEVELOPER_USER}/.cargo/b
 
 # Configure git safe directory for mounted workspaces
 gosu "$DEVELOPER_USER" git config --global --add safe.directory '*' 2>/dev/null || true
-
-# Instance name and target port
-INSTANCE_NAME="${RC_NAME:-headless-server}"
-TARGET_PORT="${AGY_PORT:-4400}"
 
 # Optional Web Terminal (ttyd) launcher
 start_web_terminal() {
