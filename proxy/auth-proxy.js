@@ -211,10 +211,13 @@ const server = http.createServer((req, res) => {
         return;
     }
 
-    // Proxy HTTP Request with Host/Origin rewrite to localhost
+    // Proxy HTTP Request with Host/Origin/Referer rewrite to localhost
     const proxyHeaders = { ...req.headers };
     proxyHeaders['host'] = `localhost:${TARGET_PORT}`;
     proxyHeaders['origin'] = `http://localhost:${TARGET_PORT}`;
+    if (proxyHeaders['referer']) {
+        proxyHeaders['referer'] = proxyHeaders['referer'].replace(/^https?:\/\/[^\/]+/, `http://localhost:${TARGET_PORT}`);
+    }
 
     const proxyReq = http.request({
         hostname: '127.0.0.1',
