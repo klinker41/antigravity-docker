@@ -1266,42 +1266,6 @@ const INJECTED_UI_STYLES = `
 .agy-injected-btn:hover .agy-injected-external-icon {
     opacity: 0.9;
 }
-
-#agy-floating-dock {
-    position: fixed;
-    bottom: 20px;
-    left: 20px;
-    display: flex;
-    gap: 8px;
-    z-index: 99999;
-    pointer-events: auto;
-}
-
-.agy-dock-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 7px 12px;
-    background: rgba(14, 18, 27, 0.88);
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
-    border: 1px solid rgba(255, 255, 255, 0.12);
-    border-radius: 9999px;
-    color: #cbd5e1;
-    text-decoration: none;
-    font-size: 12px;
-    font-weight: 500;
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
-    transition: all 0.2s ease;
-}
-
-.agy-dock-btn:hover {
-    background: rgba(26, 115, 232, 0.25);
-    border-color: rgba(66, 133, 244, 0.5);
-    color: #ffffff;
-    transform: translateY(-2px);
-    box-shadow: 0 6px 20px rgba(26, 115, 232, 0.35);
-}
 `;
 
 // Build dynamically injected script based on ENABLE_IDE and ENABLE_TERMINAL flags
@@ -1322,18 +1286,6 @@ function buildInjectedScript() {
                 \${EXTERNAL_ICON_SVG}
             </a>` : '';
 
-    const ideDockHtml = ENABLE_IDE ? `
-            <a href="/ide/" target="_blank" rel="noopener noreferrer" class="agy-dock-btn" title="Open VS Code Web IDE">
-                \${IDE_ICON_SVG}
-                <span>IDE</span>
-            </a>` : '';
-
-    const termDockHtml = ENABLE_TERMINAL ? `
-            <a href="/terminal/" target="_blank" rel="noopener noreferrer" class="agy-dock-btn" title="Open Host Terminal">
-                \${TERMINAL_ICON_SVG}
-                <span>Terminal</span>
-            </a>` : '';
-
     return `
 (function initAntigravityCustomTools() {
     const IDE_ICON_SVG = '<svg class="agy-injected-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg>';
@@ -1346,14 +1298,6 @@ function buildInjectedScript() {
         container.className = 'agy-injected-tools-group';
         container.innerHTML = \`<div class="agy-injected-tools-label">Workspace Tools</div>${ideButtonHtml}${termButtonHtml}\`;
         return container;
-    }
-
-    function createFloatingDock() {
-        if (document.getElementById('agy-floating-dock')) return;
-        const dock = document.createElement('div');
-        dock.id = 'agy-floating-dock';
-        dock.innerHTML = \`${ideDockHtml}${termDockHtml}\`;
-        document.body.appendChild(dock);
     }
 
     function tryInjectSidebar() {
@@ -1396,7 +1340,6 @@ function buildInjectedScript() {
 
     function runInjection() {
         tryInjectSidebar();
-        createFloatingDock();
     }
 
     if (document.readyState === 'loading') {
@@ -1408,9 +1351,6 @@ function buildInjectedScript() {
     const observer = new MutationObserver(() => {
         if (!document.getElementById('agy-injected-tools-group')) {
             tryInjectSidebar();
-        }
-        if (!document.getElementById('agy-floating-dock')) {
-            createFloatingDock();
         }
     });
 
