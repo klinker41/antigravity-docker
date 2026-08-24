@@ -57,8 +57,25 @@ mkdir -p "$GEMINI_DIR/config/projects" \
          "$GEMINI_DIR/antigravity-cli/knowledge" \
          "$WORKSPACE_DIR"
 
-# Clean up any stray empty project file
-rm -f "$GEMINI_DIR/config/projects/.json"
+# Ensure default outside-of-project and root .json configs exist
+if [ ! -f "$GEMINI_DIR/config/projects/outside-of-project.json" ]; then
+    cat <<EOF > "$GEMINI_DIR/config/projects/outside-of-project.json"
+{
+  "id": "outside-of-project",
+  "name": "Outside of Project",
+  "projectResources": {
+    "resources": []
+  },
+  "settings": {},
+  "updatedAt": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
+  "isWorkspaceOnly": false
+}
+EOF
+fi
+
+if [ ! -f "$GEMINI_DIR/config/projects/.json" ]; then
+    cp "$GEMINI_DIR/config/projects/outside-of-project.json" "$GEMINI_DIR/config/projects/.json" 2>/dev/null || true
+fi
 
 # Initialize config.json if not present
 if [ ! -f "$GEMINI_DIR/config/config.json" ]; then
