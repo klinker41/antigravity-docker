@@ -57,7 +57,9 @@ EOF
 fi
 
 # Scan /workspace and register each folder as a separate project in ~/.gemini/config/projects/<UUID>.json
-node -e '
+# only if the projects folder is empty
+if [ -z "$(ls -A "$GEMINI_DIR/config/projects" 2>/dev/null)" ]; then
+    node -e '
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
@@ -67,26 +69,14 @@ const workspaceDir = process.argv[2];
 
 fs.mkdirSync(projectsDir, { recursive: true });
 
-// Read existing project configs to avoid duplicate registrations
-const existingFiles = fs.readdirSync(projectsDir).filter(f => f.endsWith(".json") && f !== "outside-of-project.json");
-const existingUris = new Set();
-
-for (const file of existingFiles) {
-    try {
-        const data = JSON.parse(fs.readFileSync(path.join(projectsDir, file), "utf8"));
-        const resources = data?.projectResources?.resources || [];
-        for (const res of resources) {
-            if (res?.gitFolder?.folderUri) {
-                existingUris.add(res.gitFolder.folderUri);
-            }
-        }
-    } catch (e) {}
+// Check if projects directory is already populated
+const existingFiles = fs.readdirSync(projectsDir);
+if (existingFiles.length > 0) {
+    process.exit(0);
 }
 
 function registerProject(folderPath, folderName) {
     const uri = `file://${folderPath}`;
-    if (existingUris.has(uri)) return;
-
     const id = crypto.randomUUID();
     const projectData = {
         id: id,
@@ -107,7 +97,6 @@ function registerProject(folderPath, folderName) {
     };
 
     fs.writeFileSync(path.join(projectsDir, `${id}.json`), JSON.stringify(projectData, null, 2), "utf8");
-    existingUris.add(uri);
     console.log(`[Project Registry] Registered project: "${folderName}" (${id})`);
 }
 
@@ -133,11 +122,13 @@ if (fs.existsSync(workspaceDir)) {
             subdirsFound = true;
         }
     }
-    if (!subdirsFound && existingFiles.length === 0) {
+    if (!subdirsFound) {
         registerProject(workspaceDir, "workspace");
     }
 }
 ' "$GEMINI_DIR/config/projects" "$WORKSPACE_DIR"
+fi
+
 
 # Always ensure agent_onboarding_completed is set in antigravity-cli state file to bypass onboarding flow
 STATE_CONTENT='post_onboarding: {
