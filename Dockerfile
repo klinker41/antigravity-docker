@@ -2,7 +2,7 @@ ARG BASE_IMAGE=ubuntu:26.04
 FROM ${BASE_IMAGE}
 
 LABEL maintainer="Antigravity Team" \
-      description="Headless Google Antigravity Remote Control Agent with Python, Node.js 26, and Host Docker orchestration"
+      description="Headless Google Antigravity Remote Control Agent with Python and Node.js 26"
 
 # Prevent interactive prompts during apt installs
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -39,24 +39,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gosu \
     && rm -rf /var/lib/apt/lists/*
 
-# 2. Install Docker CLI and Docker Compose plugin (Official Docker repository)
-RUN install -m 0755 -d /etc/apt/keyrings && \
-    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg && \
-    chmod a+r /etc/apt/keyrings/docker.gpg && \
-    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" > /etc/apt/sources.list.d/docker.list && \
-    apt-get update && apt-get install -y --no-install-recommends \
-    docker-ce-cli \
-    docker-compose-plugin \
-    docker-buildx-plugin \
-    && rm -rf /var/lib/apt/lists/*
-
-# 3. Install Node.js 26 (Latest release line) and Package Managers (npm, pnpm, yarn, bun)
+# 2. Install Node.js 26 (Latest release line) and Package Managers (npm, pnpm, yarn, bun)
 RUN curl -fsSL https://deb.nodesource.com/setup_26.x | bash - && \
     apt-get install -y --no-install-recommends nodejs && \
     npm install -g pnpm yarn bun && \
     rm -rf /var/lib/apt/lists/*
 
-# 4. Install Python 3, pip, venv, and modern Python package managers (uv, poetry)
+# 3. Install Python 3, pip, venv, and modern Python package managers (uv, poetry)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     python3-pip \
@@ -66,7 +55,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* && \
     pip install --no-cache-dir --break-system-packages uv poetry pipenv virtualenv
 
-# 5. Create non-root developer user with sudo privileges
+# 4. Create non-root developer user with sudo privileges
 ARG USERNAME=developer
 ARG USER_UID=1000
 ARG USER_GID=1000
@@ -86,7 +75,7 @@ RUN if id -u ubuntu >/dev/null 2>&1; then userdel -f -r ubuntu || true; fi && \
     echo "${USERNAME} ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers.d/${USERNAME} && \
     chmod 0440 /etc/sudoers.d/${USERNAME}
 
-# 6. Install Antigravity CLI (agy) for developer user
+# 5. Install Antigravity CLI (agy) for developer user
 USER ${USERNAME}
 ENV HOME=/home/${USERNAME}
 WORKDIR /home/${USERNAME}

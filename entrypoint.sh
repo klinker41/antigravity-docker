@@ -29,25 +29,7 @@ if [ "$PUID" != "$CURRENT_UID" ]; then
     usermod -u "$PUID" "$DEVELOPER_USER"
 fi
 
-# 2. Handle Docker Socket GID dynamically
-if [ -S /var/run/docker.sock ]; then
-    DOCKER_GID=$(stat -c '%g' /var/run/docker.sock 2>/dev/null || stat -f '%g' /var/run/docker.sock 2>/dev/null || true)
-    if [ -n "$DOCKER_GID" ] && [ "$DOCKER_GID" != "0" ]; then
-        # Check if a group already exists with this GID
-        EXISTING_GROUP=$(getent group "$DOCKER_GID" | cut -d: -f1 || true)
-        if [ -n "$EXISTING_GROUP" ]; then
-            usermod -aG "$EXISTING_GROUP" "$DEVELOPER_USER"
-        else
-            groupadd -g "$DOCKER_GID" docker-host 2>/dev/null || true
-            usermod -aG docker-host "$DEVELOPER_USER"
-        fi
-    else
-        # Socket is owned by root GID 0
-        usermod -aG root "$DEVELOPER_USER"
-    fi
-fi
-
-# 3. Initialize persistent directories and default configs on mounted volumes
+# 2. Initialize persistent directories and default configs on mounted volumes
 mkdir -p "$GEMINI_DIR/config/projects" \
          "$GEMINI_DIR/antigravity-cli/conversations" \
          "$GEMINI_DIR/antigravity-cli/brain" \
@@ -209,7 +191,7 @@ fi
 # Set umask so newly created files and directories inside mounted volumes are group readable/writable
 umask 0002
 
-# 4. Export environment for developer
+# 3. Export environment for developer
 export HOME="/home/${DEVELOPER_USER}"
 export PATH="/home/${DEVELOPER_USER}/.local/bin:/home/${DEVELOPER_USER}/.cargo/bin:/home/${DEVELOPER_USER}/.local/share/pnpm:${PATH}"
 
@@ -219,7 +201,7 @@ gosu "$DEVELOPER_USER" git config --global --add safe.directory "${WORKSPACE_DIR
 gosu "$DEVELOPER_USER" git config --global --add safe.directory "$GEMINI_DIR" 2>/dev/null || true
 gosu "$DEVELOPER_USER" git config --global --add safe.directory "$ANTIGRAVITY_DIR" 2>/dev/null || true
 
-# 5. Mode dispatch
+# 4. Mode dispatch
 case "$1" in
     setup)
         echo "==================================================================="

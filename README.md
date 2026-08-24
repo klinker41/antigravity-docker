@@ -25,7 +25,6 @@ services:
       - AGY_PORT=4400
       - AUTH_PASSWORD=<password-for-login>
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
       - <location-of-projects>:/workspace
       - <location-of-config>:/home/developer/.gemini
       - <home-folder>/.gitconfig:/home/developer/.gitconfig:ro
@@ -50,7 +49,6 @@ services:
 
 | Volume | Container Path | Description |
 | :--- | :--- | :--- |
-| `/var/run/docker.sock` | `/var/run/docker.sock` | Allows Antigravity to build and manage containers on the host Docker daemon. |
 | `<location-of-projects>` | `/workspace` | Host directory where your Git repositories and codebases live. |
 | `<location-of-config>` | `/home/developer/.gemini` | Host directory where Antigravity OAuth tokens and preferences persist. |
 | `<home-folder>/.gitconfig` | `/home/developer/.gitconfig:ro` | *(Optional)* Mounts host Git configuration for authenticated commits. |
