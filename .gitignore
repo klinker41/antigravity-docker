@@ -1,0 +1,22 @@
+# Runtime data & credentials
+data/
+.env
+
+# Workspace directory if created locally
+workspace/
+
+# OS & Editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*~
+
+# Python & Node artifacts
+__pycache__/
+*.pyc
+.venv/
+node_modules/
+dist/
+build/
