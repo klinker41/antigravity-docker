@@ -27,34 +27,62 @@ echo -e "\033[1;34m=============================================================
 echo -e " Connecting to Host Machine: \033[1;32m${HOST_USER}@${HOST_ADDR}:${HOST_PORT}\033[0m"
 echo -e "\033[1;34m-------------------------------------------------------------------\033[0m"
 
-# SSH Options for interactive terminal
+# Prepare secure runtime SSH directory to fix any read-only volume permission issues
+SSH_RUNTIME_DIR="/tmp/.ssh_runtime_$$"
+mkdir -p "$SSH_RUNTIME_DIR"
+chmod 700 "$SSH_RUNTIME_DIR"
+
+IDENTITY_ARGS=()
+
+if [ -d "/home/developer/.ssh" ]; then
+    # Copy keys to runtime dir to guarantee strict 0600 permissions
+    cp -r /home/developer/.ssh/* "$SSH_RUNTIME_DIR/" 2>/dev/null || true
+    chmod 700 "$SSH_RUNTIME_DIR" 2>/dev/null || true
+    chmod 600 "$SSH_RUNTIME_DIR"/* 2>/dev/null || true
+    chmod 644 "$SSH_RUNTIME_DIR"/*.pub "$SSH_RUNTIME_DIR"/known_hosts 2>/dev/null || true
+
+    for k in "$SSH_RUNTIME_DIR"/id_* "$SSH_RUNTIME_DIR"/*.pem "$SSH_RUNTIME_DIR"/*.key; do
+        if [ -f "$k" ] && [[ "$k" != *.pub ]]; then
+            IDENTITY_ARGS+=(-i "$k")
+        fi
+    done
+fi
+
+# Base SSH Options
 SSH_OPTS=(
     -t
     -o StrictHostKeyChecking=no
     -o UserKnownHostsFile=/dev/null
-    -o LogLevel=ERROR
-    -o ConnectTimeout=5
     -p "$HOST_PORT"
+    "${IDENTITY_ARGS[@]}"
 )
 
-# Test SSH connectivity first
+# Test SSH key-based connectivity first
 if ssh -q -o BatchMode=yes -o ConnectTimeout=3 "${SSH_OPTS[@]}" "${HOST_USER}@${HOST_ADDR}" exit 0 2>/dev/null; then
-    echo -e " \033[1;32m✓ SSH connection established.\033[0m"
+    echo -e " \033[1;32m✓ SSH key authentication successful!\033[0m"
     echo -e "\033[1;34m===================================================================\033[0m"
     exec ssh "${SSH_OPTS[@]}" "${HOST_USER}@${HOST_ADDR}"
 else
-    # Check if ~/.ssh has keys
-    KEY_COUNT=$(find /home/developer/.ssh -maxdepth 1 -name "id_*" -not -name "*.pub" 2>/dev/null | wc -l || echo 0)
+    KEY_COUNT=${#IDENTITY_ARGS[@]}
     if [ "$KEY_COUNT" -eq 0 ]; then
-        echo -e "\033[1;33m⚠️  No SSH private keys found in ~/.ssh\033[0m"
-        echo -e " Make sure your host ~/.ssh directory is mounted in docker-compose.yml:"
-        echo -e "   \033[0;37mvolumes:\033[0m"
-        echo -e "     \033[0;37m- ~/.ssh:/home/developer/.ssh:ro\033[0m"
+        echo -e "\033[1;33m⚠️  No SSH private keys found in mounted ~/.ssh directory.\033[0m"
+        echo -e " Mount your host SSH directory in docker-compose.yml:"
+        echo -e "   \033[0;37m- ~/.ssh:/home/developer/.ssh:ro\033[0m"
+    else
+        echo -e "\033[1;33m⚠️  Key authentication failed (${KEY_COUNT} private key(s) checked).\033[0m"
+        echo -e " Public key(s) currently present in container:"
+        for pub in "$SSH_RUNTIME_DIR"/*.pub; do
+            if [ -f "$pub" ]; then
+                echo -e "   \033[1;36m$(cat "$pub")\033[0m"
+            fi
+        done
+        echo -e " Ensure the above public key is added to the host's \033[1;37m~/.ssh/authorized_keys\033[0m"
     fi
+
     echo -e " Attempting interactive SSH login to \033[1;37m${HOST_USER}@${HOST_ADDR}\033[0m..."
     echo -e "\033[1;34m===================================================================\033[0m"
     
-    # Try interactive SSH
+    # Try interactive SSH (password prompt will work interactively)
     ssh "${SSH_OPTS[@]}" "${HOST_USER}@${HOST_ADDR}" || {
         EXIT_CODE=$?
         echo ""
@@ -62,10 +90,9 @@ else
         echo -e "\033[1;31m ❌ Failed to connect to host via SSH (exit code $EXIT_CODE)\033[0m"
         echo -e "\033[1;31m===================================================================\033[0m"
         echo -e " Troubleshooting Tips:"
-        echo -e "  1. Ensure SSH server (sshd) is running on your host machine."
-        echo -e "  2. Ensure 'extra_hosts: [\"host.docker.internal:host-gateway\"]' is in docker-compose.yml."
-        echo -e "  3. Set 'HOST_SSH_USER=<your-username>' in docker-compose environment if needed."
-        echo -e "  4. Ensure your host SSH public key is in ~/.ssh/authorized_keys on the host."
+        echo -e "  1. Ensure SSH server (sshd) is running on ${HOST_ADDR}:${HOST_PORT}."
+        echo -e "  2. Ensure your host SSH public key is in ~/.ssh/authorized_keys on the host."
+        echo -e "  3. Check permissions on host: chmod 700 ~/.ssh && chmod 600 ~/.ssh/authorized_keys."
         echo ""
         read -p "Press Enter to start an internal container bash shell, or Ctrl+C to close: " _
         exec /bin/bash
