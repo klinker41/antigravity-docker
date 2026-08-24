@@ -10,6 +10,8 @@ const AUTH_PASSWORD = process.env.AUTH_PASSWORD || '';
 const PORT_FILE = process.env.PORT_FILE || '/tmp/antigravity_port';
 const INSTANCE_NAME = process.env.RC_NAME || 'server-agent';
 let TARGET_PORT = parseInt(process.env.INITIAL_TARGET_PORT || '0', 10);
+const TERMINAL_PORT = parseInt(process.env.TERMINAL_PORT || '7681', 10);
+const IDE_PORT = parseInt(process.env.IDE_PORT || '8080', 10);
 
 // In-Memory Session Store: Map<sessionToken, { createdAt: number, expiresAt: number }>
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
@@ -189,7 +191,6 @@ body {
     -moz-osx-font-smoothing: grayscale;
 }
 
-/* Ambient glowing nebula background effects */
 .ambient-glow {
     position: absolute;
     border-radius: 50%;
@@ -232,7 +233,6 @@ body {
     100% { transform: scale(0.95) translate(-15px, 15px); opacity: 0.5; }
 }
 
-/* Particle Canvas */
 #antigravity-canvas {
     position: absolute;
     top: 0;
@@ -243,7 +243,6 @@ body {
     pointer-events: auto;
 }
 
-/* Main Card Wrapper */
 .page-wrapper {
     position: relative;
     z-index: 10;
@@ -274,7 +273,6 @@ body {
         inset 0 1px 0 rgba(255, 255, 255, 0.2);
 }
 
-/* Header & Branding */
 .brand-header {
     text-align: center;
     margin-bottom: 24px;
@@ -392,7 +390,6 @@ p.subtitle {
     line-height: 1.4;
 }
 
-/* Error Banner */
 .error-banner {
     display: flex;
     align-items: center;
@@ -421,7 +418,6 @@ p.subtitle {
     height: 16px;
 }
 
-/* Form Styles */
 .form-group {
     margin-bottom: 22px;
     text-align: left;
@@ -479,11 +475,6 @@ input:focus {
         0 0 16px rgba(66, 133, 244, 0.15);
 }
 
-input:focus + .input-icon,
-.input-container:focus-within .input-icon {
-    color: var(--accent-blue-glow);
-}
-
 .toggle-password {
     position: absolute;
     right: 12px;
@@ -504,7 +495,6 @@ input:focus + .input-icon,
     background: rgba(255, 255, 255, 0.06);
 }
 
-/* Button & Link Styles */
 button[type="submit"],
 .btn-primary {
     width: 100%;
@@ -530,12 +520,6 @@ button[type="submit"]:hover,
     background: linear-gradient(135deg, #1967d2 0%, #2563eb 100%);
     box-shadow: 0 6px 24px rgba(26, 115, 232, 0.5);
     transform: translateY(-1.5px);
-}
-
-button[type="submit"]:active,
-.btn-primary:active {
-    transform: translateY(0);
-    box-shadow: 0 2px 10px rgba(26, 115, 232, 0.3);
 }
 
 .btn-secondary {
@@ -566,18 +550,12 @@ button[type="submit"]:active,
     transition: transform 0.2s ease;
 }
 
-button[type="submit"]:hover .btn-icon,
-.btn-primary:hover .btn-icon {
-    transform: translateX(2px);
-}
-
 .action-row {
     display: flex;
     gap: 10px;
     align-items: center;
 }
 
-/* Status Grid Panel */
 .status-grid {
     display: grid;
     grid-template-columns: repeat(2, 1fr);
@@ -620,17 +598,9 @@ button[type="submit"]:hover .btn-icon,
     border-radius: 4px;
 }
 
-.val-success {
-    color: #4ade80;
-    font-weight: 600;
-}
+.val-success { color: #4ade80; font-weight: 600; }
+.val-error { color: #f87171; font-weight: 600; }
 
-.val-error {
-    color: #f87171;
-    font-weight: 600;
-}
-
-/* Spinner */
 .spinner {
     width: 48px;
     height: 48px;
@@ -647,7 +617,6 @@ button[type="submit"]:hover .btn-icon,
     100% { transform: rotate(360deg); }
 }
 
-/* Footer */
 .card-footer {
     margin-top: 24px;
     text-align: center;
@@ -687,16 +656,9 @@ button[type="submit"]:hover .btn-icon,
 }
 
 @media (max-width: 480px) {
-    .page-card {
-        padding: 28px 20px;
-        border-radius: 16px;
-    }
-    .status-grid {
-        grid-template-columns: 1fr;
-    }
-    h1 {
-        font-size: 20px;
-    }
+    .page-card { padding: 28px 20px; border-radius: 16px; }
+    .status-grid { grid-template-columns: 1fr; }
+    h1 { font-size: 20px; }
 }
 `;
 
@@ -715,19 +677,14 @@ const PARTICLE_SIMULATION_SCRIPT = `
     let shockwaves = [];
     let animationFrameId = null;
 
-    const mouse = {
-        x: -1000,
-        y: -1000,
-        radius: 150,
-        active: false
-    };
+    const mouse = { x: -1000, y: -1000, radius: 150, active: false };
 
     const colors = [
-        'rgba(138, 180, 248, ',  // Google Soft Blue
-        'rgba(66, 133, 244, ',   // Google Blue
-        'rgba(56, 189, 248, ',   // Sky Cyan
-        'rgba(167, 139, 250, ',  // Gemini Indigo/Purple
-        'rgba(255, 255, 255, '   // Pure White Star
+        'rgba(138, 180, 248, ',
+        'rgba(66, 133, 244, ',
+        'rgba(56, 189, 248, ',
+        'rgba(167, 139, 250, ',
+        'rgba(255, 255, 255, '
     ];
 
     function resize() {
@@ -830,26 +787,6 @@ const PARTICLE_SIMULATION_SCRIPT = `
         mouse.active = false;
     });
 
-    window.addEventListener('touchstart', (e) => {
-        if (e.touches.length > 0) {
-            mouse.x = e.touches[0].clientX;
-            mouse.y = e.touches[0].clientY;
-            mouse.active = true;
-        }
-    }, { passive: true });
-
-    window.addEventListener('touchmove', (e) => {
-        if (e.touches.length > 0) {
-            mouse.x = e.touches[0].clientX;
-            mouse.y = e.touches[0].clientY;
-            mouse.active = true;
-        }
-    }, { passive: true });
-
-    window.addEventListener('touchend', () => {
-        mouse.active = false;
-    });
-
     window.addEventListener('pointerdown', (e) => {
         shockwaves.push({
             x: e.clientX,
@@ -917,14 +854,6 @@ const PARTICLE_SIMULATION_SCRIPT = `
     } else {
         particles.forEach(p => p.draw());
     }
-
-    document.addEventListener('visibilitychange', () => {
-        if (document.hidden) {
-            if (animationFrameId) cancelAnimationFrame(animationFrameId);
-        } else if (!prefersReducedMotion) {
-            render();
-        }
-    });
 })();
 `;
 
@@ -956,12 +885,10 @@ function renderPageLayout({
     </style>
 </head>
 <body>
-    <!-- Ambient Nebulae -->
     <div class="ambient-glow ambient-glow-1"></div>
     <div class="ambient-glow ambient-glow-2"></div>
     <div class="ambient-glow ambient-glow-3"></div>
 
-    <!-- Antigravity Interactive Particle Canvas -->
     <canvas id="antigravity-canvas"></canvas>
 
     <div class="page-wrapper">
@@ -1098,7 +1025,7 @@ function checkUpstreamHealth(port, timeoutMs = 2000) {
             resolve({
                 up: false,
                 error: err.code === 'ECONNREFUSED'
-                    ? `Connection refused: Antigravity instance is not responding on port ${port}`
+                    ? `Connection refused: Service is not responding on port ${port}`
                     : err.message
             });
         });
@@ -1189,7 +1116,7 @@ function renderStatusPage(health) {
     });
 }
 
-// Modern 503 Starting Up Page HTML
+// Modern 503 Starting Up Page HTML for Antigravity Core
 function renderStartingPage() {
     const statusPill = `
         <div class="status-pill status-pill-warning">
@@ -1212,6 +1139,263 @@ function renderStartingPage() {
     });
 }
 
+// Modern 503 Starting Up Page HTML for Sub-services (IDE / Terminal)
+function renderServiceStartingPage(serviceName) {
+    const statusPill = `
+        <div class="status-pill status-pill-warning">
+            <span class="status-dot status-dot-warning"></span>
+            <span>Initializing ${serviceName}</span>
+        </div>`;
+
+    const bodyHtml = `
+        <div class="spinner"></div>
+        <p style="margin-bottom: 8px;">Starting <strong>${serviceName}</strong> service in the background. This page will automatically refresh.</p>
+        <div class="auto-refresh-badge">Auto-refreshing every 2 seconds</div>`;
+
+    return renderPageLayout({
+        title: `Starting ${serviceName}...`,
+        headMeta: '<meta http-equiv="refresh" content="2">',
+        subtitle: `Launching ${serviceName}`,
+        statusPill,
+        bodyHtml,
+        cardMaxWidth: 440
+    });
+}
+
+// Injected CSS Styles for Antigravity UI buttons
+const INJECTED_UI_STYLES = `
+/* Google Antigravity Injected Tools Navigation & Floating Dock */
+.agy-injected-tools-group {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin: 8px 12px;
+    padding: 8px 0;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.agy-injected-tools-label {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    color: rgba(255, 255, 255, 0.4);
+    padding: 2px 8px 4px 8px;
+    user-select: none;
+}
+
+.agy-injected-btn {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    border-radius: 8px;
+    color: #e2e8f0;
+    text-decoration: none;
+    font-size: 13px;
+    font-weight: 500;
+    transition: all 0.2s ease;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    user-select: none;
+    cursor: pointer;
+}
+
+.agy-injected-btn:hover {
+    background: rgba(66, 133, 244, 0.12);
+    border-color: rgba(66, 133, 244, 0.35);
+    color: #ffffff;
+    transform: translateX(2px);
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+}
+
+.agy-injected-btn-icon {
+    width: 16px;
+    height: 16px;
+    flex-shrink: 0;
+    color: #38bdf8;
+    transition: transform 0.2s ease;
+}
+
+.agy-injected-btn:hover .agy-injected-btn-icon {
+    transform: scale(1.1);
+    color: #60a5fa;
+}
+
+.agy-injected-btn-terminal .agy-injected-btn-icon {
+    color: #4ade80;
+}
+
+.agy-injected-btn-terminal:hover .agy-injected-btn-icon {
+    color: #86efac;
+}
+
+.agy-injected-btn-text {
+    flex-grow: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.agy-injected-external-icon {
+    width: 12px;
+    height: 12px;
+    opacity: 0.4;
+    flex-shrink: 0;
+    transition: opacity 0.2s ease;
+}
+
+.agy-injected-btn:hover .agy-injected-external-icon {
+    opacity: 0.9;
+}
+
+#agy-floating-dock {
+    position: fixed;
+    bottom: 20px;
+    left: 20px;
+    display: flex;
+    gap: 8px;
+    z-index: 99999;
+    pointer-events: auto;
+}
+
+.agy-dock-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 12px;
+    background: rgba(14, 18, 27, 0.88);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 9999px;
+    color: #cbd5e1;
+    text-decoration: none;
+    font-size: 12px;
+    font-weight: 500;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+    transition: all 0.2s ease;
+}
+
+.agy-dock-btn:hover {
+    background: rgba(26, 115, 232, 0.25);
+    border-color: rgba(66, 133, 244, 0.5);
+    color: #ffffff;
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(26, 115, 232, 0.35);
+}
+`;
+
+// Injected JavaScript for Antigravity UI buttons
+const INJECTED_UI_SCRIPT = `
+(function initAntigravityCustomTools() {
+    const IDE_URL = '/ide/';
+    const TERMINAL_URL = '/terminal/';
+
+    const IDE_ICON_SVG = '<svg class="agy-injected-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg>';
+    const TERMINAL_ICON_SVG = '<svg class="agy-injected-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>';
+    const EXTERNAL_ICON_SVG = '<svg class="agy-injected-external-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>';
+
+    function createToolsElement() {
+        const container = document.createElement('div');
+        container.id = 'agy-injected-tools-group';
+        container.className = 'agy-injected-tools-group';
+        container.innerHTML = \`
+            <div class="agy-injected-tools-label">Workspace Tools</div>
+            <a href="\${IDE_URL}" target="_blank" rel="noopener noreferrer" class="agy-injected-btn agy-injected-btn-ide" title="Open VS Code Web IDE in a new tab">
+                \${IDE_ICON_SVG}
+                <span class="agy-injected-btn-text">Web IDE</span>
+                \${EXTERNAL_ICON_SVG}
+            </a>
+            <a href="\${TERMINAL_URL}" target="_blank" rel="noopener noreferrer" class="agy-injected-btn agy-injected-btn-terminal" title="Open Host Terminal in a new tab">
+                \${TERMINAL_ICON_SVG}
+                <span class="agy-injected-btn-text">Host Terminal</span>
+                \${EXTERNAL_ICON_SVG}
+            </a>
+        \`;
+        return container;
+    }
+
+    function createFloatingDock() {
+        if (document.getElementById('agy-floating-dock')) return;
+        const dock = document.createElement('div');
+        dock.id = 'agy-floating-dock';
+        dock.innerHTML = \`
+            <a href="\${IDE_URL}" target="_blank" rel="noopener noreferrer" class="agy-dock-btn" title="Open VS Code Web IDE">
+                \${IDE_ICON_SVG}
+                <span>IDE</span>
+            </a>
+            <a href="\${TERMINAL_URL}" target="_blank" rel="noopener noreferrer" class="agy-dock-btn" title="Open Host Terminal">
+                \${TERMINAL_ICON_SVG}
+                <span>Terminal</span>
+            </a>
+        \`;
+        document.body.appendChild(dock);
+    }
+
+    function tryInjectSidebar() {
+        if (document.getElementById('agy-injected-tools-group')) return;
+
+        const allElements = document.querySelectorAll('button, a, div[role="button"], li, nav, aside');
+        let targetElement = null;
+
+        for (const el of allElements) {
+            const text = (el.textContent || '').trim().toLowerCase();
+            const aria = (el.getAttribute('aria-label') || '').toLowerCase();
+            const title = (el.getAttribute('title') || '').toLowerCase();
+            if (
+                text.includes('conversation history') ||
+                text.includes('history') ||
+                aria.includes('history') ||
+                title.includes('history') ||
+                text.includes('new conversation') ||
+                aria.includes('new conversation')
+            ) {
+                targetElement = el;
+                if (text.includes('history') || aria.includes('history')) {
+                    break;
+                }
+            }
+        }
+
+        if (targetElement) {
+            const parent = targetElement.closest('ul, ol, nav, aside, div[class*="sidebar"], div[class*="nav"]') || targetElement.parentElement;
+            if (parent) {
+                const toolsEl = createToolsElement();
+                if (targetElement.nextSibling) {
+                    targetElement.parentNode.insertBefore(toolsEl, targetElement.nextSibling);
+                } else {
+                    targetElement.parentNode.appendChild(toolsEl);
+                }
+            }
+        }
+    }
+
+    function runInjection() {
+        tryInjectSidebar();
+        createFloatingDock();
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', runInjection);
+    } else {
+        runInjection();
+    }
+
+    const observer = new MutationObserver(() => {
+        if (!document.getElementById('agy-injected-tools-group')) {
+            tryInjectSidebar();
+        }
+        if (!document.getElementById('agy-floating-dock')) {
+            createFloatingDock();
+        }
+    });
+
+    observer.observe(document.body, { childList: true, subtree: true });
+})();
+`;
+
 // Hop-by-hop headers defined in RFC 7230 / RFC 9110 to strip when proxying
 const HOP_BY_HOP_HEADERS = new Set([
     'connection',
@@ -1231,13 +1415,133 @@ const proxyAgent = new http.Agent({
     timeout: 0
 });
 
+// Forward request to ttyd Web Terminal
+function proxyToTerminal(req, res, targetPath) {
+    if (req.socket) req.socket.setNoDelay(true);
+    if (res.socket) res.socket.setNoDelay(true);
+
+    const proxyHeaders = {};
+    for (const [key, value] of Object.entries(req.headers)) {
+        const lowerKey = key.toLowerCase();
+        if (!HOP_BY_HOP_HEADERS.has(lowerKey)) {
+            proxyHeaders[key] = value;
+        }
+    }
+    proxyHeaders['host'] = `localhost:${TERMINAL_PORT}`;
+    proxyHeaders['origin'] = `http://localhost:${TERMINAL_PORT}`;
+
+    const proxyReq = http.request({
+        hostname: '127.0.0.1',
+        port: TERMINAL_PORT,
+        path: targetPath,
+        method: req.method,
+        headers: proxyHeaders,
+        agent: proxyAgent
+    }, (proxyRes) => {
+        if (proxyRes.socket) proxyRes.socket.setNoDelay(true);
+
+        const resHeaders = {};
+        for (const [key, value] of Object.entries(proxyRes.headers)) {
+            const lowerKey = key.toLowerCase();
+            if (!HOP_BY_HOP_HEADERS.has(lowerKey)) {
+                resHeaders[key] = value;
+            }
+        }
+        resHeaders['x-accel-buffering'] = 'no';
+        res.writeHead(proxyRes.statusCode, resHeaders);
+        res.flushHeaders();
+
+        proxyRes.pipe(res);
+    });
+
+    proxyReq.on('error', (err) => {
+        if (!res.headersSent) {
+            res.writeHead(503, { 'Content-Type': 'text/html; charset=utf-8' });
+            res.end(renderServiceStartingPage('Host Terminal'));
+        } else {
+            res.destroy();
+        }
+    });
+
+    req.pipe(proxyReq, { end: true });
+}
+
+// Forward request to code-server Web IDE
+function proxyToIde(req, res, targetPath) {
+    if (req.socket) req.socket.setNoDelay(true);
+    if (res.socket) res.socket.setNoDelay(true);
+
+    const proxyHeaders = {};
+    for (const [key, value] of Object.entries(req.headers)) {
+        const lowerKey = key.toLowerCase();
+        if (!HOP_BY_HOP_HEADERS.has(lowerKey)) {
+            proxyHeaders[key] = value;
+        }
+    }
+    proxyHeaders['host'] = `localhost:${IDE_PORT}`;
+    proxyHeaders['origin'] = `http://localhost:${IDE_PORT}`;
+
+    const proxyReq = http.request({
+        hostname: '127.0.0.1',
+        port: IDE_PORT,
+        path: targetPath,
+        method: req.method,
+        headers: proxyHeaders,
+        agent: proxyAgent
+    }, (proxyRes) => {
+        if (proxyRes.socket) proxyRes.socket.setNoDelay(true);
+
+        const resHeaders = {};
+        for (const [key, value] of Object.entries(proxyRes.headers)) {
+            const lowerKey = key.toLowerCase();
+            if (!HOP_BY_HOP_HEADERS.has(lowerKey)) {
+                if (lowerKey === 'location' && typeof value === 'string') {
+                    let newLoc = value;
+                    if (newLoc.startsWith('/')) {
+                        newLoc = '/ide' + newLoc;
+                    }
+                    resHeaders[key] = newLoc;
+                } else {
+                    resHeaders[key] = value;
+                }
+            }
+        }
+        resHeaders['x-accel-buffering'] = 'no';
+        res.writeHead(proxyRes.statusCode, resHeaders);
+        res.flushHeaders();
+
+        proxyRes.pipe(res);
+    });
+
+    proxyReq.on('error', (err) => {
+        if (!res.headersSent) {
+            res.writeHead(503, { 'Content-Type': 'text/html; charset=utf-8' });
+            res.end(renderServiceStartingPage('Web IDE'));
+        } else {
+            res.destroy();
+        }
+    });
+
+    req.pipe(proxyReq, { end: true });
+}
+
+// Helper to determine if a request path corresponds to a browser SPA frontend route
+function isSpaRoute(pathname) {
+    if (pathname === '/' || pathname === '/index.html') return true;
+    if (pathname.startsWith('/c/') || pathname === '/c') return true;
+    if (pathname.startsWith('/history')) return true;
+    if (pathname.startsWith('/projects')) return true;
+    if (pathname.startsWith('/tasks')) return true;
+    return false;
+}
+
 // Create HTTP Proxy Server
 const server = http.createServer(async (req, res) => {
     try {
         applySecurityHeaders(res, req);
         const parsedUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
 
-        // Handle /status health check endpoint
+        // 1. Handle /status health check endpoint (ALWAYS UNAUTHENTICATED)
         if (parsedUrl.pathname === '/status' || parsedUrl.pathname === '/status/') {
             checkPortFile();
             const health = await checkUpstreamHealth(TARGET_PORT);
@@ -1256,6 +1560,11 @@ const server = http.createServer(async (req, res) => {
                     instance: INSTANCE_NAME,
                     gatewayPort: LISTEN_PORT,
                     targetPort: TARGET_PORT || null,
+                    services: {
+                        antigravity: { port: TARGET_PORT || null, up: health.up },
+                        webIde: { port: IDE_PORT, path: '/ide/' },
+                        hostTerminal: { port: TERMINAL_PORT, path: '/terminal/' }
+                    },
                     latencyMs: health.latency !== undefined ? health.latency : null,
                     error: health.error || null,
                     timestamp: new Date().toISOString()
@@ -1271,7 +1580,7 @@ const server = http.createServer(async (req, res) => {
             return;
         }
 
-        // Handle Logout GET or POST
+        // 2. Handle Logout GET or POST
         if (parsedUrl.pathname === '/__auth/logout') {
             const cookies = parseCookies(req);
             if (cookies['antigravity_session']) {
@@ -1285,7 +1594,7 @@ const server = http.createServer(async (req, res) => {
             return;
         }
 
-        // Handle Login POST
+        // 3. Handle Login POST
         if (parsedUrl.pathname === '/__auth/login' && req.method === 'POST') {
             const clientIp = getClientIp(req);
             const rateCheck = checkRateLimit(clientIp);
@@ -1317,10 +1626,8 @@ const server = http.createServer(async (req, res) => {
                 const enteredPassword = params.get('password') || '';
 
                 if (AUTH_PASSWORD && safeCompare(enteredPassword, AUTH_PASSWORD)) {
-                    // Reset rate limiter on successful login
                     loginRateLimiter.delete(clientIp);
 
-                    // Generate cryptographically secure random session token
                     const sessionToken = crypto.randomBytes(32).toString('hex');
                     const now = Date.now();
                     activeSessions.set(sessionToken, {
@@ -1331,7 +1638,6 @@ const server = http.createServer(async (req, res) => {
                     const isHttps = req.headers['x-forwarded-proto'] === 'https' || req.socket?.encrypted;
                     const secureFlag = isHttps ? '; Secure' : '';
 
-                    // Set 30-day persistent cookie with secure random token
                     res.writeHead(302, {
                         'Set-Cookie': `antigravity_session=${sessionToken}; Path=/; Max-Age=2592000; HttpOnly; SameSite=Lax${secureFlag}`,
                         'Location': '/?useWebSocket=true'
@@ -1346,32 +1652,37 @@ const server = http.createServer(async (req, res) => {
             return;
         }
 
-        // Check authentication
+        // 4. Check Authentication for ALL other routes (/ide, /terminal, /, /c/..., etc.)
         if (!isAuthenticated(req)) {
             res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
             res.end(renderLoginPage());
             return;
         }
 
-// Helper to determine if a request path corresponds to a browser SPA frontend route
-function isSpaRoute(pathname) {
-    if (/\.[a-zA-Z0-9]+$/.test(pathname)) {
-        return pathname === '/index.html';
-    }
-    if (
-        pathname.startsWith('/__auth') ||
-        pathname.startsWith('/status') ||
-        pathname.startsWith('/connect-websocket') ||
-        pathname.startsWith('/exa.') ||
-        pathname.startsWith('/google.') ||
-        pathname.startsWith('/static')
-    ) {
-        return false;
-    }
-    return true;
-}
+        // 5. Handle /terminal and /terminal/* routes
+        if (parsedUrl.pathname === '/terminal') {
+            res.writeHead(302, { 'Location': '/terminal/' });
+            res.end();
+            return;
+        }
+        if (parsedUrl.pathname.startsWith('/terminal')) {
+            proxyToTerminal(req, res, req.url);
+            return;
+        }
 
-        // Ensure useWebSocket=true query param is present for all browser SPA routes (/c/..., /history, /, etc.)
+        // 6. Handle /ide and /ide/* routes
+        if (parsedUrl.pathname === '/ide') {
+            res.writeHead(302, { 'Location': '/ide/' });
+            res.end();
+            return;
+        }
+        if (parsedUrl.pathname.startsWith('/ide')) {
+            const strippedPath = req.url.replace(/^\/ide/, '') || '/';
+            proxyToIde(req, res, strippedPath);
+            return;
+        }
+
+        // 7. Ensure useWebSocket=true query param is present for all browser SPA routes
         if (req.method === 'GET' && isSpaRoute(parsedUrl.pathname)) {
             if (parsedUrl.searchParams.get('useWebSocket') !== 'true') {
                 parsedUrl.searchParams.set('useWebSocket', 'true');
@@ -1383,111 +1694,115 @@ function isSpaRoute(pathname) {
             }
         }
 
-    // If target port is not ready yet
-    if (!TARGET_PORT) {
-        res.writeHead(503, { 'Content-Type': 'text/html; charset=utf-8' });
-        res.end(renderStartingPage());
-        return;
-    }
-
-    // Enable TCP_NODELAY immediately for low latency streaming and instant completion signaling
-    if (req.socket) req.socket.setNoDelay(true);
-    if (res.socket) res.socket.setNoDelay(true);
-
-    // Proxy HTTP Request with Host/Origin/Referer rewrite to localhost
-    const proxyHeaders = {};
-    for (const [key, value] of Object.entries(req.headers)) {
-        const lowerKey = key.toLowerCase();
-        if (!HOP_BY_HOP_HEADERS.has(lowerKey)) {
-            proxyHeaders[key] = value;
+        // 8. If target port is not ready yet
+        if (!TARGET_PORT) {
+            res.writeHead(503, { 'Content-Type': 'text/html; charset=utf-8' });
+            res.end(renderStartingPage());
+            return;
         }
-    }
-    proxyHeaders['host'] = `localhost:${TARGET_PORT}`;
-    proxyHeaders['origin'] = `http://localhost:${TARGET_PORT}`;
-    if (req.headers['referer']) {
-        proxyHeaders['referer'] = req.headers['referer'].replace(/^https?:\/\/[^\/]+/, `http://localhost:${TARGET_PORT}`);
-    }
 
-    const proxyReq = http.request({
-        hostname: '127.0.0.1',
-        port: TARGET_PORT,
-        path: req.url,
-        method: req.method,
-        headers: proxyHeaders,
-        agent: proxyAgent,
-    }, (proxyRes) => {
-        if (proxyRes.socket) proxyRes.socket.setNoDelay(true);
+        // 9. Proxy HTTP Request to Antigravity agy with DOM injection on HTML responses
+        if (req.socket) req.socket.setNoDelay(true);
+        if (res.socket) res.socket.setNoDelay(true);
 
-        const resHeaders = {};
-        for (const [key, value] of Object.entries(proxyRes.headers)) {
+        const proxyHeaders = {};
+        for (const [key, value] of Object.entries(req.headers)) {
             const lowerKey = key.toLowerCase();
             if (!HOP_BY_HOP_HEADERS.has(lowerKey)) {
-                resHeaders[key] = value;
+                proxyHeaders[key] = value;
             }
         }
-
-        // Align CORS access-control-allow-origin to match client origin if upstream specified localhost
-        if (resHeaders['access-control-allow-origin'] && req.headers.origin) {
-            resHeaders['access-control-allow-origin'] = req.headers.origin;
+        proxyHeaders['host'] = `localhost:${TARGET_PORT}`;
+        proxyHeaders['origin'] = `http://localhost:${TARGET_PORT}`;
+        if (req.headers['referer']) {
+            proxyHeaders['referer'] = req.headers['referer'].replace(/^https?:\/\/[^\/]+/, `http://localhost:${TARGET_PORT}`);
         }
 
-        // Disable downstream and intermediate proxy buffering for streaming RPC responses
-        resHeaders['x-accel-buffering'] = 'no';
+        // Request uncompressed body for SPA routes to enable DOM injection
+        if (isSpaRoute(parsedUrl.pathname)) {
+            proxyHeaders['accept-encoding'] = 'identity';
+        }
 
-        res.writeHead(proxyRes.statusCode, resHeaders);
-        res.flushHeaders();
+        const proxyReq = http.request({
+            hostname: '127.0.0.1',
+            port: TARGET_PORT,
+            path: req.url,
+            method: req.method,
+            headers: proxyHeaders,
+            agent: proxyAgent,
+        }, (proxyRes) => {
+            if (proxyRes.socket) proxyRes.socket.setNoDelay(true);
 
-        // Stream upstream response with flow control and backpressure
-        proxyRes.on('data', (chunk) => {
-            const canContinue = res.write(chunk);
-            if (!canContinue) {
-                proxyRes.pause();
-                res.once('drain', () => proxyRes.resume());
+            const resHeaders = {};
+            for (const [key, value] of Object.entries(proxyRes.headers)) {
+                const lowerKey = key.toLowerCase();
+                if (!HOP_BY_HOP_HEADERS.has(lowerKey)) {
+                    resHeaders[key] = value;
+                }
+            }
+
+            if (resHeaders['access-control-allow-origin'] && req.headers.origin) {
+                resHeaders['access-control-allow-origin'] = req.headers.origin;
+            }
+
+            resHeaders['x-accel-buffering'] = 'no';
+
+            const isHtmlResponse = (resHeaders['content-type'] || '').includes('text/html');
+
+            if (isHtmlResponse && req.method === 'GET') {
+                const chunks = [];
+                proxyRes.on('data', (chunk) => {
+                    chunks.push(chunk);
+                });
+                proxyRes.on('end', () => {
+                    let html = Buffer.concat(chunks).toString('utf8');
+                    const injection = `<style>${INJECTED_UI_STYLES}</style><script>${INJECTED_UI_SCRIPT}</script>`;
+                    if (html.includes('</body>')) {
+                        html = html.replace('</body>', `${injection}</body>`);
+                    } else if (html.includes('</html>')) {
+                        html = html.replace('</html>', `${injection}</html>`);
+                    } else {
+                        html += injection;
+                    }
+                    resHeaders['content-length'] = Buffer.byteLength(html, 'utf8');
+                    delete resHeaders['content-encoding'];
+                    res.writeHead(proxyRes.statusCode, resHeaders);
+                    res.end(html);
+                });
+                return;
+            }
+
+            res.writeHead(proxyRes.statusCode, resHeaders);
+            res.flushHeaders();
+
+            proxyRes.pipe(res);
+        });
+
+        proxyReq.on('socket', (sock) => {
+            sock.setNoDelay(true);
+        });
+
+        const clientAbortHandler = () => {
+            if (!res.writableFinished && !res.writableEnded && !proxyReq.destroyed) {
+                proxyReq.destroy();
+            }
+        };
+
+        res.on('close', clientAbortHandler);
+        res.on('error', clientAbortHandler);
+        req.on('error', clientAbortHandler);
+
+        proxyReq.on('error', (err) => {
+            console.error('[HTTP Proxy Error]', err.message);
+            if (!res.headersSent) {
+                res.writeHead(502, { 'Content-Type': 'text/plain' });
+                res.end('Antigravity upstream server unavailable.');
+            } else {
+                res.destroy();
             }
         });
 
-        // Forward HTTP trailers for ConnectRPC / gRPC-Web clean stream termination
-        proxyRes.on('end', () => {
-            if (proxyRes.trailers && Object.keys(proxyRes.trailers).length > 0) {
-                try {
-                    res.addTrailers(proxyRes.trailers);
-                } catch (e) {}
-            }
-            res.end();
-        });
-
-        proxyRes.on('error', (err) => {
-            console.error('[Proxy Response Stream Error]', err.message);
-            res.destroy();
-        });
-    });
-
-    proxyReq.on('socket', (sock) => {
-        sock.setNoDelay(true);
-    });
-
-    // Cleanup handlers: destroy upstream proxy request only if client aborted prematurely
-    const clientAbortHandler = () => {
-        if (!res.writableFinished && !res.writableEnded && !proxyReq.destroyed) {
-            proxyReq.destroy();
-        }
-    };
-
-    res.on('close', clientAbortHandler);
-    res.on('error', clientAbortHandler);
-    req.on('error', clientAbortHandler);
-
-    proxyReq.on('error', (err) => {
-        console.error('[HTTP Proxy Error]', err.message);
-        if (!res.headersSent) {
-            res.writeHead(502, { 'Content-Type': 'text/plain' });
-            res.end('Antigravity upstream server unavailable.');
-        } else {
-            res.destroy();
-        }
-    });
-
-    req.pipe(proxyReq, { end: true });
+        req.pipe(proxyReq, { end: true });
     } catch (err) {
         console.error('[HTTP Gateway Error]', err);
         if (!res.headersSent) {
@@ -1499,7 +1814,7 @@ function isSpaRoute(pathname) {
     }
 });
 
-// Handle WebSocket / Upgrade requests using standard HTTP upgrade negotiation
+// Handle WebSocket / Upgrade requests
 server.on('upgrade', (req, clientSocket, head) => {
     if (!isAuthenticated(req)) {
         clientSocket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
@@ -1507,25 +1822,38 @@ server.on('upgrade', (req, clientSocket, head) => {
         return;
     }
 
-    if (!TARGET_PORT) {
-        clientSocket.write('HTTP/1.1 503 Service Unavailable\r\n\r\n');
-        clientSocket.destroy();
-        return;
+    const parsedUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+    let targetPort = TARGET_PORT;
+    let targetPath = req.url;
+
+    if (parsedUrl.pathname.startsWith('/terminal')) {
+        targetPort = TERMINAL_PORT;
+        targetPath = req.url;
+    } else if (parsedUrl.pathname.startsWith('/ide')) {
+        targetPort = IDE_PORT;
+        targetPath = req.url.replace(/^\/ide/, '') || '/';
+    } else {
+        if (!TARGET_PORT) {
+            clientSocket.write('HTTP/1.1 503 Service Unavailable\r\n\r\n');
+            clientSocket.destroy();
+            return;
+        }
+        targetPort = TARGET_PORT;
     }
 
     clientSocket.setNoDelay(true);
 
     const proxyHeaders = { ...req.headers };
-    proxyHeaders['host'] = `localhost:${TARGET_PORT}`;
-    proxyHeaders['origin'] = `http://localhost:${TARGET_PORT}`;
+    proxyHeaders['host'] = `localhost:${targetPort}`;
+    proxyHeaders['origin'] = `http://localhost:${targetPort}`;
     if (proxyHeaders['referer']) {
-        proxyHeaders['referer'] = proxyHeaders['referer'].replace(/^https?:\/\/[^\/]+/, `http://localhost:${TARGET_PORT}`);
+        proxyHeaders['referer'] = proxyHeaders['referer'].replace(/^https?:\/\/[^\/]+/, `http://localhost:${targetPort}`);
     }
 
     const upstreamReq = http.request({
         hostname: '127.0.0.1',
-        port: TARGET_PORT,
-        path: req.url,
+        port: targetPort,
+        path: targetPath,
         method: req.method,
         headers: proxyHeaders,
         agent: false,
@@ -1606,7 +1934,6 @@ function checkPortFile() {
             }
         }
 
-        // Fallback: check ~/.gemini/antigravity-cli/cli.log if PORT_FILE is not available
         const possibleLogs = [
             '/home/developer/.gemini/antigravity-cli/cli.log'
         ];

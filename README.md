@@ -1,6 +1,6 @@
-# Headless Antigravity Docker Agent with Remote Control
+# Headless Antigravity Docker Agent with Remote Control, Web IDE & Host Terminal
 
-Run Google Antigravity in **headless Remote Control mode** on your server. Connect to your agent from any browser via your reverse proxy or local network with built-in password protection.
+Run Google Antigravity in **headless Remote Control mode** on your server. Connect to your agent from any browser via your reverse proxy or local network with built-in password protection, an integrated **VS Code Web IDE** for inspecting project files, and a **Host Web Terminal** for running commands on the host machine.
 
 ---
 
@@ -24,6 +24,11 @@ services:
       - RC_NAME=<remote-control-name>
       - AGY_PORT=4400
       - AUTH_PASSWORD=<password-for-login>
+      - HOST_SSH_USER=<host-username>
+      - HOST_SSH_HOST=host.docker.internal
+      - HOST_SSH_PORT=22
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - <location-of-projects>:/workspace
       - <location-of-config>:/home/developer/.gemini
@@ -44,6 +49,9 @@ services:
 | `RC_NAME` | `server-agent` | Identifier name for this server instance. |
 | `AGY_PORT` | `4400` | Port exposed by the built-in web gateway. |
 | `AUTH_PASSWORD` | *(empty)* | Optional password to protect web access. When set, prompts for login and remembers session for 30 days. |
+| `HOST_SSH_USER` | *(workspace owner)* | Host username used by the Web Terminal to connect to the host machine via SSH. |
+| `HOST_SSH_HOST` | `host.docker.internal` | Hostname/IP used by Web Terminal to reach the host machine. |
+| `HOST_SSH_PORT` | `22` | SSH port on the host machine. |
 
 ### Volumes
 
@@ -52,7 +60,7 @@ services:
 | `<location-of-projects>` | `/workspace` | Host directory where your Git repositories and codebases live. |
 | `<location-of-config>` | `/home/developer/.gemini` | Host directory where Antigravity OAuth tokens and preferences persist. |
 | `<home-folder>/.gitconfig` | `/home/developer/.gitconfig:ro` | *(Optional)* Mounts host Git configuration for authenticated commits. |
-| `<home-folder>/.ssh` | `/home/developer/.ssh:ro` | *(Optional)* Mounts host SSH keys for private Git operations (GitHub/GitLab). |
+| `<home-folder>/.ssh` | `/home/developer/.ssh:ro` | *(Required for Host Terminal & Git)* Mounts host SSH keys for private Git operations and host shell terminal access. |
 
 ---
 
@@ -84,9 +92,21 @@ docker compose up -d
 
 ---
 
-## 🌐 Accessing the Agent
+## 🌐 Accessing the Agent & Workspace Services
 
 Navigate to `http://<your-server-ip>:4400` in your browser (or through your reverse proxy). If configured, enter your `AUTH_PASSWORD` on the login screen to unlock your session for 30 days.
+
+Once logged in, all services are accessible:
+
+| Service | Path | Description | Authentication |
+| :--- | :--- | :--- | :--- |
+| **Google Antigravity UI** | `/` | Main chat and conversation interface. Injected with **Web IDE** and **Host Terminal** buttons in the left navigation sidebar. | Protected 🔒 |
+| **VS Code Web IDE** | `/ide/` | Full-featured VS Code in the browser for viewing and editing raw project files in `/workspace`. | Protected 🔒 |
+| **Host Web Terminal** | `/terminal/` | Web terminal running interactive SSH sessions directly on the host machine (manage Docker, run system commands, git, etc.). | Protected 🔒 |
+| **Health & Service Status** | `/status` | Real-time health check endpoint for monitoring uptime, latency, and registered service ports. | **Public / Unauthenticated** 🟢 |
+
+> [!NOTE]
+> JSON monitoring for `/status` is available by requesting `Accept: application/json` or adding `?format=json` (e.g. `http://<your-server-ip>:4400/status?format=json`).
 
 ---
 

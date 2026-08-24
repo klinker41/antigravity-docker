@@ -2,7 +2,7 @@ ARG BASE_IMAGE=ubuntu:26.04
 FROM ${BASE_IMAGE}
 
 LABEL maintainer="Antigravity Team" \
-      description="Headless Google Antigravity Remote Control Agent with Python and Node.js 26"
+      description="Headless Google Antigravity Remote Control Agent with Python, Node.js 26, VS Code Web IDE, and Host Web Terminal"
 
 # Prevent interactive prompts during apt installs
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -55,7 +55,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* && \
     pip install --no-cache-dir --break-system-packages uv poetry pipenv virtualenv
 
-# 4. Create non-root developer user with sudo privileges
+# 4. Install code-server (VS Code Web IDE) and ttyd (Web Terminal)
+RUN curl -fsSL https://code-server.dev/install.sh | sh && \
+    ARCH="$(uname -m)" && \
+    case "$ARCH" in \
+        x86_64) TTYD_ARCH="x86_64" ;; \
+        aarch64|arm64) TTYD_ARCH="aarch64" ;; \
+        *) echo "Unsupported arch: $ARCH" && exit 1 ;; \
+    esac && \
+    curl -fsSL "https://github.com/tsl0922/ttyd/releases/download/1.7.7/ttyd.${TTYD_ARCH}" -o /usr/local/bin/ttyd && \
+    chmod +x /usr/local/bin/ttyd
+
+# 5. Create non-root developer user with sudo privileges
 ARG USERNAME=developer
 ARG USER_UID=1000
 ARG USER_GID=1000
@@ -75,7 +86,7 @@ RUN if id -u ubuntu >/dev/null 2>&1; then userdel -f -r ubuntu || true; fi && \
     echo "${USERNAME} ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers.d/${USERNAME} && \
     chmod 0440 /etc/sudoers.d/${USERNAME}
 
-# 5. Install Antigravity CLI (agy) for developer user
+# 6. Install Antigravity CLI (agy) for developer user
 USER ${USERNAME}
 ENV HOME=/home/${USERNAME}
 WORKDIR /home/${USERNAME}
@@ -89,12 +100,15 @@ ENV PATH="/home/${USERNAME}/.local/bin:/home/${USERNAME}/.cargo/bin:/home/${USER
 # Create required directories for persistent storage and workspace
 USER root
 RUN mkdir -p /home/${USERNAME}/.gemini \
+             /home/${USERNAME}/.local/share/code-server \
+             /home/${USERNAME}/.config/code-server \
              /workspace && \
     chown -R ${USERNAME}:${USERNAME} /home/${USERNAME} /workspace
 
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY proxy/auth-proxy.js /usr/local/bin/auth-proxy.js
-RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/auth-proxy.js
+COPY scripts/host-terminal.sh /usr/local/bin/host-terminal.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/auth-proxy.js /usr/local/bin/host-terminal.sh
 
 WORKDIR /workspace
 

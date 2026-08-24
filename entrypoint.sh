@@ -216,9 +216,32 @@ case "$1" in
     daemon)
         rm -f /tmp/antigravity_port
 
-        # Start Node.js Authentication & Reverse Proxy Gateway
+        # 1. Start code-server (VS Code Web IDE) on 127.0.0.1:8080
+        echo " 🟢 Starting code-server Web IDE on internal port 8080"
+        gosu "$DEVELOPER_USER" code-server \
+            --bind-addr 127.0.0.1:8080 \
+            --auth none \
+            --disable-telemetry \
+            --disable-update-check \
+            "$WORKSPACE_DIR" > /tmp/code-server.log 2>&1 &
+
+        # 2. Start ttyd (Web Terminal) on 127.0.0.1:7681
+        echo " 🟢 Starting ttyd Web Terminal on internal port 7681"
+        gosu "$DEVELOPER_USER" ttyd \
+            -p 7681 \
+            -i 127.0.0.1 \
+            -b /terminal \
+            -t fontSize=14 \
+            -t fontFamily="Google Sans Code, monospace" \
+            -t theme='{"background": "#08090d", "foreground": "#f0f4fc", "cursor": "#38bdf8"}' \
+            /usr/local/bin/host-terminal.sh > /tmp/ttyd.log 2>&1 &
+
+        # 3. Start Node.js Authentication & Reverse Proxy Gateway
         export AGY_PORT="${TARGET_PORT}"
         export AUTH_PASSWORD="${AUTH_PASSWORD:-}"
+        export HOST_SSH_USER="${HOST_SSH_USER:-}"
+        export HOST_SSH_HOST="${HOST_SSH_HOST:-host.docker.internal}"
+        export HOST_SSH_PORT="${HOST_SSH_PORT:-22}"
         node /usr/local/bin/auth-proxy.js &
 
         if [ ! -s "$TOKEN_FILE" ]; then
