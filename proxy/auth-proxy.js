@@ -1440,8 +1440,7 @@ function checkPortFile() {
 
         // Fallback: check ~/.gemini/antigravity-cli/cli.log if PORT_FILE is not available
         const possibleLogs = [
-            '/home/developer/.gemini/antigravity-cli/cli.log',
-            '/home/developer/.gemini/antigravity/cli.log'
+            '/home/developer/.gemini/antigravity-cli/cli.log'
         ];
         for (const logPath of possibleLogs) {
             if (fs.existsSync(logPath)) {

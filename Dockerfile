@@ -100,7 +100,6 @@ ENV PATH="/home/${USERNAME}/.local/bin:/home/${USERNAME}/.cargo/bin:/home/${USER
 # Create required directories for persistent storage and workspace
 USER root
 RUN mkdir -p /home/${USERNAME}/.gemini \
-             /home/${USERNAME}/.antigravity \
              /workspace && \
     chown -R ${USERNAME}:${USERNAME} /home/${USERNAME} /workspace
 

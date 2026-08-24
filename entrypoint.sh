@@ -3,7 +3,6 @@ set -e
 
 DEVELOPER_USER="developer"
 GEMINI_DIR="/home/${DEVELOPER_USER}/.gemini"
-ANTIGRAVITY_DIR="/home/${DEVELOPER_USER}/.antigravity"
 TOKEN_FILE="${GEMINI_DIR}/jetski-standalone-oauth-token"
 WORKSPACE_DIR="/workspace"
 
@@ -32,8 +31,6 @@ fi
 # 2. Fix ownership & initialize default configs on mounted volumes
 mkdir -p "$GEMINI_DIR/config/projects" \
          "$GEMINI_DIR/antigravity-cli" \
-         "$GEMINI_DIR/antigravity" \
-         "$ANTIGRAVITY_DIR" \
          "$WORKSPACE_DIR"
 
 # Initialize config.json if not present
@@ -148,10 +145,8 @@ migrate_convos_into_projects: MIGRATION_STATUS_COMPLETED
 migrate_retroactive_projects: RETROACTIVE_MIGRATION_STATUS_COMPLETED_UNNECESSARY'
 
 echo "$STATE_CONTENT" > "$GEMINI_DIR/antigravity-cli/antigravity_state.pbtxt"
-echo "$STATE_CONTENT" > "$GEMINI_DIR/antigravity/antigravity_state.pbtxt"
-echo "$STATE_CONTENT" > "$ANTIGRAVITY_DIR/antigravity_state.pbtxt"
 
-chown -R ${DEVELOPER_USER}:${DEVELOPER_USER} "$GEMINI_DIR" "$ANTIGRAVITY_DIR"
+chown -R ${DEVELOPER_USER}:${DEVELOPER_USER} "$GEMINI_DIR"
 if [ "$(stat -c '%u' "$WORKSPACE_DIR" 2>/dev/null)" = "0" ]; then
     chown ${DEVELOPER_USER}:${DEVELOPER_USER} "$WORKSPACE_DIR" || true
 fi
