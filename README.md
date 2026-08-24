@@ -85,3 +85,20 @@ docker compose up -d
 ## 🌐 Accessing the Agent
 
 Navigate to `http://<your-server-ip>:4400` in your browser (or through your reverse proxy). If configured, enter your `AUTH_PASSWORD` on the login screen to unlock your session for 30 days.
+
+---
+
+## 🛠️ Building & Pushing to Docker Hub
+
+If you want to build the Docker image from source and push it to Docker Hub:
+
+```bash
+docker build -t jklinker/antigravity-docker:latest .
+docker push jklinker/antigravity-docker:latest
+```
+
+> [!TIP]
+> **Multi-Platform Build**: To build and push for multiple architectures (such as `linux/amd64` and `linux/arm64` for Apple Silicon or ARM servers) using Docker Buildx:
+> ```bash
+> docker buildx build --platform linux/amd64,linux/arm64 -t jklinker/antigravity-docker:latest --push .
+> ```
