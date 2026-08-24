@@ -196,8 +196,11 @@ umask 0002
 export HOME="/home/${DEVELOPER_USER}"
 export PATH="/home/${DEVELOPER_USER}/.local/bin:/home/${DEVELOPER_USER}/.cargo/bin:/home/${DEVELOPER_USER}/.local/share/pnpm:${PATH}"
 
-# Configure git safe directory for mounted workspaces
-gosu "$DEVELOPER_USER" git config --global --add safe.directory '*' 2>/dev/null || true
+# Configure git safe directory for mounted workspaces and persistent config
+gosu "$DEVELOPER_USER" git config --global --add safe.directory "$WORKSPACE_DIR" 2>/dev/null || true
+gosu "$DEVELOPER_USER" git config --global --add safe.directory "${WORKSPACE_DIR}/*" 2>/dev/null || true
+gosu "$DEVELOPER_USER" git config --global --add safe.directory "$GEMINI_DIR" 2>/dev/null || true
+gosu "$DEVELOPER_USER" git config --global --add safe.directory "$ANTIGRAVITY_DIR" 2>/dev/null || true
 
 # 5. Mode dispatch
 case "$1" in

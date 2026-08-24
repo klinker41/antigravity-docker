@@ -11,13 +11,73 @@ const PORT_FILE = process.env.PORT_FILE || '/tmp/antigravity_port';
 const INSTANCE_NAME = process.env.RC_NAME || 'server-agent';
 let TARGET_PORT = parseInt(process.env.INITIAL_TARGET_PORT || '0', 10);
 
-// Generate expected auth token from password
-function getExpectedToken() {
-    if (!AUTH_PASSWORD) return '';
-    return crypto.createHash('sha256').update(`antigravity_salt_${AUTH_PASSWORD}`).digest('hex');
+// In-Memory Session Store: Map<sessionToken, { createdAt: number, expiresAt: number }>
+const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+const activeSessions = new Map();
+
+// Rate Limiter Store for login attempts: Map<ip, { attempts: number, resetTime: number, lockUntil: number }>
+const loginRateLimiter = new Map();
+const MAX_LOGIN_ATTEMPTS = 5;
+const RATE_LIMIT_WINDOW_MS = 60 * 1000; // 1 minute
+const LOCKOUT_DURATION_MS = 5 * 60 * 1000; // 5 minutes
+
+// Clean up expired sessions and rate limits periodically
+setInterval(() => {
+    const now = Date.now();
+    for (const [token, session] of activeSessions.entries()) {
+        if (session.expiresAt <= now) activeSessions.delete(token);
+    }
+    for (const [ip, record] of loginRateLimiter.entries()) {
+        if (record.resetTime <= now && record.lockUntil <= now) loginRateLimiter.delete(ip);
+    }
+}, 60 * 1000);
+
+// Constant-time string comparison using SHA-256 digests to prevent timing attacks
+function safeCompare(a, b) {
+    if (typeof a !== 'string' || typeof b !== 'string') return false;
+    const hashA = crypto.createHash('sha256').update(a).digest();
+    const hashB = crypto.createHash('sha256').update(b).digest();
+    return crypto.timingSafeEqual(hashA, hashB);
 }
 
-const EXPECTED_TOKEN = getExpectedToken();
+// Extract client IP address (supporting reverse proxy X-Forwarded-For)
+function getClientIp(req) {
+    const forwarded = req.headers['x-forwarded-for'];
+    if (forwarded) {
+        return forwarded.split(',')[0].trim();
+    }
+    return req.socket?.remoteAddress || '127.0.0.1';
+}
+
+// Check rate limit status for login
+function checkRateLimit(ip) {
+    const now = Date.now();
+    let record = loginRateLimiter.get(ip);
+    if (!record) {
+        record = { attempts: 0, resetTime: now + RATE_LIMIT_WINDOW_MS, lockUntil: 0 };
+        loginRateLimiter.set(ip, record);
+    }
+    if (record.lockUntil > now) {
+        const remainingSeconds = Math.ceil((record.lockUntil - now) / 1000);
+        return { allowed: false, message: `Too many failed attempts. Locked out for ${remainingSeconds} seconds.` };
+    }
+    if (record.resetTime <= now) {
+        record.attempts = 0;
+        record.resetTime = now + RATE_LIMIT_WINDOW_MS;
+    }
+    return { allowed: true, record };
+}
+
+// Record a failed login attempt
+function recordFailedAttempt(ip) {
+    const record = loginRateLimiter.get(ip);
+    if (record) {
+        record.attempts += 1;
+        if (record.attempts >= MAX_LOGIN_ATTEMPTS) {
+            record.lockUntil = Date.now() + LOCKOUT_DURATION_MS;
+        }
+    }
+}
 
 // Parse cookies helper
 function parseCookies(req) {
@@ -39,7 +99,28 @@ function parseCookies(req) {
 function isAuthenticated(req) {
     if (!AUTH_PASSWORD) return true; // No password configured -> open access
     const cookies = parseCookies(req);
-    return cookies['antigravity_session'] === EXPECTED_TOKEN;
+    const token = cookies['antigravity_session'];
+    if (!token) return false;
+
+    const session = activeSessions.get(token);
+    if (!session) return false;
+    if (session.expiresAt <= Date.now()) {
+        activeSessions.delete(token);
+        return false;
+    }
+    return true;
+}
+
+// Standard HTTP Security Headers
+function applySecurityHeaders(res, req) {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+    const isHttps = req.headers['x-forwarded-proto'] === 'https' || req.socket?.encrypted;
+    if (isHttps) {
+        res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+    }
 }
 
 // Shared Google Antigravity Vector Logo SVG
@@ -1152,6 +1233,7 @@ const proxyAgent = new http.Agent({
 // Create HTTP Proxy Server
 const server = http.createServer(async (req, res) => {
     try {
+        applySecurityHeaders(res, req);
         const parsedUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
 
         // Handle /status health check endpoint
@@ -1188,35 +1270,87 @@ const server = http.createServer(async (req, res) => {
             return;
         }
 
-    // Handle Login POST
-    if (parsedUrl.pathname === '/__auth/login' && req.method === 'POST') {
-        let body = '';
-        req.on('data', chunk => { body += chunk.toString(); });
-        req.on('end', () => {
-            const params = new URLSearchParams(body);
-            const enteredPassword = params.get('password') || '';
-
-            if (enteredPassword === AUTH_PASSWORD) {
-                // Set 30-day persistent cookie
-                res.writeHead(302, {
-                    'Set-Cookie': `antigravity_session=${EXPECTED_TOKEN}; Path=/; Max-Age=2592000; HttpOnly; SameSite=Lax`,
-                    'Location': '/'
-                });
-                res.end();
-            } else {
-                res.writeHead(401, { 'Content-Type': 'text/html; charset=utf-8' });
-                res.end(renderLoginPage('Incorrect password. Please try again.'));
+        // Handle Logout GET or POST
+        if (parsedUrl.pathname === '/__auth/logout') {
+            const cookies = parseCookies(req);
+            if (cookies['antigravity_session']) {
+                activeSessions.delete(cookies['antigravity_session']);
             }
-        });
-        return;
-    }
+            res.writeHead(302, {
+                'Set-Cookie': 'antigravity_session=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax',
+                'Location': '/__auth/login'
+            });
+            res.end();
+            return;
+        }
 
-    // Check authentication
-    if (!isAuthenticated(req)) {
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-        res.end(renderLoginPage());
-        return;
-    }
+        // Handle Login POST
+        if (parsedUrl.pathname === '/__auth/login' && req.method === 'POST') {
+            const clientIp = getClientIp(req);
+            const rateCheck = checkRateLimit(clientIp);
+
+            if (!rateCheck.allowed) {
+                res.writeHead(429, { 'Content-Type': 'text/html; charset=utf-8' });
+                res.end(renderLoginPage(rateCheck.message));
+                return;
+            }
+
+            let body = '';
+            let exceeded = false;
+            const MAX_BODY_BYTES = 16 * 1024; // 16 KB max payload
+
+            req.on('data', chunk => {
+                if (exceeded) return;
+                body += chunk.toString();
+                if (Buffer.byteLength(body, 'utf8') > MAX_BODY_BYTES) {
+                    exceeded = true;
+                    res.writeHead(413, { 'Content-Type': 'text/plain' });
+                    res.end('Payload Too Large');
+                    req.destroy();
+                }
+            });
+
+            req.on('end', () => {
+                if (exceeded) return;
+                const params = new URLSearchParams(body);
+                const enteredPassword = params.get('password') || '';
+
+                if (AUTH_PASSWORD && safeCompare(enteredPassword, AUTH_PASSWORD)) {
+                    // Reset rate limiter on successful login
+                    loginRateLimiter.delete(clientIp);
+
+                    // Generate cryptographically secure random session token
+                    const sessionToken = crypto.randomBytes(32).toString('hex');
+                    const now = Date.now();
+                    activeSessions.set(sessionToken, {
+                        createdAt: now,
+                        expiresAt: now + SESSION_TTL_MS
+                    });
+
+                    const isHttps = req.headers['x-forwarded-proto'] === 'https' || req.socket?.encrypted;
+                    const secureFlag = isHttps ? '; Secure' : '';
+
+                    // Set 30-day persistent cookie with secure random token
+                    res.writeHead(302, {
+                        'Set-Cookie': `antigravity_session=${sessionToken}; Path=/; Max-Age=2592000; HttpOnly; SameSite=Lax${secureFlag}`,
+                        'Location': '/'
+                    });
+                    res.end();
+                } else {
+                    recordFailedAttempt(clientIp);
+                    res.writeHead(401, { 'Content-Type': 'text/html; charset=utf-8' });
+                    res.end(renderLoginPage('Incorrect password. Please try again.'));
+                }
+            });
+            return;
+        }
+
+        // Check authentication
+        if (!isAuthenticated(req)) {
+            res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+            res.end(renderLoginPage());
+            return;
+        }
 
     // If target port is not ready yet
     if (!TARGET_PORT) {
