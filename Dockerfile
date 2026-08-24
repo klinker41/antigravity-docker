@@ -37,6 +37,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     tar \
     xz-utils \
     gosu \
+    socat \
     && rm -rf /var/lib/apt/lists/*
 
 # 2. Install Docker CLI and Docker Compose plugin (Official Docker repository)
@@ -119,7 +120,7 @@ RUN chmod +x /usr/local/bin/entrypoint.sh
 
 WORKDIR /workspace
 
-EXPOSE 7681
+EXPOSE 4400 7681
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["daemon"]

@@ -39,9 +39,12 @@ export PATH="/home/${DEVELOPER_USER}/.local/bin:/home/${DEVELOPER_USER}/.cargo/b
 # Configure git safe directory for mounted workspaces
 gosu "$DEVELOPER_USER" git config --global --add safe.directory '*' 2>/dev/null || true
 
-# Instance name
+# Instance name and port
 INSTANCE_NAME="${RC_NAME:-headless-server}"
-
+PORT_ARG=()
+if [ -n "${AGY_PORT}" ]; then
+    PORT_ARG=("--port" "${AGY_PORT}")
+fi
 
 # Optional Web Terminal (ttyd) launcher
 start_web_terminal() {
@@ -63,7 +66,7 @@ case "$1" in
         echo "Follow the prompt below to sign in to your Google Account."
         echo "Once authenticated, your token will be saved to persistent storage."
         echo "==================================================================="
-        exec gosu "$DEVELOPER_USER" agy --remote-control --remote-control-name "$INSTANCE_NAME"
+        exec gosu "$DEVELOPER_USER" agy --remote-control --remote-control-name "$INSTANCE_NAME" "${PORT_ARG[@]}"
         ;;
 
     web-terminal)
@@ -92,12 +95,14 @@ case "$1" in
         else
             echo "==================================================================="
             echo " 🟢 Starting Antigravity Remote Control Daemon: '$INSTANCE_NAME'"
+            echo " Listening on Port: ${AGY_PORT:-4400}"
             echo " Connect anytime from: https://antigravity.google"
+            echo " Or access directly via reverse proxy / local network on port ${AGY_PORT:-4400}"
             echo "==================================================================="
         fi
 
         cd "$WORKSPACE_DIR"
-        exec gosu "$DEVELOPER_USER" agy --remote-control --remote-control-name "$INSTANCE_NAME"
+        exec gosu "$DEVELOPER_USER" agy --remote-control --remote-control-name "$INSTANCE_NAME" "${PORT_ARG[@]}"
         ;;
 
     *)

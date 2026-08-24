@@ -18,6 +18,7 @@ services:
     working_dir: /workspace
     environment:
       - RC_NAME=${RC_NAME:-server-agent}
+      - AGY_PORT=${AGY_PORT:-4400}
       - ENABLE_WEB_TERMINAL=${ENABLE_WEB_TERMINAL:-false}
       - WEB_TERMINAL_PORT=7681
       - WEB_TERMINAL_USER=${WEB_TERMINAL_USER:-}
@@ -41,5 +42,7 @@ services:
       # - ~/.gitconfig:/home/developer/.gitconfig:ro
       # - ~/.ssh:/home/developer/.ssh:ro
     ports:
+      # Fixed Antigravity Server port for direct reverse proxy / browser access
+      - "${AGY_PORT_BINDING:-4400}:${AGY_PORT:-4400}"
       # Optional: Web Terminal port (for browser-based terminal access / initial login)
       - "${WEB_PORT_BINDING:-127.0.0.1:7681}:7681"

@@ -2,7 +2,7 @@
 
 A Docker container to run Google Antigravity in **headless Remote Control mode** on your remote server.
 
-Connect to your server's agent anytime from any device (phone, tablet, laptop) via [antigravity.google](https://antigravity.google). The agent has full local Python and Node.js toolchains, a dedicated workspace volume for your Git projects, and direct access to the host's Docker daemon via `/var/run/docker.sock`, allowing it to build, run, test, and manage containers directly on your server.
+Connect to your server's agent anytime from any device (phone, tablet, laptop) via [antigravity.google](https://antigravity.google) or directly via your reverse proxy / local network on a fixed port (default: `4400`).
 
 ---
 
@@ -21,7 +21,7 @@ Connect to your server's agent anytime from any device (phone, tablet, laptop) v
 │  ┌────────────────────────────────────────────────────────────────────┐  │
 │  │ Antigravity Headless Container (Ubuntu 26.04 / Debian Slim)        │  │
 │  │                                                                    │  │
-│  │ • agy --remote-control (Cloud Relay Connection)                    │  │
+│  │ • agy --remote-control --port 4400 (Fixed Port & Cloud Relay)      │  │
 │  │ • Working Directory: /workspace (Mounted Host Git Projects)        │  │
 │  │ • Python 3 (pip, venv, uv, poetry)                                 │  │
 │  │ • Node.js 26 (npm, pnpm, yarn, bun)                                │  │
@@ -44,16 +44,14 @@ Connect to your server's agent anytime from any device (phone, tablet, laptop) v
 
 ## ⚡ Features & Modern Stack
 
+- **Fixed Port Support (`AGY_PORT=4400`)**: Binds `agy` to a fixed port rather than random ports, making reverse proxies and local network access predictable.
 - **Base Image**: **Ubuntu 26.04 LTS** (default) or **Debian Slim** (`debian:bookworm-slim`), providing full glibc compatibility for pre-compiled Python wheels and Node native addons.
-- **Google Antigravity Remote Control (`agy --remote-control`)**: Outbound cloud relay connectivity—no inbound open ports required on your server.
+- **Google Antigravity Remote Control (`agy --remote-control`)**: Outbound cloud relay connectivity and direct local web interface.
 - **Node.js 26**: Latest Node.js release line with `npm`, `pnpm`, `yarn`, and `bun`.
 - **Python Modern Stack**: Python 3 with `pip`, `venv`, ultra-fast `uv`, `poetry`, and `build-essential`.
 - **Git Projects Workspace**: Dedicated workspace mounted at `/workspace` for cloning, building, and managing Git codebases.
 - **Host Docker Management**: Mounts `/var/run/docker.sock` with dynamic GID alignment so the agent can build and deploy containers directly on the host server.
 - **Persistent State**: OAuth tokens, configs, agent logs, and workspace files persist across container restarts in `./data/`.
-- **Two Authentication Options**:
-  1. Interactive CLI Setup (one-line command).
-  2. Optional Browser-based Web Terminal (`ttyd`) for SSH-free login and management.
 
 ---
 
@@ -68,6 +66,8 @@ Edit `.env` to configure your instance name and workspace directory:
 ```ini
 BASE_IMAGE=ubuntu:26.04
 RC_NAME=my-server-agent
+AGY_PORT=4400
+AGY_PORT_BINDING=4400
 
 # Set this to where your Git repositories are stored on your server
 WORKSPACE_DIR=/home/ubuntu/projects
@@ -95,8 +95,10 @@ Check the logs to verify it is connected:
 docker compose logs -f antigravity-agent
 ```
 
-### Step 4: Connect from Any Device
-Visit **[https://antigravity.google](https://antigravity.google)** in any web browser and log in with your Google account. You will see your server instance (`my-server-agent`) listed and ready to execute tasks!
+### Step 4: Accessing the Instance
+You can connect in two ways:
+1. **Via Cloud Dashboard**: Visit **[https://antigravity.google](https://antigravity.google)** and select your instance (`my-server-agent`) from the machine dropdown.
+2. **Via Reverse Proxy / Local Network**: Point your reverse proxy to `127.0.0.1:4400` or open `http://<your-server-ip>:4400` directly.
 
 ---
 
@@ -136,21 +138,6 @@ If you want to access the container's shell directly from a web browser without 
    docker compose up -d
    ```
 3. Access the terminal at `http://<your-server-ip>:7681`.
-
----
-
-## 🧪 Verifying the Environment
-
-Run the included health check script on your server:
-```bash
-./scripts/test-host-docker.sh
-```
-This tests:
-- Base OS version
-- Python 3, `pip`, `uv`, and `poetry`
-- Node.js 26, `npm`, `pnpm`, `yarn`, and `bun`
-- Antigravity CLI (`agy`)
-- Host Docker connectivity & ability to spawn sub-containers on the host
 
 ---
 
