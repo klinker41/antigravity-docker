@@ -101,21 +101,30 @@ case "$1" in
         # Background watchdog to detect dynamic port from agy and bind socat to fixed TARGET_PORT
         (
             socat_bound=false
-            for i in $(seq 1 30); do
-                sleep 1
-                dyn_port=$(ss -tulpn 2>/dev/null | grep -E "agy|antigravity" | awk '{print $5}' | sed -E 's/.*:([0-9]+)/\1/' | head -n 1)
+            while [ "$socat_bound" = "false" ]; do
+                sleep 0.5
+                
+                # Check for listening TCP ports on 127.0.0.1 or 0.0.0.0 excluding TARGET_PORT and 7681
+                dyn_port=$(ss -tlnH 2>/dev/null | awk '{print $4}' | sed -E 's/.*:([0-9]+)/\1/' | grep -v -E "^(${TARGET_PORT}|7681|0)$" | head -n 1)
+                
                 if [ -z "$dyn_port" ]; then
-                    dyn_port=$(netstat -tulpn 2>/dev/null | grep -E "agy|antigravity" | awk '{print $4}' | sed -E 's/.*:([0-9]+)/\1/' | head -n 1)
+                    dyn_port=$(netstat -tln 2>/dev/null | awk '{print $4}' | sed -E 's/.*:([0-9]+)/\1/' | grep -v -E "^(${TARGET_PORT}|7681|0)$" | head -n 1)
                 fi
+
                 if [ -n "$dyn_port" ] && [ "$dyn_port" != "$TARGET_PORT" ]; then
                     echo "==================================================================="
-                    echo " 🔗 Port Forwarder: Mapping fixed port $TARGET_PORT -> dynamic port $dyn_port"
-                    echo " ➜ Access directly or via reverse proxy at: http://<your-server-ip>:${TARGET_PORT}"
+                    echo " 🔗 Port Forwarder Active: Exposing dynamic port $dyn_port on port $TARGET_PORT"
+                    echo " ➜ Reverse proxy & direct URL: http://<your-server-ip>:${TARGET_PORT}"
                     echo "==================================================================="
                     pkill -f "socat TCP-LISTEN:${TARGET_PORT}" 2>/dev/null || true
-                    socat TCP-LISTEN:"${TARGET_PORT}",fork,reuseaddr TCP:127.0.0.1:"${dyn_port}" &
-                    socat_bound=true
-                    break
+                    if command -v socat >/dev/null 2>&1; then
+                        socat TCP-LISTEN:"${TARGET_PORT}",fork,reuseaddr TCP:127.0.0.1:"${dyn_port}" &
+                        socat_bound=true
+                        break
+                    else
+                        echo "[ERROR] 'socat' is not installed in the container! Please run: docker compose build --no-cache" >&2
+                        break
+                    fi
                 fi
             done
         ) &
