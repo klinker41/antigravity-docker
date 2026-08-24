@@ -1136,11 +1136,18 @@ const HOP_BY_HOP_HEADERS = new Set([
     'keep-alive',
     'proxy-authenticate',
     'proxy-authorization',
-    'te',
-    'trailer',
     'transfer-encoding',
     'upgrade',
 ]);
+
+// Dedicated persistent HTTP Agent for upstream proxy requests
+const proxyAgent = new http.Agent({
+    keepAlive: true,
+    keepAliveMsecs: 30000,
+    maxSockets: 256,
+    maxFreeSockets: 64,
+    timeout: 0
+});
 
 // Create HTTP Proxy Server
 const server = http.createServer(async (req, res) => {
@@ -1225,7 +1232,8 @@ const server = http.createServer(async (req, res) => {
     // Proxy HTTP Request with Host/Origin/Referer rewrite to localhost
     const proxyHeaders = {};
     for (const [key, value] of Object.entries(req.headers)) {
-        if (!HOP_BY_HOP_HEADERS.has(key.toLowerCase())) {
+        const lowerKey = key.toLowerCase();
+        if (!HOP_BY_HOP_HEADERS.has(lowerKey)) {
             proxyHeaders[key] = value;
         }
     }
@@ -1241,12 +1249,14 @@ const server = http.createServer(async (req, res) => {
         path: req.url,
         method: req.method,
         headers: proxyHeaders,
+        agent: proxyAgent,
     }, (proxyRes) => {
         if (proxyRes.socket) proxyRes.socket.setNoDelay(true);
 
         const resHeaders = {};
         for (const [key, value] of Object.entries(proxyRes.headers)) {
-            if (!HOP_BY_HOP_HEADERS.has(key.toLowerCase())) {
+            const lowerKey = key.toLowerCase();
+            if (!HOP_BY_HOP_HEADERS.has(lowerKey)) {
                 resHeaders[key] = value;
             }
         }
@@ -1257,6 +1267,7 @@ const server = http.createServer(async (req, res) => {
         }
 
         res.writeHead(proxyRes.statusCode, resHeaders);
+        res.flushHeaders();
 
         // Stream upstream response with flow control and backpressure
         proxyRes.on('data', (chunk) => {
@@ -1283,9 +1294,13 @@ const server = http.createServer(async (req, res) => {
         });
     });
 
-    // Cleanup handlers: destroy upstream proxy request if client disconnects or errors
+    proxyReq.on('socket', (sock) => {
+        sock.setNoDelay(true);
+    });
+
+    // Cleanup handlers: destroy upstream proxy request only if client aborted prematurely
     const clientAbortHandler = () => {
-        if (!proxyReq.destroyed) {
+        if (!res.writableFinished && !res.writableEnded && !proxyReq.destroyed) {
             proxyReq.destroy();
         }
     };
@@ -1345,6 +1360,7 @@ server.on('upgrade', (req, clientSocket, head) => {
         path: req.url,
         method: req.method,
         headers: proxyHeaders,
+        agent: false,
     });
 
     upstreamReq.on('upgrade', (upstreamRes, upstreamSocket, upstreamHead) => {
@@ -1378,6 +1394,20 @@ server.on('upgrade', (req, clientSocket, head) => {
         clientSocket.on('close', cleanup);
         upstreamSocket.on('end', () => clientSocket.end());
         clientSocket.on('end', () => upstreamSocket.end());
+    });
+
+    upstreamReq.on('response', (upstreamRes) => {
+        let rawResponse = `HTTP/1.1 ${upstreamRes.statusCode} ${upstreamRes.statusMessage || ''}\r\n`;
+        for (const [key, value] of Object.entries(upstreamRes.headers)) {
+            if (Array.isArray(value)) {
+                for (const v of value) rawResponse += `${key}: ${v}\r\n`;
+            } else {
+                rawResponse += `${key}: ${value}\r\n`;
+            }
+        }
+        rawResponse += '\r\n';
+        clientSocket.write(rawResponse);
+        upstreamRes.pipe(clientSocket);
     });
 
     upstreamReq.on('error', (err) => {

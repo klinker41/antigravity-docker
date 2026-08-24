@@ -41,7 +41,7 @@ if [ ! -f "$GEMINI_DIR/config/config.json" ]; then
     cat <<EOF > "$GEMINI_DIR/config/config.json"
 {
   "userSettings": {
-    "artifactReviewMode": "ARTIFACT_REVIEW_MODE_ALWAYS",
+    "artifactReviewMode": "ARTIFACT_REVIEW_MODE_TURBO",
     "autoExecutionPolicy": "CASCADE_COMMANDS_AUTO_EXECUTION_EAGER",
     "enableTerminalSandbox": false,
     "nonWorkspaceFileAccessPolicy": "AGENT_SETTING_POLICY_ALLOW",
@@ -100,7 +100,7 @@ function registerProject(folderPath, folderName) {
     console.log(`[Project Registry] Registered project: "${folderName}" (${id})`);
 }
 
-// Create outside-of-project.json and .json default configurations
+// Create outside-of-project.json default configuration
 const outsideOfProject = {
     id: "outside-of-project",
     name: "Outside of Project",
@@ -110,7 +110,6 @@ const outsideOfProject = {
     isWorkspaceOnly: false
 };
 fs.writeFileSync(path.join(projectsDir, "outside-of-project.json"), JSON.stringify(outsideOfProject, null, 2), "utf8");
-fs.writeFileSync(path.join(projectsDir, ".json"), JSON.stringify(outsideOfProject, null, 2), "utf8");
 
 if (fs.existsSync(workspaceDir)) {
     const entries = fs.readdirSync(workspaceDir, { withFileTypes: true });
