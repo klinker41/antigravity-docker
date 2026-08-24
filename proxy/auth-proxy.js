@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 
 const http = require('node:http');
-const net = require('node:net');
 const crypto = require('node:crypto');
 const url = require('node:url');
 const fs = require('node:fs');
@@ -231,7 +230,7 @@ const server = http.createServer((req, res) => {
     });
 
     proxyReq.on('error', (err) => {
-        console.error('[Proxy Error]', err.message);
+        console.error('[HTTP Proxy Error]', err.message);
         if (!res.headersSent) {
             res.writeHead(502, { 'Content-Type': 'text/plain' });
             res.end('Antigravity upstream server unavailable.');
@@ -241,7 +240,7 @@ const server = http.createServer((req, res) => {
     req.pipe(proxyReq, { end: true });
 });
 
-// Handle WebSocket / Upgrade requests
+// Handle WebSocket / Upgrade requests using standard HTTP upgrade negotiation
 server.on('upgrade', (req, clientSocket, head) => {
     if (!isAuthenticated(req)) {
         clientSocket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
@@ -255,37 +254,49 @@ server.on('upgrade', (req, clientSocket, head) => {
         return;
     }
 
-    const upstreamSocket = net.connect(TARGET_PORT, '127.0.0.1', () => {
-        // Rewrite Host header in HTTP upgrade request
-        let rawHeader = `${req.method} ${req.url} HTTP/1.1\r\n`;
-        for (const [key, value] of Object.entries(req.headers)) {
-            if (key.toLowerCase() === 'host') {
-                rawHeader += `Host: localhost:${TARGET_PORT}\r\n`;
-            } else if (key.toLowerCase() === 'origin') {
-                rawHeader += `Origin: http://localhost:${TARGET_PORT}\r\n`;
-            } else if (Array.isArray(value)) {
-                for (const v of value) rawHeader += `${key}: ${v}\r\n`;
+    const proxyHeaders = { ...req.headers };
+    proxyHeaders['host'] = `localhost:${TARGET_PORT}`;
+    proxyHeaders['origin'] = `http://localhost:${TARGET_PORT}`;
+    if (proxyHeaders['referer']) {
+        proxyHeaders['referer'] = proxyHeaders['referer'].replace(/^https?:\/\/[^\/]+/, `http://localhost:${TARGET_PORT}`);
+    }
+
+    const upstreamReq = http.request({
+        hostname: '127.0.0.1',
+        port: TARGET_PORT,
+        path: req.url,
+        method: req.method,
+        headers: proxyHeaders,
+    });
+
+    upstreamReq.on('upgrade', (upstreamRes, upstreamSocket, upstreamHead) => {
+        let rawResponse = `HTTP/1.1 101 Switching Protocols\r\n`;
+        for (const [key, value] of Object.entries(upstreamRes.headers)) {
+            if (Array.isArray(value)) {
+                for (const v of value) rawResponse += `${key}: ${v}\r\n`;
             } else {
-                rawHeader += `${key}: ${value}\r\n`;
+                rawResponse += `${key}: ${value}\r\n`;
             }
         }
-        rawHeader += '\r\n';
+        rawResponse += '\r\n';
 
-        upstreamSocket.write(rawHeader);
+        clientSocket.write(rawResponse);
+        if (upstreamHead && upstreamHead.length > 0) clientSocket.write(upstreamHead);
         if (head && head.length > 0) upstreamSocket.write(head);
 
         upstreamSocket.pipe(clientSocket);
         clientSocket.pipe(upstreamSocket);
+
+        upstreamSocket.on('error', () => clientSocket.destroy());
+        clientSocket.on('error', () => upstreamSocket.destroy());
     });
 
-    upstreamSocket.on('error', (err) => {
-        console.error('[WebSocket Proxy Error]', err.message);
+    upstreamReq.on('error', (err) => {
+        console.error('[WebSocket Upgrade Error]', err.message);
         clientSocket.destroy();
     });
 
-    clientSocket.on('error', () => {
-        upstreamSocket.destroy();
-    });
+    upstreamReq.end();
 });
 
 // Update dynamic target port
