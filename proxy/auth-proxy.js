@@ -117,6 +117,7 @@ function applySecurityHeaders(res, req) {
     res.setHeader('X-Frame-Options', 'SAMEORIGIN');
     res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
     res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+    res.setHeader('X-Accel-Buffering', 'no');
     const isHttps = req.headers['x-forwarded-proto'] === 'https' || req.socket?.encrypted;
     if (isHttps) {
         res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
@@ -1148,7 +1149,7 @@ function renderStatusPage(health) {
 
         <div class="action-row">
             ${isUp ? `
-            <a href="/" class="btn-primary">
+            <a href="/?useWebSocket=true" class="btn-primary">
                 <span>Open Workspace</span>
                 <svg class="btn-icon" viewBox="0 0 20 20" fill="currentColor">
                     <path fill-rule="evenodd" d="M10.293 3.293a1 1 0 011.414 0l6 6a1 1 0 010 1.414l-6 6a1 1 0 01-1.414-1.414L14.586 11H3a1 1 0 110-2h11.586l-4.293-4.293a1 1 0 010-1.414z" clip-rule="evenodd" />
@@ -1333,7 +1334,7 @@ const server = http.createServer(async (req, res) => {
                     // Set 30-day persistent cookie with secure random token
                     res.writeHead(302, {
                         'Set-Cookie': `antigravity_session=${sessionToken}; Path=/; Max-Age=2592000; HttpOnly; SameSite=Lax${secureFlag}`,
-                        'Location': '/'
+                        'Location': '/?useWebSocket=true'
                     });
                     res.end();
                 } else {
@@ -1350,6 +1351,18 @@ const server = http.createServer(async (req, res) => {
             res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
             res.end(renderLoginPage());
             return;
+        }
+
+        // Ensure useWebSocket=true query param is present for browser UI to use multiplexed WebSocket transport
+        if (req.method === 'GET' && (parsedUrl.pathname === '/' || parsedUrl.pathname === '/index.html')) {
+            if (parsedUrl.searchParams.get('useWebSocket') !== 'true') {
+                parsedUrl.searchParams.set('useWebSocket', 'true');
+                res.writeHead(302, {
+                    'Location': `${parsedUrl.pathname}${parsedUrl.search}`
+                });
+                res.end();
+                return;
+            }
         }
 
     // If target port is not ready yet
@@ -1399,6 +1412,9 @@ const server = http.createServer(async (req, res) => {
         if (resHeaders['access-control-allow-origin'] && req.headers.origin) {
             resHeaders['access-control-allow-origin'] = req.headers.origin;
         }
+
+        // Disable downstream and intermediate proxy buffering for streaming RPC responses
+        resHeaders['x-accel-buffering'] = 'no';
 
         res.writeHead(proxyRes.statusCode, resHeaders);
         res.flushHeaders();
