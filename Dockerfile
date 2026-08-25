@@ -95,7 +95,7 @@ RUN mkdir -p /home/${USERNAME}/.local/bin && \
     curl -fsSL https://antigravity.google/cli/install.sh | bash -s -- --dir /home/${USERNAME}/.local/bin
 
 # Add ~/.local/bin and package manager binaries to PATH
-ENV PATH="/home/${USERNAME}/.local/bin:/home/${USERNAME}/.cargo/bin:/home/${USERNAME}/.local/share/pnpm:${PATH}"
+ENV PATH="/home/${USERNAME}/.gemini/antigravity-cli/bin:/home/${USERNAME}/.local/bin:/home/${USERNAME}/.cargo/bin:/home/${USERNAME}/.local/share/pnpm:${PATH}"
 
 # Create required directories for persistent storage and workspace
 USER root
@@ -107,8 +107,9 @@ RUN mkdir -p /home/${USERNAME}/.gemini \
 
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY proxy/auth-proxy.js /usr/local/bin/auth-proxy.js
+COPY proxy/sidecar-manager.js /usr/local/bin/sidecar-manager.js
 COPY scripts/host-terminal.sh /usr/local/bin/host-terminal.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/auth-proxy.js /usr/local/bin/host-terminal.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/auth-proxy.js /usr/local/bin/sidecar-manager.js /usr/local/bin/host-terminal.sh
 
 WORKDIR /workspace
 

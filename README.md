@@ -1,6 +1,11 @@
-# Headless Antigravity Docker Agent with Remote Control, Web IDE & Host Terminal
+# Headless Antigravity Docker Agent with Remote Control, Sidecars & IDE
 
-Run Google Antigravity in **headless Remote Control mode** on your server. Connect to your agent from any browser via your reverse proxy or local network with built-in password protection, an integrated **VS Code Web IDE** for inspecting project files, and a **Host Web Terminal** for running commands on the host machine.
+Run Google Antigravity in **headless Remote Control mode** on your server.
+Connect to your agent from any browser via your reverse proxy or local network
+with built-in password protection, an integrated **Sidecar Manager** for
+scheduled agent prompts and autonomous workers, a **VS Code Web IDE** for
+inspecting project files, and a **Host Web Terminal** for running commands on
+the host machine.
 
 ---
 
@@ -65,7 +70,7 @@ services:
 | Volume | Container Path | Description |
 | :--- | :--- | :--- |
 | `<location-of-projects>` | `/workspace` | Host directory where your Git repositories and codebases live. |
-| `<location-of-config>` | `/home/developer/.gemini` | Host directory where Antigravity OAuth tokens and preferences persist. |
+| `<location-of-config>` | `/home/developer/.gemini` | Host directory where Antigravity OAuth tokens, project configs, and sidecar definitions persist. |
 | `<home-folder>/.gitconfig` | `/home/developer/.gitconfig:ro` | *(Optional)* Mounts host Git configuration for authenticated commits. |
 | `<home-folder>/.ssh` | `/home/developer/.ssh:ro` | *(Required for Host Terminal & Git)* Mounts host SSH keys for private Git operations and host shell terminal access. |
 
@@ -90,7 +95,8 @@ docker run -it --rm \
 
 1. Open the Google sign-in URL shown in the terminal.
 2. Sign in to your Google Account to authorize Antigravity.
-3. Your OAuth token is automatically saved into your persistent config directory on the host.
+3. Your OAuth token is automatically saved into your persistent config
+   directory on the host.
 
 ### Step 2: Start the Agent
 ```bash
@@ -101,30 +107,76 @@ docker compose up -d
 
 ## 🌐 Accessing the Agent & Workspace Services
 
-Navigate to `http://<your-server-ip>:4400` in your browser (or through your reverse proxy). If configured, enter your `AUTH_PASSWORD` on the login screen to unlock your session for 30 days.
+Navigate to `http://<your-server-ip>:4400` in your browser (or through your
+reverse proxy). If configured, enter your `AUTH_PASSWORD` on the login screen to
+unlock your session for 30 days.
 
 Once logged in, all services are accessible:
 
 | Service | Path | Description | Authentication |
 | :--- | :--- | :--- | :--- |
-| **Google Antigravity UI** | `/` | Main chat and conversation interface. Injected with **Web IDE** and **Host Terminal** buttons in the left navigation sidebar. | Protected 🔒 |
+| **Google Antigravity UI** | `/` | Main chat and conversation interface. Injected with **Sidecar Manager**, **Web IDE**, and **Host Terminal** buttons in the left navigation sidebar. | Protected 🔒 |
+| **Sidecar Manager** | `/sidecars` | Web UI for defining, scheduling, and monitoring background sidecars and recurring agent prompts. | Protected 🔒 |
 | **VS Code Web IDE** | `/ide/` | Full-featured VS Code in the browser for viewing and editing raw project files in `/workspace`. | Protected 🔒 |
 | **Host Web Terminal** | `/terminal/` | Web terminal running interactive SSH sessions directly on the host machine (manage Docker, run system commands, git, etc.). | Protected 🔒 |
 | **Health & Service Status** | `/status` | Real-time health check endpoint for monitoring uptime, latency, and registered service ports. | **Public / Unauthenticated** 🟢 |
 
 ---
 
+## 🤖 Sidecar Manager
+
+The built-in **Sidecar Manager** allows you to schedule recurring agent prompts
+(e.g., hourly PR triage, daily summaries) and run background workers directly
+alongside your Antigravity container.
+
+Access it by clicking **Sidecar Manager** in the left navigation pane of the
+Antigravity UI or navigating directly to `/sidecars`.
+
+### Features:
+- **Scheduled Agent Prompts**: Define prompts that run automatically on a
+  standard 5-field cron schedule (e.g. `0 * * * *`, `0 9 * * 1-5`) using
+  `agentapi new-conversation` targeted to specific projects.
+- **Continuous Workers**: Run long-running daemons or background scripts with
+  automatic process supervision and configurable restart policies (`always`,
+  `on-failure`, `never`).
+- **Interactive Management**: Toggle sidecars on or off in real-time, trigger
+  manual runs immediately with one click, view live stdout/stderr logs, and edit
+  configurations.
+- **Spec-Compliant Persistence**: Sidecar configurations are saved to
+  `~/.gemini/config/sidecars/<id>/sidecar.json` and enabled states are stored in
+  `~/.gemini/config/config.json`.
+- **Comprehensive Logging**: Sidecar output is written to
+  `~/.gemini/antigravity/sidecar_data/<id>/logs/` and runtime events appear
+  directly in `docker compose logs` for debugging.
+
+---
+
 ## 🛡️ Privacy & Telemetry Management
 
-By default, `BLOCK_TELEMETRY=true` is enabled to prevent usage telemetry, analytics, and diagnostic tracking from being sent back to Google while keeping core agent capabilities, Gemini model APIs, and authentication fully operational.
+By default, `BLOCK_TELEMETRY=true` is enabled to prevent usage telemetry,
+analytics, and diagnostic tracking from being sent back to Google while keeping
+core agent capabilities, Gemini model APIs, and authentication fully operational.
 
 ### How it Works:
-- **In-Container DNS Sinkholing**: Telemetry hostnames are sinkholed to `0.0.0.0` directly inside the container (`/etc/hosts`), resulting in immediate socket rejection (`ECONNREFUSED`) with zero DNS lookup or request timeout latency.
-- **Environment Opt-Outs**: Automatically exports `DO_NOT_TRACK=1`, `OTEL_SDK_DISABLED=true`, `OTEL_TRACES_EXPORTER=none`, `OTEL_METRICS_EXPORTER=none`, and `OTEL_LOGS_EXPORTER=none`.
-- **Allowed Traffic**: Essential authentication endpoints (`accounts.google.com`, `oauth2.googleapis.com`) and Gemini AI inference APIs (`cloudaicompanion.googleapis.com`, `cloudcode-pa.googleapis.com`, `generativelanguage.googleapis.com`) continue to pass through unobstructed.
-- **Blocked Endpoints**: Sinkholes `firebaselogging-pa.googleapis.com`, `feedback-pa.googleapis.com`, `cloudtrace.googleapis.com`, `clouderrorreporting.googleapis.com`, `logging.googleapis.com`, `monitoring.googleapis.com`, `telemetry.google.com`, `client-telemetry.google.com`, `google-analytics.com`, and `v1.telemetry.coder.com`.
+- **In-Container DNS Sinkholing**: Telemetry hostnames are sinkholed to `0.0.0.0`
+  directly inside the container (`/etc/hosts`), resulting in immediate socket
+  rejection (`ECONNREFUSED`) with zero DNS lookup or request timeout latency.
+- **Environment Opt-Outs**: Automatically exports `DO_NOT_TRACK=1`,
+  `OTEL_SDK_DISABLED=true`, `OTEL_TRACES_EXPORTER=none`,
+  `OTEL_METRICS_EXPORTER=none`, and `OTEL_LOGS_EXPORTER=none`.
+- **Allowed Traffic**: Essential authentication endpoints
+  (`accounts.google.com`, `oauth2.googleapis.com`) and Gemini AI inference APIs
+  (`cloudaicompanion.googleapis.com`, `cloudcode-pa.googleapis.com`,
+  `generativelanguage.googleapis.com`) continue to pass through unobstructed.
+- **Blocked Endpoints**: Sinkholes `firebaselogging-pa.googleapis.com`,
+  `feedback-pa.googleapis.com`, `cloudtrace.googleapis.com`,
+  `clouderrorreporting.googleapis.com`, `logging.googleapis.com`,
+  `monitoring.googleapis.com`, `telemetry.google.com`,
+  `client-telemetry.google.com`, `google-analytics.com`, and
+  `v1.telemetry.coder.com`.
 
-To disable blocking and allow all telemetry, set `BLOCK_TELEMETRY=false` in your `docker-compose.yml` or container environment.
+To disable blocking and allow all telemetry, set `BLOCK_TELEMETRY=false` in your
+`docker-compose.yml` or container environment.
 
 ---
 
@@ -138,7 +190,9 @@ docker push jklinker/antigravity-docker:latest
 ```
 
 > [!TIP]
-> **Multi-Platform Build**: To build and push for multiple architectures (such as `linux/amd64` and `linux/arm64` for Apple Silicon or ARM servers) using Docker Buildx:
+> **Multi-Platform Build**: To build and push for multiple architectures (such
+> as `linux/amd64` and `linux/arm64` for Apple Silicon or ARM servers) using
+> Docker Buildx:
 > ```bash
 > docker buildx build --platform linux/amd64,linux/arm64 -t jklinker/antigravity-docker:latest --push .
 > ```

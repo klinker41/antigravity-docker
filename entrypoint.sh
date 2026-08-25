@@ -31,6 +31,8 @@ fi
 
 # 2. Initialize persistent directories and default configs on mounted volumes
 mkdir -p "$GEMINI_DIR/config/projects" \
+         "$GEMINI_DIR/config/sidecars" \
+         "$GEMINI_DIR/antigravity/sidecar_data" \
          "$GEMINI_DIR/antigravity-cli/conversations" \
          "$GEMINI_DIR/antigravity-cli/brain" \
          "$GEMINI_DIR/antigravity-cli/annotations" \
@@ -231,7 +233,7 @@ fi
 
 # 4. Export environment for developer
 export HOME="/home/${DEVELOPER_USER}"
-export PATH="/home/${DEVELOPER_USER}/.local/bin:/home/${DEVELOPER_USER}/.cargo/bin:/home/${DEVELOPER_USER}/.local/share/pnpm:${PATH}"
+export PATH="/home/${DEVELOPER_USER}/.gemini/antigravity-cli/bin:/home/${DEVELOPER_USER}/.local/bin:/home/${DEVELOPER_USER}/.cargo/bin:/home/${DEVELOPER_USER}/.local/share/pnpm:${PATH}"
 
 # Configure git safe directory for mounted workspaces and persistent config
 gosu "$DEVELOPER_USER" git config --global --add safe.directory "$WORKSPACE_DIR" 2>/dev/null || true

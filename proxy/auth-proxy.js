@@ -4,6 +4,18 @@ const http = require('node:http');
 const crypto = require('node:crypto');
 const url = require('node:url');
 const fs = require('node:fs');
+const path = require('node:path');
+
+let sidecarManager;
+try {
+    sidecarManager = require('./sidecar-manager.js');
+} catch (e) {
+    try {
+        sidecarManager = require('/usr/local/bin/sidecar-manager.js');
+    } catch (err) {
+        console.error('[Proxy Gateway] Warning: sidecar-manager module could not be loaded:', err.message);
+    }
+}
 
 function isFeatureEnabled(val, defaultVal = true) {
     if (val === undefined || val === null || val === '') return defaultVal;
@@ -135,6 +147,32 @@ function applySecurityHeaders(res, req) {
     }
 }
 
+// Read and parse JSON body helper
+function readJsonBody(req, maxBytes = 64 * 1024) {
+    return new Promise((resolve, reject) => {
+        let body = '';
+        let exceeded = false;
+        req.on('data', chunk => {
+            if (exceeded) return;
+            body += chunk.toString();
+            if (Buffer.byteLength(body, 'utf8') > maxBytes) {
+                exceeded = true;
+                reject(new Error('Payload Too Large'));
+            }
+        });
+        req.on('end', () => {
+            if (exceeded) return;
+            try {
+                const parsed = body ? JSON.parse(body) : {};
+                resolve(parsed);
+            } catch (err) {
+                reject(new Error('Invalid JSON'));
+            }
+        });
+        req.on('error', reject);
+    });
+}
+
 // Shared Google Antigravity Vector Logo SVG
 const ANTIGRAVITY_LOGO_SVG = `<svg class="logo-svg" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
     <path d="M18 3L23.5 12.5H12.5L18 3Z" fill="url(#brand-grad)" />
@@ -152,7 +190,7 @@ const ANTIGRAVITY_LOGO_SVG = `<svg class="logo-svg" viewBox="0 0 36 36" fill="no
     </defs>
 </svg>`;
 
-// Shared Base CSS for all Antigravity Gateway pages
+// Shared Base CSS for all Antigravity Gateway pages (Login, Status, Sidecars, Modals, Logs)
 const BASE_PAGE_CSS = `
 :root {
     --bg-primary: #08090d;
@@ -163,6 +201,7 @@ const BASE_PAGE_CSS = `
     --accent-blue-hover: #1557b0;
     --accent-blue-glow: #4285f4;
     --accent-cyan: #38bdf8;
+    --accent-purple: #a78bfa;
     --text-primary: #f0f4fc;
     --text-secondary: #94a3b8;
     --text-muted: #64748b;
@@ -193,15 +232,15 @@ body {
     display: flex;
     align-items: center;
     justify-content: center;
-    overflow: hidden;
+    overflow-x: hidden;
     position: relative;
-    padding: 20px;
+    padding: 24px 20px;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
 }
 
 .ambient-glow {
-    position: absolute;
+    position: fixed;
     border-radius: 50%;
     filter: blur(120px);
     pointer-events: none;
@@ -243,7 +282,7 @@ body {
 }
 
 #antigravity-canvas {
-    position: absolute;
+    position: fixed;
     top: 0;
     left: 0;
     width: 100%;
@@ -257,6 +296,7 @@ body {
     z-index: 10;
     width: 100%;
     max-width: 420px;
+    margin: auto;
 }
 
 .page-card {
@@ -463,21 +503,52 @@ label {
 }
 
 input[type="password"],
-input[type="text"] {
+input[type="text"],
+input[type="number"],
+select,
+textarea {
     width: 100%;
-    padding: 12px 42px 12px 40px;
+    padding: 12px 14px;
     background: var(--input-bg);
     border: 1px solid var(--input-border);
     border-radius: 10px;
     color: #ffffff;
-    font-size: 14px;
+    font-size: 13.5px;
     outline: none;
     transition: border-color 0.2s, box-shadow 0.2s, background 0.2s;
     font-family: inherit;
 }
 
-input:focus {
-    background: rgba(12, 16, 25, 0.9);
+input[type="password"],
+input.with-left-icon {
+    padding-left: 40px;
+}
+
+textarea {
+    resize: vertical;
+    min-height: 80px;
+    line-height: 1.45;
+}
+
+select {
+    appearance: none;
+    background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%2394a3b8'%3e%3cpath d='M7 10l5 5 5-5z'/%3e%3c/svg%3e");
+    background-repeat: no-repeat;
+    background-position: right 12px center;
+    background-size: 18px;
+    padding-right: 36px;
+    cursor: pointer;
+}
+
+select option {
+    background-color: #0b0e14;
+    color: #ffffff;
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+    background: rgba(12, 16, 25, 0.95);
     border-color: var(--accent-blue-glow);
     box-shadow:
         0 0 0 3px rgba(66, 133, 244, 0.25),
@@ -506,18 +577,17 @@ input:focus {
 
 button[type="submit"],
 .btn-primary {
-    width: 100%;
     display: inline-flex;
     align-items: center;
     justify-content: center;
     gap: 8px;
-    padding: 13px 20px;
+    padding: 11px 18px;
     background: linear-gradient(135deg, #1a73e8 0%, #3b82f6 100%);
     color: #ffffff;
     text-decoration: none;
     border: 1px solid rgba(255, 255, 255, 0.15);
     border-radius: 10px;
-    font-size: 14.5px;
+    font-size: 13.5px;
     font-weight: 600;
     cursor: pointer;
     box-shadow: 0 4px 18px rgba(26, 115, 232, 0.35);
@@ -536,14 +606,15 @@ button[type="submit"]:hover,
     align-items: center;
     justify-content: center;
     gap: 6px;
-    padding: 12px 16px;
+    padding: 10px 14px;
     background: rgba(255, 255, 255, 0.05);
     color: var(--text-secondary);
     text-decoration: none;
     border: 1px solid rgba(255, 255, 255, 0.1);
     border-radius: 10px;
-    font-size: 14px;
+    font-size: 13px;
     font-weight: 500;
+    cursor: pointer;
     transition: all 0.2s ease;
 }
 
@@ -551,6 +622,29 @@ button[type="submit"]:hover,
     background: rgba(255, 255, 255, 0.1);
     color: var(--text-primary);
     border-color: rgba(255, 255, 255, 0.2);
+}
+
+.btn-danger {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 8px 12px;
+    background: rgba(239, 68, 68, 0.12);
+    color: #fca5a5;
+    text-decoration: none;
+    border: 1px solid rgba(239, 68, 68, 0.3);
+    border-radius: 8px;
+    font-size: 12.5px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.btn-danger:hover {
+    background: rgba(239, 68, 68, 0.25);
+    border-color: rgba(239, 68, 68, 0.5);
+    color: #ffffff;
 }
 
 .btn-icon {
@@ -664,8 +758,280 @@ button[type="submit"]:hover,
     color: var(--text-muted);
 }
 
-@media (max-width: 480px) {
-    .page-card { padding: 28px 20px; border-radius: 16px; }
+/* Reusable Toolbar */
+.top-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 24px;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+.toolbar-group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+/* Reusable Content List and Cards */
+.content-list {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    text-align: left;
+    margin-bottom: 24px;
+}
+.content-card {
+    background: rgba(9, 12, 18, 0.65);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 14px;
+    padding: 20px;
+    transition: all 0.25s ease;
+    position: relative;
+}
+.content-card:hover {
+    border-color: rgba(66, 133, 244, 0.3);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+}
+.card-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 12px;
+}
+.card-title-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+.card-title {
+    font-size: 16px;
+    font-weight: 600;
+    color: #ffffff;
+}
+.card-id-code {
+    font-family: "Google Sans Code", monospace;
+    font-size: 11.5px;
+    color: var(--text-muted);
+    background: rgba(255, 255, 255, 0.05);
+    padding: 2px 6px;
+    border-radius: 4px;
+}
+.card-desc {
+    font-size: 13.5px;
+    color: var(--text-secondary);
+    margin-bottom: 14px;
+    line-height: 1.45;
+}
+.card-chips {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
+}
+.card-actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+    padding-top: 14px;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+.actions-left, .actions-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+/* Reusable Chips & Badges */
+.chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 9px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 6px;
+    font-size: 12px;
+    color: #cbd5e1;
+}
+.chip code {
+    font-family: "Google Sans Code", monospace;
+    font-size: 11px;
+    color: #38bdf8;
+}
+.chip-cyan { border-color: rgba(56, 189, 248, 0.3); background: rgba(56, 189, 248, 0.08); color: #38bdf8; }
+.chip-purple { border-color: rgba(167, 139, 250, 0.3); background: rgba(167, 139, 250, 0.08); color: #c4b5fd; }
+.chip-green { border-color: rgba(34, 197, 94, 0.3); background: rgba(34, 197, 94, 0.08); color: #86efac; }
+.chip-muted { color: var(--text-muted); }
+
+/* Reusable Toggle Switch */
+.switch {
+    position: relative;
+    display: inline-block;
+    width: 44px;
+    height: 24px;
+}
+.switch input { opacity: 0; width: 0; height: 0; }
+.slider {
+    position: absolute;
+    cursor: pointer;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background-color: rgba(255, 255, 255, 0.15);
+    transition: .25s;
+    border-radius: 24px;
+}
+.slider:before {
+    position: absolute;
+    content: "";
+    height: 18px;
+    width: 18px;
+    left: 3px;
+    bottom: 3px;
+    background-color: white;
+    transition: .25s;
+    border-radius: 50%;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+}
+input:checked + .slider {
+    background-color: #22c55e;
+    box-shadow: 0 0 10px rgba(34, 197, 94, 0.4);
+}
+input:checked + .slider:before {
+    transform: translateX(20px);
+}
+
+/* Reusable Modals */
+.modal-overlay {
+    display: none;
+    position: fixed;
+    top: 0; left: 0; width: 100%; height: 100%;
+    background: rgba(0, 0, 0, 0.75);
+    backdrop-filter: blur(8px);
+    z-index: 1000;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+}
+.modal-overlay.active { display: flex; }
+.modal-box {
+    background: #0d111a;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 18px;
+    width: 100%;
+    max-width: 600px;
+    max-height: 90vh;
+    overflow-y: auto;
+    padding: 28px;
+    box-shadow: 0 25px 60px rgba(0, 0, 0, 0.8), 0 0 40px rgba(26, 115, 232, 0.15);
+    text-align: left;
+    animation: modalPop 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes modalPop {
+    0% { transform: scale(0.95); opacity: 0; }
+    100% { transform: scale(1); opacity: 1; }
+}
+.modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 20px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    padding-bottom: 14px;
+}
+.modal-header h2 { font-size: 18px; color: #ffffff; }
+.modal-close {
+    background: none; border: none; color: var(--text-muted); cursor: pointer; padding: 4px; border-radius: 6px;
+}
+.modal-close:hover { color: #ffffff; background: rgba(255, 255, 255, 0.08); }
+
+/* Reusable Tabs */
+.tabs {
+    display: flex;
+    gap: 6px;
+    background: rgba(0, 0, 0, 0.3);
+    border-radius: 10px;
+    padding: 4px;
+    margin-bottom: 20px;
+}
+.tab-btn {
+    flex: 1;
+    padding: 8px 12px;
+    border-radius: 8px;
+    border: none;
+    background: none;
+    color: var(--text-secondary);
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s;
+    text-align: center;
+}
+.tab-btn.active {
+    background: rgba(26, 115, 232, 0.3);
+    color: #ffffff;
+    font-weight: 600;
+    border: 1px solid rgba(66, 133, 244, 0.4);
+}
+.tab-pane { display: none; }
+.tab-pane.active { display: block; }
+
+/* Reusable Code & Terminal Log Output Box */
+.code-box, .log-box {
+    background: #050608;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 10px;
+    padding: 14px;
+    font-family: "Google Sans Code", monospace;
+    font-size: 12px;
+    color: #cbd5e1;
+    white-space: pre-wrap;
+    word-break: break-all;
+    max-height: 400px;
+    overflow-y: auto;
+    margin-bottom: 20px;
+    line-height: 1.5;
+}
+
+/* Reusable Toast Notifications */
+.toast {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    background: rgba(14, 20, 30, 0.95);
+    border: 1px solid rgba(66, 133, 244, 0.4);
+    border-radius: 10px;
+    padding: 12px 18px;
+    color: #ffffff;
+    font-size: 13.5px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
+    z-index: 2000;
+    transform: translateY(100px);
+    opacity: 0;
+    transition: all 0.3s ease;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.toast.show { transform: translateY(0); opacity: 1; }
+
+/* Reusable Empty State */
+.empty-state {
+    padding: 48px 24px;
+    text-align: center;
+    border: 1px dashed rgba(255, 255, 255, 0.12);
+    border-radius: 16px;
+    margin-bottom: 24px;
+}
+.empty-state svg { width: 44px; height: 44px; color: var(--text-muted); margin-bottom: 12px; }
+.empty-state p { color: var(--text-secondary); font-size: 14px; margin-bottom: 16px; }
+
+@media (max-width: 600px) {
+    .page-card { padding: 24px 16px; border-radius: 16px; }
     .status-grid { grid-template-columns: 1fr; }
     h1 { font-size: 20px; }
 }
@@ -916,7 +1282,7 @@ function renderPageLayout({
             ${error ? `
             <div class="error-banner">
                 <svg class="error-icon" viewBox="0 0 20 20" fill="currentColor">
-                    <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clip-rule="evenodd" />
+                    <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 1 1-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clip-rule="evenodd" />
                 </svg>
                 <span>${error}</span>
             </div>` : ''}
@@ -965,7 +1331,7 @@ function renderLoginPage(error = '') {
                 </div>
             </div>
 
-            <button type="submit" id="submitBtn">
+            <button type="submit" id="submitBtn" style="width: 100%;">
                 <span>Unlock Workspace</span>
                 <svg class="btn-icon" viewBox="0 0 20 20" fill="currentColor">
                     <path fill-rule="evenodd" d="M10.293 3.293a1 1 0 011.414 0l6 6a1 1 0 010 1.414l-6 6a1 1 0 01-1.414-1.414L14.586 11H3a1 1 0 110-2h11.586l-4.293-4.293a1 1 0 010-1.414z" clip-rule="evenodd" />
@@ -1082,6 +1448,10 @@ function renderStatusPage(health) {
                 <div class="grid-value"><code>${LISTEN_PORT}</code></div>
             </div>
             <div class="grid-item">
+                <div class="grid-label">Sidecar Manager</div>
+                <div class="grid-value"><code>ENABLED (/sidecars)</code></div>
+            </div>
+            <div class="grid-item">
                 <div class="grid-label">Web IDE</div>
                 <div class="grid-value"><code>${ENABLE_IDE ? 'ENABLED (/ide/)' : 'DISABLED'}</code></div>
             </div>
@@ -1091,13 +1461,19 @@ function renderStatusPage(health) {
             </div>
         </div>
 
-        <div class="action-row">
+        <div class="action-row" style="justify-content: center; flex-wrap: wrap;">
             ${isUp ? `
             <a href="/?useWebSocket=true" class="btn-primary">
                 <span>Open Workspace</span>
                 <svg class="btn-icon" viewBox="0 0 20 20" fill="currentColor">
                     <path fill-rule="evenodd" d="M10.293 3.293a1 1 0 011.414 0l6 6a1 1 0 010 1.414l-6 6a1 1 0 01-1.414-1.414L14.586 11H3a1 1 0 110-2h11.586l-4.293-4.293a1 1 0 010-1.414z" clip-rule="evenodd" />
                 </svg>
+            </a>
+            <a href="/sidecars" class="btn-secondary" title="Open Sidecar Manager">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line>
+                </svg>
+                <span>Sidecars</span>
             </a>
             <a href="/status" class="btn-secondary" title="Refresh health status">
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1129,7 +1505,7 @@ function renderStatusPage(health) {
         error: !isUp ? (health.error || 'Upstream Antigravity agent process is unreachable.') : '',
         bodyHtml,
         footerExtra: '&bull; <a href="/status?format=json" class="json-link">JSON Format</a>',
-        cardMaxWidth: 460
+        cardMaxWidth: 500
     });
 }
 
@@ -1176,6 +1552,633 @@ function renderServiceStartingPage(serviceName) {
         statusPill,
         bodyHtml,
         cardMaxWidth: 440
+    });
+}
+
+// Modern Google Antigravity Sidecar Manager UI HTML
+function renderSidecarsPage() {
+    const statusPill = `
+        <div class="status-pill status-pill-success">
+            <span class="status-dot status-dot-success"></span>
+            <span id="subsystem-pill">Sidecar Subsystem Active</span>
+        </div>`;
+
+    const bodyHtml = `
+        <div class="top-toolbar">
+            <div class="toolbar-group">
+                <a href="/?useWebSocket=true" class="btn-secondary">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="19" y1="12" x2="5" y2="12"></line><polyline points="12 19 5 12 12 5"></polyline>
+                    </svg>
+                    <span>Workspace</span>
+                </a>
+                <a href="/status" class="btn-secondary" title="View Service Health">
+                    <span>Status</span>
+                </a>
+                <button type="button" class="btn-secondary" id="refreshBtn" title="Refresh list">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+                    </svg>
+                    <span>Refresh</span>
+                </button>
+            </div>
+            <button type="button" class="btn-primary" id="openNewSidecarModalBtn">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line>
+                </svg>
+                <span>New Sidecar</span>
+            </button>
+        </div>
+
+        <div id="sidecars-list-container" class="content-list">
+            <div style="text-align: center; padding: 32px;"><div class="spinner" style="width: 32px; height: 32px;"></div>Loading sidecars...</div>
+        </div>
+
+        <!-- Create / Edit Sidecar Modal -->
+        <div id="sidecarModal" class="modal-overlay">
+            <div class="modal-box">
+                <div class="modal-header">
+                    <h2 id="modalTitle">Define New Sidecar</h2>
+                    <button type="button" class="modal-close" id="closeModalBtn">&times;</button>
+                </div>
+
+                <div class="tabs">
+                    <button type="button" class="tab-btn active" data-tab="promptTab">🤖 Scheduled Prompt</button>
+                    <button type="button" class="tab-btn" data-tab="commandTab">⏰ Scheduled Command</button>
+                    <button type="button" class="tab-btn" data-tab="workerTab">⚙️ Background Worker</button>
+                </div>
+
+                <form id="sidecarForm">
+                    <input type="hidden" id="formMode" value="create">
+
+                    <div class="form-group" style="margin-bottom: 16px;">
+                        <label for="sidecarId">Sidecar ID (Unique Name)</label>
+                        <input type="text" id="sidecarId" required placeholder="e.g. pr-triage, daily-summary" pattern="[a-zA-Z0-9_\-\/]+" title="Alphanumeric, dashes, hyphens, slashes only">
+                    </div>
+
+                    <div class="form-group" style="margin-bottom: 16px;">
+                        <label for="sidecarDisplayName">Display Name (Optional)</label>
+                        <input type="text" id="sidecarDisplayName" placeholder="e.g. PR Triage Assistant">
+                    </div>
+
+                    <div class="form-group" style="margin-bottom: 16px;">
+                        <label for="sidecarDescription">Description (Optional)</label>
+                        <input type="text" id="sidecarDescription" placeholder="e.g. Runs hourly to summarize incoming pull requests">
+                    </div>
+
+                    <!-- TAB 1: Scheduled Agent Prompt -->
+                    <div id="promptTab" class="tab-pane active">
+                        <div class="form-group" style="margin-bottom: 16px;">
+                            <label for="promptPreset">Schedule Preset</label>
+                            <select id="promptPreset">
+                                <option value="0 * * * *">Every Hour (0 * * * *)</option>
+                                <option value="*/30 * * * *">Every 30 Minutes (*/30 * * * *)</option>
+                                <option value="*/15 * * * *">Every 15 Minutes (*/15 * * * *)</option>
+                                <option value="0 */6 * * *">Every 6 Hours (0 */6 * * *)</option>
+                                <option value="0 9 * * *">Daily at 9:00 AM (0 9 * * *)</option>
+                                <option value="custom">Custom Cron Expression...</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group" id="customPromptCronGroup" style="display: none; margin-bottom: 16px;">
+                            <label for="promptCronExpr">Cron Expression (5-field)</label>
+                            <input type="text" id="promptCronExpr" value="0 * * * *" placeholder="* * * * *">
+                        </div>
+
+                        <div class="form-group" style="margin-bottom: 16px;">
+                            <label for="promptProject">Target Project</label>
+                            <select id="promptProject">
+                                <option value="outside-of-project">Outside of Project</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group" style="margin-bottom: 16px;">
+                            <label for="promptModel">Model Tier</label>
+                            <select id="promptModel">
+                                <option value="inherit">Default (inherit)</option>
+                                <option value="flash">Gemini Flash (fast)</option>
+                                <option value="pro">Gemini Pro (deep reasoning)</option>
+                                <option value="flash_lite">Gemini Flash Lite</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group" style="margin-bottom: 16px;">
+                            <label for="promptContent">Agent Prompt / Task Instructions</label>
+                            <textarea id="promptContent" placeholder="e.g. Give me a summary of incoming review requests and test failures." rows="3"></textarea>
+                        </div>
+                    </div>
+
+                    <!-- TAB 2: Scheduled Custom Command -->
+                    <div id="commandTab" class="tab-pane">
+                        <div class="form-group" style="margin-bottom: 16px;">
+                            <label for="commandCronExpr">Cron Expression (5-field)</label>
+                            <input type="text" id="commandCronExpr" value="*/15 * * * *" placeholder="*/15 * * * *">
+                        </div>
+
+                        <div class="form-group" style="margin-bottom: 16px;">
+                            <label for="commandExec">Command / Executable</label>
+                            <input type="text" id="commandExec" placeholder="e.g. /bin/bash, python3, node">
+                        </div>
+
+                        <div class="form-group" style="margin-bottom: 16px;">
+                            <label for="commandArgs">Arguments (One per line)</label>
+                            <textarea id="commandArgs" placeholder="-c&#10;echo 'Scheduled task run'" rows="2"></textarea>
+                        </div>
+                    </div>
+
+                    <!-- TAB 3: Continuous Background Worker -->
+                    <div id="workerTab" class="tab-pane">
+                        <div class="form-group" style="margin-bottom: 16px;">
+                            <label for="workerCommand">Worker Executable</label>
+                            <input type="text" id="workerCommand" placeholder="e.g. python3, node, /bin/bash">
+                        </div>
+
+                        <div class="form-group" style="margin-bottom: 16px;">
+                            <label for="workerArgs">Worker Arguments (One per line)</label>
+                            <textarea id="workerArgs" placeholder="worker.py&#10;--verbose" rows="2"></textarea>
+                        </div>
+
+                        <div class="form-group" style="margin-bottom: 16px;">
+                            <label for="workerRestartPolicy">Restart Policy</label>
+                            <select id="workerRestartPolicy">
+                                <option value="always" selected>always (Restart immediately upon exit)</option>
+                                <option value="on-failure">on-failure (Restart only if exited with error)</option>
+                                <option value="never">never (Do not restart)</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div style="display: flex; align-items: center; justify-content: space-between; margin-top: 24px; padding-top: 16px; border-top: 1px solid rgba(255, 255, 255, 0.08);">
+                        <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                            <input type="checkbox" id="sidecarEnabled" checked style="width: 18px; height: 18px; accent-color: #1a73e8;">
+                            <span style="font-size: 13.5px;">Enable sidecar immediately</span>
+                        </label>
+                        <div style="display: flex; gap: 10px;">
+                            <button type="button" class="btn-secondary" id="cancelModalBtn">Cancel</button>
+                            <button type="submit" class="btn-primary" id="saveSidecarBtn">Save Sidecar</button>
+                        </div>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- Log Viewer Modal -->
+        <div id="logModal" class="modal-overlay">
+            <div class="modal-box" style="max-width: 720px;">
+                <div class="modal-header">
+                    <h2 id="logModalTitle">Sidecar Logs</h2>
+                    <button type="button" class="modal-close" id="closeLogModalBtn">&times;</button>
+                </div>
+                <div id="logContent" class="log-box">Loading logs...</div>
+                <div style="display: flex; justify-content: flex-end; gap: 10px;">
+                    <button type="button" class="btn-secondary" id="refreshLogBtn">Refresh</button>
+                    <button type="button" class="btn-primary" id="doneLogModalBtn">Close</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="toast" class="toast">
+            <span id="toastMessage">Success</span>
+        </div>
+    `;
+
+    const scriptExtra = `
+        let sidecarsData = [];
+        let projectsData = [];
+        let activeTab = 'promptTab';
+        let currentLogSidecarId = null;
+
+        const listContainer = document.getElementById('sidecars-list-container');
+        const modal = document.getElementById('sidecarModal');
+        const logModal = document.getElementById('logModal');
+        const sidecarForm = document.getElementById('sidecarForm');
+        const promptPreset = document.getElementById('promptPreset');
+        const customPromptCronGroup = document.getElementById('customPromptCronGroup');
+        const promptCronExpr = document.getElementById('promptCronExpr');
+        const promptProject = document.getElementById('promptProject');
+
+        function showToast(msg) {
+            const toast = document.getElementById('toast');
+            const toastMsg = document.getElementById('toastMessage');
+            if (!toast || !toastMsg) return;
+            toastMsg.textContent = msg;
+            toast.classList.add('show');
+            setTimeout(() => toast.classList.remove('show'), 3500);
+        }
+
+        async function fetchProjects() {
+            try {
+                const res = await fetch('/api/projects');
+                if (res.ok) {
+                    projectsData = await res.json();
+                    promptProject.innerHTML = '';
+                    for (const proj of projectsData) {
+                        const opt = document.createElement('option');
+                        opt.value = proj.id;
+                        opt.textContent = proj.name + (proj.isWorkspaceOnly ? ' (Workspace)' : '');
+                        promptProject.appendChild(opt);
+                    }
+                }
+            } catch (e) {}
+        }
+
+        async function fetchSidecars() {
+            try {
+                const res = await fetch('/api/sidecars');
+                if (!res.ok) throw new Error('Failed to load sidecars');
+                sidecarsData = await res.json();
+                renderList();
+            } catch (e) {
+                listContainer.innerHTML = '<div class="error-banner">Failed to load sidecars: ' + e.message + '</div>';
+            }
+        }
+
+        function renderList() {
+            if (!sidecarsData || sidecarsData.length === 0) {
+                listContainer.innerHTML = \`
+                    <div class="empty-state">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                            <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+                            <line x1="8" y1="21" x2="16" y2="21"></line>
+                            <line x1="12" y1="17" x2="12" y2="21"></line>
+                        </svg>
+                        <p>No sidecars configured yet. Add an autonomous worker or scheduled agent prompt.</p>
+                        <button type="button" class="btn-primary" onclick="document.getElementById('openNewSidecarModalBtn').click()">
+                            <span>+ Create Sidecar</span>
+                        </button>
+                    </div>\`;
+                return;
+            }
+
+            let html = '';
+            for (const s of sidecarsData) {
+                const isChecked = s.enabled ? 'checked' : '';
+                let statusBadge = '<span class="chip chip-muted">STOPPED</span>';
+                if (s.status === 'running') statusBadge = '<span class="chip chip-green"><span class="status-dot status-dot-success"></span> RUNNING ' + (s.pid ? '(PID ' + s.pid + ')' : '') + '</span>';
+                else if (s.status === 'scheduled') statusBadge = '<span class="chip chip-cyan"><span class="status-dot status-dot-success"></span> SCHEDULED</span>';
+                else if (s.status === 'starting') statusBadge = '<span class="chip chip-purple"><span class="status-dot status-dot-warning"></span> STARTING</span>';
+
+                const typeBadge = s.isScheduled ? '<span class="chip chip-purple">SCHEDULED JOB</span>' : '<span class="chip chip-cyan">WORKER</span>';
+
+                let detailsChip = '';
+                if (s.isScheduled) {
+                    detailsChip = '<span class="chip">⏰ ' + (s.cronDescription || s.cronExpr) + ' <code>' + (s.cronExpr || '') + '</code></span>';
+                } else {
+                    detailsChip = '<span class="chip">⚙️ <code>' + s.command + ' ' + (s.args || []).join(' ') + '</code> (Restart: ' + s.restartPolicy + ')</span>';
+                }
+
+                let projChip = '';
+                if (s.projectId) {
+                    projChip = '<span class="chip">📁 Project: <code>' + s.projectId + '</code></span>';
+                }
+
+                let nextRunChip = '';
+                if (s.nextRun) {
+                    const d = new Date(s.nextRun);
+                    nextRunChip = '<span class="chip chip-muted">Next run: ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + ' (' + d.toLocaleDateString() + ')</span>';
+                }
+
+                html += \`
+                <div class="content-card" data-id="\${s.id}">
+                    <div class="card-header">
+                        <div>
+                            <div class="card-title-row">
+                                <span class="card-title">\${s.displayName || s.id}</span>
+                                <span class="card-id-code">\${s.id}</span>
+                                \${typeBadge}
+                                \${statusBadge}
+                            </div>
+                        </div>
+                        <div>
+                            <label class="switch" title="Toggle On/Off">
+                                <input type="checkbox" class="toggle-switch-input" data-id="\${s.id}" \${isChecked}>
+                                <span class="slider"></span>
+                            </label>
+                        </div>
+                    </div>
+
+                    \${s.description ? '<p class="card-desc">' + s.description + '</p>' : ''}
+
+                    <div class="card-chips">
+                        \${detailsChip}
+                        \${projChip}
+                        \${nextRunChip}
+                    </div>
+
+                    <div class="card-actions">
+                        <div class="actions-left">
+                            <button type="button" class="btn-secondary btn-run" data-id="\${s.id}" title="Run now">
+                                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                                    <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                                </svg>
+                                <span>Run Now</span>
+                            </button>
+                            <button type="button" class="btn-secondary btn-logs" data-id="\${s.id}" title="View recent logs">
+                                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line>
+                                </svg>
+                                <span>Logs</span>
+                            </button>
+                            <button type="button" class="btn-secondary btn-edit" data-id="\${s.id}" title="Edit sidecar">
+                                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+                                </svg>
+                                <span>Edit</span>
+                            </button>
+                        </div>
+                        <div class="actions-right">
+                            <button type="button" class="btn-danger btn-delete" data-id="\${s.id}" title="Delete sidecar">
+                                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                                </svg>
+                                <span>Delete</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>\`;
+            }
+            listContainer.innerHTML = html;
+
+            // Attach event listeners
+            document.querySelectorAll('.toggle-switch-input').forEach(input => {
+                input.addEventListener('change', async (e) => {
+                    const id = e.target.dataset.id;
+                    const enabled = e.target.checked;
+                    try {
+                        const res = await fetch('/api/sidecars/' + encodeURIComponent(id) + '/toggle', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ enabled })
+                        });
+                        if (res.ok) {
+                            showToast(\`Sidecar '\${id}' \${enabled ? 'enabled' : 'disabled'}\`);
+                            fetchSidecars();
+                        } else {
+                            e.target.checked = !enabled;
+                            showToast('Failed to toggle sidecar');
+                        }
+                    } catch (err) {
+                        e.target.checked = !enabled;
+                        showToast('Error toggling sidecar');
+                    }
+                });
+            });
+
+            document.querySelectorAll('.btn-run').forEach(btn => {
+                btn.addEventListener('click', async () => {
+                    const id = btn.dataset.id;
+                    btn.disabled = true;
+                    try {
+                        const res = await fetch('/api/sidecars/' + encodeURIComponent(id) + '/run', { method: 'POST' });
+                        if (res.ok) {
+                            showToast(\`Triggered sidecar '\${id}' successfully\`);
+                            setTimeout(fetchSidecars, 1000);
+                        } else {
+                            showToast('Failed to trigger execution');
+                        }
+                    } catch (e) {
+                        showToast('Error triggering execution');
+                    } finally {
+                        btn.disabled = false;
+                    }
+                });
+            });
+
+            document.querySelectorAll('.btn-logs').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    openLogs(btn.dataset.id);
+                });
+            });
+
+            document.querySelectorAll('.btn-edit').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    openEdit(btn.dataset.id);
+                });
+            });
+
+            document.querySelectorAll('.btn-delete').forEach(btn => {
+                btn.addEventListener('click', async () => {
+                    const id = btn.dataset.id;
+                    if (confirm(\`Are you sure you want to delete sidecar '\${id}'?\`)) {
+                        try {
+                            const res = await fetch('/api/sidecars/' + encodeURIComponent(id), { method: 'DELETE' });
+                            if (res.ok) {
+                                showToast(\`Deleted sidecar '\${id}'\`);
+                                fetchSidecars();
+                            } else {
+                                showToast('Failed to delete sidecar');
+                            }
+                        } catch (e) {
+                            showToast('Error deleting sidecar');
+                        }
+                    }
+                });
+            });
+        }
+
+        async function openLogs(id) {
+            currentLogSidecarId = id;
+            document.getElementById('logModalTitle').textContent = \`Logs: \${id}\`;
+            document.getElementById('logContent').textContent = 'Loading logs...';
+            logModal.classList.add('active');
+            refreshLogs();
+        }
+
+        async function refreshLogs() {
+            if (!currentLogSidecarId) return;
+            try {
+                const res = await fetch('/api/sidecars/' + encodeURIComponent(currentLogSidecarId) + '/logs');
+                if (res.ok) {
+                    const data = await res.json();
+                    document.getElementById('logContent').textContent = data.logs || 'No logs recorded yet.';
+                }
+            } catch (e) {
+                document.getElementById('logContent').textContent = 'Error fetching logs: ' + e.message;
+            }
+        }
+
+        function openEdit(id) {
+            const s = sidecarsData.find(item => item.id === id);
+            if (!s) return;
+
+            document.getElementById('modalTitle').textContent = 'Edit Sidecar: ' + id;
+            document.getElementById('formMode').value = 'edit';
+            document.getElementById('sidecarId').value = s.id;
+            document.getElementById('sidecarId').readOnly = true;
+            document.getElementById('sidecarDisplayName').value = s.displayName || '';
+            document.getElementById('sidecarDescription').value = s.description || '';
+            document.getElementById('sidecarEnabled').checked = s.enabled;
+
+            if (s.isScheduled) {
+                if (s.args && s.args[1] === 'agentapi') {
+                    switchTab('promptTab');
+                    promptCronExpr.value = s.cronExpr || '0 * * * *';
+                    promptPreset.value = 'custom';
+                    customPromptCronGroup.style.display = 'block';
+                    promptProject.value = s.projectId || 'outside-of-project';
+                    promptContent.value = s.args[s.args.length - 1] || '';
+                } else {
+                    switchTab('commandTab');
+                    document.getElementById('commandCronExpr').value = s.cronExpr || '*/15 * * * *';
+                    document.getElementById('commandExec').value = s.args ? s.args[1] : '';
+                    document.getElementById('commandArgs').value = s.args ? s.args.slice(2).join('\\n') : '';
+                }
+            } else {
+                switchTab('workerTab');
+                document.getElementById('workerCommand').value = s.command || '';
+                document.getElementById('workerArgs').value = (s.args || []).join('\\n');
+                document.getElementById('workerRestartPolicy').value = s.restartPolicy || 'always';
+            }
+
+            modal.classList.add('active');
+        }
+
+        function switchTab(tabId) {
+            activeTab = tabId;
+            document.querySelectorAll('.tab-btn').forEach(btn => {
+                btn.classList.toggle('active', btn.dataset.tab === tabId);
+            });
+            document.querySelectorAll('.tab-pane').forEach(pane => {
+                pane.classList.toggle('active', pane.id === tabId);
+            });
+        }
+
+        document.querySelectorAll('.tab-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                switchTab(btn.dataset.tab);
+            });
+        });
+
+        promptPreset.addEventListener('change', () => {
+            if (promptPreset.value === 'custom') {
+                customPromptCronGroup.style.display = 'block';
+            } else {
+                customPromptCronGroup.style.display = 'none';
+                promptCronExpr.value = promptPreset.value;
+            }
+        });
+
+        document.getElementById('openNewSidecarModalBtn').addEventListener('click', () => {
+            document.getElementById('modalTitle').textContent = 'Define New Sidecar';
+            document.getElementById('formMode').value = 'create';
+            document.getElementById('sidecarId').value = '';
+            document.getElementById('sidecarId').readOnly = false;
+            document.getElementById('sidecarDisplayName').value = '';
+            document.getElementById('sidecarDescription').value = '';
+            document.getElementById('sidecarEnabled').checked = true;
+            document.getElementById('promptContent').value = '';
+            promptPreset.value = '0 * * * *';
+            promptCronExpr.value = '0 * * * *';
+            customPromptCronGroup.style.display = 'none';
+            switchTab('promptTab');
+            modal.classList.add('active');
+        });
+
+        document.getElementById('closeModalBtn').addEventListener('click', () => modal.classList.remove('active'));
+        document.getElementById('cancelModalBtn').addEventListener('click', () => modal.classList.remove('active'));
+        document.getElementById('closeLogModalBtn').addEventListener('click', () => logModal.classList.remove('active'));
+        document.getElementById('doneLogModalBtn').addEventListener('click', () => logModal.classList.remove('active'));
+        document.getElementById('refreshLogBtn').addEventListener('click', refreshLogs);
+        document.getElementById('refreshBtn').addEventListener('click', fetchSidecars);
+
+        sidecarForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const id = document.getElementById('sidecarId').value.trim();
+            const displayName = document.getElementById('sidecarDisplayName').value.trim();
+            const description = document.getElementById('sidecarDescription').value.trim();
+            const enabled = document.getElementById('sidecarEnabled').checked;
+
+            const payload = {
+                id,
+                displayName: displayName || id,
+                description,
+                enabled
+            };
+
+            if (activeTab === 'promptTab') {
+                payload.isScheduled = true;
+                payload.builtin = 'schedule';
+                const cron = promptPreset.value === 'custom' ? promptCronExpr.value.trim() : promptPreset.value;
+                const project = promptProject.value;
+                const model = document.getElementById('promptModel').value;
+                const prompt = document.getElementById('promptContent').value.trim();
+                if (!prompt) {
+                    alert('Please enter prompt instructions for the agent.');
+                    return;
+                }
+
+                payload.projectId = project;
+                const agentArgs = [cron, 'agentapi', 'new-conversation'];
+                if (model && model !== 'inherit') {
+                    agentArgs.push('--model=' + model);
+                }
+                agentArgs.push(prompt);
+                payload.args = agentArgs;
+            } else if (activeTab === 'commandTab') {
+                payload.isScheduled = true;
+                payload.builtin = 'schedule';
+                const cron = document.getElementById('commandCronExpr').value.trim();
+                const exec = document.getElementById('commandExec').value.trim();
+                const rawArgs = document.getElementById('commandArgs').value.split('\\n').map(s => s.trim()).filter(Boolean);
+                if (!exec) {
+                    alert('Please specify a command executable.');
+                    return;
+                }
+                payload.args = [cron, exec, ...rawArgs];
+            } else if (activeTab === 'workerTab') {
+                payload.isScheduled = false;
+                const command = document.getElementById('workerCommand').value.trim();
+                const rawArgs = document.getElementById('workerArgs').value.split('\\n').map(s => s.trim()).filter(Boolean);
+                const restartPolicy = document.getElementById('workerRestartPolicy').value;
+                if (!command) {
+                    alert('Please specify a worker executable.');
+                    return;
+                }
+                payload.command = command;
+                payload.args = rawArgs;
+                payload.restartPolicy = restartPolicy;
+            }
+
+            try {
+                const res = await fetch('/api/sidecars', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                if (res.ok) {
+                    modal.classList.remove('active');
+                    showToast(\`Sidecar '\${id}' saved successfully!\`);
+                    fetchSidecars();
+                } else {
+                    const err = await res.json();
+                    alert('Error saving sidecar: ' + (err.error || 'Unknown error'));
+                }
+            } catch (err) {
+                alert('Network error saving sidecar: ' + err.message);
+            }
+        });
+
+        // Auto ID slug generator from display name on create
+        document.getElementById('sidecarDisplayName').addEventListener('input', (e) => {
+            if (document.getElementById('formMode').value === 'create' && !document.getElementById('sidecarId').dataset.userEdited) {
+                document.getElementById('sidecarId').value = e.target.value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+            }
+        });
+        document.getElementById('sidecarId').addEventListener('input', () => {
+            document.getElementById('sidecarId').dataset.userEdited = 'true';
+        });
+
+        fetchProjects();
+        fetchSidecars();
+    `;
+
+    return renderPageLayout({
+        title: 'Google Antigravity - Sidecar Manager',
+        subtitle: 'Configure autonomous background sidecar processes and scheduled agent prompts',
+        statusPill,
+        bodyHtml,
+        scriptExtra,
+        cardMaxWidth: 920
     });
 }
 
@@ -1240,6 +2243,14 @@ const INJECTED_UI_STYLES = `
     color: #60a5fa;
 }
 
+.agy-injected-btn-sidecars .agy-injected-btn-icon {
+    color: #a78bfa;
+}
+
+.agy-injected-btn-sidecars:hover .agy-injected-btn-icon {
+    color: #c4b5fd;
+}
+
 .agy-injected-btn-terminal .agy-injected-btn-icon {
     color: #4ade80;
 }
@@ -1268,9 +2279,14 @@ const INJECTED_UI_STYLES = `
 }
 `;
 
-// Build dynamically injected script based on ENABLE_IDE and ENABLE_TERMINAL flags
+// Build dynamically injected script for Left-hand Navigation Tools
 function buildInjectedScript() {
-    if (!ENABLE_IDE && !ENABLE_TERMINAL) return '';
+    const sidecarButtonHtml = `
+            <a href="/sidecars" target="_blank" rel="noopener noreferrer" class="agy-injected-btn agy-injected-btn-sidecars" title="Open Sidecar Manager in a new tab">
+                \${SIDECAR_ICON_SVG}
+                <span class="agy-injected-btn-text">Sidecar Manager</span>
+                \${EXTERNAL_ICON_SVG}
+            </a>`;
 
     const ideButtonHtml = ENABLE_IDE ? `
             <a href="/ide/" target="_blank" rel="noopener noreferrer" class="agy-injected-btn agy-injected-btn-ide" title="Open VS Code Web IDE in a new tab">
@@ -1288,6 +2304,7 @@ function buildInjectedScript() {
 
     return `
 (function initAntigravityCustomTools() {
+    const SIDECAR_ICON_SVG = '<svg class="agy-injected-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>';
     const IDE_ICON_SVG = '<svg class="agy-injected-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg>';
     const TERMINAL_ICON_SVG = '<svg class="agy-injected-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>';
     const EXTERNAL_ICON_SVG = '<svg class="agy-injected-external-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>';
@@ -1296,7 +2313,7 @@ function buildInjectedScript() {
         const container = document.createElement('div');
         container.id = 'agy-injected-tools-group';
         container.className = 'agy-injected-tools-group';
-        container.innerHTML = \`<div class="agy-injected-tools-label">Workspace Tools</div>${ideButtonHtml}${termButtonHtml}\`;
+        container.innerHTML = \`<div class="agy-injected-tools-label">Workspace Tools</div>${sidecarButtonHtml}${ideButtonHtml}${termButtonHtml}\`;
         return container;
     }
 
@@ -1525,6 +2542,7 @@ const server = http.createServer(async (req, res) => {
                     targetPort: TARGET_PORT || null,
                     services: {
                         antigravity: { port: TARGET_PORT || null, up: health.up, enabled: true },
+                        sidecarManager: { path: '/sidecars', enabled: true },
                         webIde: { port: ENABLE_IDE ? IDE_PORT : null, path: '/ide/', enabled: ENABLE_IDE },
                         hostTerminal: { port: ENABLE_TERMINAL ? TERMINAL_PORT : null, path: '/terminal/', enabled: ENABLE_TERMINAL }
                     },
@@ -1615,14 +2633,135 @@ const server = http.createServer(async (req, res) => {
             return;
         }
 
-        // 4. Check Authentication for ALL other routes (/ide, /terminal, /, /c/..., etc.)
+        // 4. Check Authentication for ALL other routes (/sidecars, /ide, /terminal, /, /api/*, etc.)
         if (!isAuthenticated(req)) {
+            if (parsedUrl.pathname.startsWith('/api/')) {
+                res.writeHead(401, { 'Content-Type': 'application/json; charset=utf-8' });
+                res.end(JSON.stringify({ error: 'Unauthorized. Please sign in.' }));
+                return;
+            }
             res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
             res.end(renderLoginPage());
             return;
         }
 
-        // 5. Handle /terminal and /terminal/* routes
+        // 5. Handle /sidecars UI route (AUTHENTICATED)
+        if (parsedUrl.pathname === '/sidecars' || parsedUrl.pathname === '/sidecars/') {
+            res.writeHead(200, {
+                'Content-Type': 'text/html; charset=utf-8',
+                'Cache-Control': 'no-cache, no-store, must-revalidate'
+            });
+            res.end(renderSidecarsPage());
+            return;
+        }
+
+        // 6. Handle /api/projects REST endpoint (AUTHENTICATED)
+        if (parsedUrl.pathname === '/api/projects' && req.method === 'GET') {
+            const projects = sidecarManager ? sidecarManager.listProjects() : [];
+            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify(projects));
+            return;
+        }
+
+        // 7. Handle /api/sidecars* REST endpoints (AUTHENTICATED)
+        if (parsedUrl.pathname === '/api/sidecars' || parsedUrl.pathname.startsWith('/api/sidecars/')) {
+            if (!sidecarManager) {
+                res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+                res.end(JSON.stringify({ error: 'Sidecar manager subsystem not available.' }));
+                return;
+            }
+
+            // GET /api/sidecars -> List all
+            if (parsedUrl.pathname === '/api/sidecars' && req.method === 'GET') {
+                const sidecars = sidecarManager.listSidecars();
+                res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+                res.end(JSON.stringify(sidecars));
+                return;
+            }
+
+            // POST /api/sidecars -> Save/create
+            if (parsedUrl.pathname === '/api/sidecars' && req.method === 'POST') {
+                try {
+                    const body = await readJsonBody(req);
+                    const saved = await sidecarManager.saveSidecar(body);
+                    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+                    res.end(JSON.stringify(saved));
+                } catch (e) {
+                    res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+                    res.end(JSON.stringify({ error: e.message }));
+                }
+                return;
+            }
+
+            // Route matching: /api/sidecars/:id/...
+            const subPath = parsedUrl.pathname.replace(/^\/api\/sidecars\/?/, '');
+            const parts = subPath.split('/');
+            const sidecarId = decodeURIComponent(parts[0]);
+            const action = parts[1];
+
+            // POST /api/sidecars/:id/toggle
+            if (action === 'toggle' && req.method === 'POST') {
+                try {
+                    const body = await readJsonBody(req);
+                    const updated = await sidecarManager.toggleSidecar(sidecarId, body.enabled);
+                    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+                    res.end(JSON.stringify(updated));
+                } catch (e) {
+                    res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+                    res.end(JSON.stringify({ error: e.message }));
+                }
+                return;
+            }
+
+            // POST /api/sidecars/:id/run
+            if (action === 'run' && req.method === 'POST') {
+                try {
+                    const result = await sidecarManager.triggerSidecar(sidecarId);
+                    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+                    res.end(JSON.stringify(result));
+                } catch (e) {
+                    res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+                    res.end(JSON.stringify({ error: e.message }));
+                }
+                return;
+            }
+
+            // GET /api/sidecars/:id/logs
+            if (action === 'logs' && req.method === 'GET') {
+                const logs = sidecarManager.getLogs(sidecarId);
+                res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+                res.end(JSON.stringify({ logs }));
+                return;
+            }
+
+            // DELETE /api/sidecars/:id
+            if (!action && req.method === 'DELETE') {
+                try {
+                    await sidecarManager.deleteSidecar(sidecarId);
+                    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+                    res.end(JSON.stringify({ success: true }));
+                } catch (e) {
+                    res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+                    res.end(JSON.stringify({ error: e.message }));
+                }
+                return;
+            }
+
+            // GET /api/sidecars/:id
+            if (!action && req.method === 'GET') {
+                const s = sidecarManager.getSidecar(sidecarId);
+                if (!s) {
+                    res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
+                    res.end(JSON.stringify({ error: 'Sidecar not found' }));
+                } else {
+                    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+                    res.end(JSON.stringify(s));
+                }
+                return;
+            }
+        }
+
+        // 8. Handle /terminal and /terminal/* routes
         if (parsedUrl.pathname === '/terminal' || parsedUrl.pathname.startsWith('/terminal/')) {
             if (!ENABLE_TERMINAL) {
                 res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
@@ -1638,7 +2777,7 @@ const server = http.createServer(async (req, res) => {
             return;
         }
 
-        // 6. Handle /ide and /ide/* routes
+        // 9. Handle /ide and /ide/* routes
         if (parsedUrl.pathname === '/ide' || parsedUrl.pathname.startsWith('/ide/')) {
             if (!ENABLE_IDE) {
                 res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
@@ -1655,7 +2794,7 @@ const server = http.createServer(async (req, res) => {
             return;
         }
 
-        // 7. Ensure useWebSocket=true query param is present for all browser SPA routes
+        // 10. Ensure useWebSocket=true query param is present for all browser SPA routes
         if (req.method === 'GET' && isSpaRoute(parsedUrl.pathname)) {
             if (parsedUrl.searchParams.get('useWebSocket') !== 'true') {
                 parsedUrl.searchParams.set('useWebSocket', 'true');
@@ -1667,14 +2806,14 @@ const server = http.createServer(async (req, res) => {
             }
         }
 
-        // 8. If target port is not ready yet
+        // 11. If target port is not ready yet
         if (!TARGET_PORT) {
             res.writeHead(503, { 'Content-Type': 'text/html; charset=utf-8' });
             res.end(renderStartingPage());
             return;
         }
 
-        // 9. Proxy HTTP Request to Antigravity agy with DOM injection on HTML responses
+        // 12. Proxy HTTP Request to Antigravity agy with DOM injection on HTML responses
         if (req.socket) req.socket.setNoDelay(true);
         if (res.socket) res.socket.setNoDelay(true);
 
@@ -1722,7 +2861,7 @@ const server = http.createServer(async (req, res) => {
 
             const isHtmlResponse = (resHeaders['content-type'] || '').includes('text/html');
 
-            // INTERCEPT HTML RESPONSES TO INJECT WEB IDE & HOST TERMINAL BUTTONS
+            // INTERCEPT HTML RESPONSES TO INJECT WORKSPACE TOOLS BUTTONS
             if (isHtmlResponse && req.method === 'GET') {
                 const chunks = [];
                 proxyRes.on('data', (chunk) => {
@@ -1943,6 +3082,13 @@ function checkPortFile() {
 
 setInterval(checkPortFile, 500);
 checkPortFile();
+
+// Initialize Sidecar subsystem
+if (sidecarManager) {
+    sidecarManager.init().catch(err => {
+        console.error('[Proxy Gateway] Failed to initialize Sidecar Manager:', err);
+    });
+}
 
 server.listen(LISTEN_PORT, '0.0.0.0', () => {
     console.log(`[Proxy Gateway] 🛡️  Listening on 0.0.0.0:${LISTEN_PORT} (Password Protection: ${AUTH_PASSWORD ? 'ENABLED' : 'DISABLED'})`);
