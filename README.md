@@ -52,6 +52,7 @@ services:
 | `RC_NAME` | `server-agent` | Identifier name for this server instance. |
 | `AGY_PORT` | `4400` | Port exposed by the built-in web gateway. |
 | `AUTH_PASSWORD` | *(empty)* | Optional password to protect web access. When set, prompts for login and remembers session for 30 days. |
+| `BLOCK_TELEMETRY` | `true` | When `true` (default), blocks Google usage telemetry, analytics, crash reporting, and diagnostic tracking domains via in-container DNS sinkholing (`0.0.0.0`) and disables OpenTelemetry exporters, while keeping Gemini model APIs and authentication working seamlessly. |
 | `ENABLE_IDE` | `true` | Set to `false` to disable the VS Code Web IDE service and hide its UI button. |
 | `ENABLE_TERMINAL` | `true` | Set to `false` to disable the Host Web Terminal service and hide its UI button. |
 | `HOST_SSH_USER` | *(workspace owner)* | Host username used by the Web Terminal to connect to the host machine via SSH. |
@@ -111,8 +112,19 @@ Once logged in, all services are accessible:
 | **Host Web Terminal** | `/terminal/` | Web terminal running interactive SSH sessions directly on the host machine (manage Docker, run system commands, git, etc.). | Protected 🔒 |
 | **Health & Service Status** | `/status` | Real-time health check endpoint for monitoring uptime, latency, and registered service ports. | **Public / Unauthenticated** 🟢 |
 
-> [!NOTE]
-> JSON monitoring for `/status` is available by requesting `Accept: application/json` or adding `?format=json` (e.g. `http://<your-server-ip>:4400/status?format=json`).
+---
+
+## 🛡️ Privacy & Telemetry Management
+
+By default, `BLOCK_TELEMETRY=true` is enabled to prevent usage telemetry, analytics, and diagnostic tracking from being sent back to Google while keeping core agent capabilities, Gemini model APIs, and authentication fully operational.
+
+### How it Works:
+- **In-Container DNS Sinkholing**: Telemetry hostnames are sinkholed to `0.0.0.0` directly inside the container (`/etc/hosts`), resulting in immediate socket rejection (`ECONNREFUSED`) with zero DNS lookup or request timeout latency.
+- **Environment Opt-Outs**: Automatically exports `DO_NOT_TRACK=1`, `OTEL_SDK_DISABLED=true`, `OTEL_TRACES_EXPORTER=none`, `OTEL_METRICS_EXPORTER=none`, and `OTEL_LOGS_EXPORTER=none`.
+- **Allowed Traffic**: Essential authentication endpoints (`accounts.google.com`, `oauth2.googleapis.com`) and Gemini AI inference APIs (`cloudaicompanion.googleapis.com`, `cloudcode-pa.googleapis.com`, `generativelanguage.googleapis.com`) continue to pass through unobstructed.
+- **Blocked Endpoints**: Sinkholes `firebaselogging-pa.googleapis.com`, `feedback-pa.googleapis.com`, `cloudtrace.googleapis.com`, `clouderrorreporting.googleapis.com`, `logging.googleapis.com`, `monitoring.googleapis.com`, `telemetry.google.com`, `client-telemetry.google.com`, `google-analytics.com`, and `v1.telemetry.coder.com`.
+
+To disable blocking and allow all telemetry, set `BLOCK_TELEMETRY=false` in your `docker-compose.yml` or container environment.
 
 ---
 

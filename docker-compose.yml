@@ -13,6 +13,7 @@ services:
       - RC_NAME=server-agent
       - AGY_PORT=4400
       - AUTH_PASSWORD=changeme
+      - BLOCK_TELEMETRY=true
       - ENABLE_IDE=true
       - ENABLE_TERMINAL=true
       - HOST_SSH_USER=

@@ -191,7 +191,45 @@ fi
 # Set umask so newly created files and directories inside mounted volumes are group readable/writable
 umask 0002
 
-# 3. Export environment for developer
+# 3. Configure Telemetry Blocking (DNS Sinkhole and OpenTelemetry opt-outs)
+BLOCK_TELEMETRY="${BLOCK_TELEMETRY:-true}"
+
+if [ "$BLOCK_TELEMETRY" = "true" ] || [ "$BLOCK_TELEMETRY" = "1" ] || [ "$BLOCK_TELEMETRY" = "yes" ] || [ "$BLOCK_TELEMETRY" = "on" ]; then
+    echo " 🛡️  Telemetry Blocking is ENABLED (Sinkholing telemetry endpoints to 0.0.0.0)"
+    
+    # Configure OpenTelemetry & telemetry opt-out environment variables
+    export DO_NOT_TRACK="1"
+    export OTEL_SDK_DISABLED="true"
+    export OTEL_TRACES_EXPORTER="none"
+    export OTEL_METRICS_EXPORTER="none"
+    export OTEL_LOGS_EXPORTER="none"
+
+    # Append telemetry domains to /etc/hosts if not already present
+    if ! grep -q "antigravity-telemetry-sinkhole" /etc/hosts 2>/dev/null; then
+        cat << 'EOF' >> /etc/hosts
+
+# >>> antigravity-telemetry-sinkhole >>>
+0.0.0.0 firebaselogging-pa.googleapis.com
+0.0.0.0 feedback-pa.googleapis.com
+0.0.0.0 cloudtrace.googleapis.com
+0.0.0.0 clouderrorreporting.googleapis.com
+0.0.0.0 logging.googleapis.com
+0.0.0.0 monitoring.googleapis.com
+0.0.0.0 telemetry.google.com
+0.0.0.0 client-telemetry.google.com
+0.0.0.0 www.google-analytics.com
+0.0.0.0 google-analytics.com
+0.0.0.0 stats.g.doubleclick.net
+0.0.0.0 v1.telemetry.coder.com
+0.0.0.0 telemetry.code-server.com
+# <<< antigravity-telemetry-sinkhole <<<
+EOF
+    fi
+else
+    echo " ⚠️  Telemetry Blocking is DISABLED (BLOCK_TELEMETRY=false)"
+fi
+
+# 4. Export environment for developer
 export HOME="/home/${DEVELOPER_USER}"
 export PATH="/home/${DEVELOPER_USER}/.local/bin:/home/${DEVELOPER_USER}/.cargo/bin:/home/${DEVELOPER_USER}/.local/share/pnpm:${PATH}"
 
@@ -201,7 +239,7 @@ gosu "$DEVELOPER_USER" git config --global --add safe.directory "${WORKSPACE_DIR
 gosu "$DEVELOPER_USER" git config --global --add safe.directory "$GEMINI_DIR" 2>/dev/null || true
 gosu "$DEVELOPER_USER" git config --global --add safe.directory "$ANTIGRAVITY_DIR" 2>/dev/null || true
 
-# 4. Mode dispatch
+# 5. Mode dispatch
 case "$1" in
     setup)
         echo "==================================================================="
@@ -250,6 +288,7 @@ case "$1" in
 
         export AGY_PORT="${TARGET_PORT}"
         export AUTH_PASSWORD="${AUTH_PASSWORD:-}"
+        export BLOCK_TELEMETRY="${BLOCK_TELEMETRY}"
         export ENABLE_IDE="${ENABLE_IDE}"
         export ENABLE_TERMINAL="${ENABLE_TERMINAL}"
         export HOST_SSH_USER="${HOST_SSH_USER:-}"
