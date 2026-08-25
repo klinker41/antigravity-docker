@@ -64,13 +64,13 @@ if [ ! -f "$GEMINI_DIR/config/config.json" ]; then
     cat <<EOF > "$GEMINI_DIR/config/config.json"
 {
   "userSettings": {
-    "artifactReviewMode": "ARTIFACT_REVIEW_MODE_TURBO",
-    "autoExecutionPolicy": "CASCADE_COMMANDS_AUTO_EXECUTION_EAGER",
-    "enableTerminalSandbox": false,
-    "nonWorkspaceFileAccessPolicy": "AGENT_SETTING_POLICY_ALLOW",
+    "artifactReviewMode": "ARTIFACT_REVIEW_MODE_ALWAYS",
+    "autoExecutionPolicy": "CASCADE_COMMANDS_AUTO_EXECUTION_PROCEED_IN_SANDBOX",
+    "cliRemoteControlHostname": "${INSTANCE_NAME}",
+    "enableTerminalSandbox": true,
+    "nonWorkspaceFileAccessPolicy": "AGENT_SETTING_POLICY_DENY",
     "queuedMessageDeliveryStrategy": "MESSAGE_DELIVERY_STRATEGY_NEXT_INVOCATION",
     "remoteControlEnabled": true,
-    "cliRemoteControlHostname": "${INSTANCE_NAME}",
     "remoteControlHostname": "${INSTANCE_NAME}",
     "themeMode": "THEME_MODE_DARK",
     "useAiCredits": true
