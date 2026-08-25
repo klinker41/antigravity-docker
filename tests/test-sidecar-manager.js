@@ -125,16 +125,18 @@ test('Sidecar Manager - CRUD & Persistence', async (t) => {
         assert.ok(typeof logs === 'string');
     });
 
-    await t.test('resolves and injects ANTIGRAVITY_LS_ADDRESS into sidecar environment', async () => {
+    await t.test('resolves and injects ANTIGRAVITY_LS_ADDRESS and ANTIGRAVITY_CSRF_TOKEN into sidecar environment', async () => {
         sidecarManager.setLsAddress('127.0.0.1:45678');
+        sidecarManager.setCsrfToken('test-csrf-token-12345');
         assert.equal(sidecarManager.getLsAddress(), '127.0.0.1:45678');
+        assert.equal(await sidecarManager.getCsrfToken(), 'test-csrf-token-12345');
 
         const envTestId = 'test-env-bot';
         await sidecarManager.saveSidecar({
             id: envTestId,
             displayName: 'Env Test Bot',
             command: process.execPath,
-            args: ['-e', 'console.log("LS_ADDR=" + (process.env.ANTIGRAVITY_LS_ADDRESS || "NONE"))'],
+            args: ['-e', 'console.log("LS_ADDR=" + (process.env.ANTIGRAVITY_LS_ADDRESS || "NONE") + ",CSRF=" + (process.env.ANTIGRAVITY_CSRF_TOKEN || "NONE"))'],
             restartPolicy: 'never',
             enabled: true
         });
@@ -142,8 +144,29 @@ test('Sidecar Manager - CRUD & Persistence', async (t) => {
         await new Promise(r => setTimeout(r, 400));
         const logs = sidecarManager.getLogs(envTestId);
         assert.ok(logs.includes('LS_ADDR=127.0.0.1:45678'));
+        assert.ok(logs.includes('CSRF=test-csrf-token-12345'));
 
         await sidecarManager.deleteSidecar(envTestId);
+    });
+
+    await t.test('fetches CSRF token from language server root HTML endpoint', async () => {
+        // Spin up mock server returning HTML with CSRF token
+        const mockServer = http.createServer((req, res) => {
+            res.writeHead(200, { 'Content-Type': 'text/html' });
+            res.end('<!doctype html><html><head><script>window.__APP_CONFIG__ = {"productName":"antigravity-cli","csrfToken":"mock-server-csrf-abc","appVersion":"","devMode":false};</script></head><body></body></html>');
+        });
+
+        await new Promise(r => mockServer.listen(0, '127.0.0.1', r));
+        const mockPort = mockServer.address().port;
+
+        sidecarManager.csrfToken = null;
+        delete process.env.ANTIGRAVITY_CSRF_TOKEN;
+        try { fs.unlinkSync('/tmp/antigravity_csrf_token'); } catch (e) {}
+
+        const fetched = await sidecarManager.fetchCsrfFromAddress(`127.0.0.1:${mockPort}`);
+        assert.equal(fetched, 'mock-server-csrf-abc');
+
+        mockServer.close();
     });
 
     await t.test('lists registered projects', () => {

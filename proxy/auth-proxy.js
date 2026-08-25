@@ -2869,6 +2869,10 @@ const server = http.createServer(async (req, res) => {
                 });
                 proxyRes.on('end', () => {
                     let html = Buffer.concat(chunks).toString('utf8');
+                    const csrfMatch = html.match(/"csrfToken":"([^"]+)"/);
+                    if (csrfMatch && sidecarManager) {
+                        sidecarManager.setCsrfToken(csrfMatch[1]);
+                    }
                     const customScript = buildInjectedScript();
                     if (customScript) {
                         const injection = `<style>${INJECTED_UI_STYLES}</style><script id="agy-injected-tools-script">${customScript}</script>`;
@@ -3046,6 +3050,7 @@ function setTargetPort(port) {
     console.log(`[Proxy Gateway] 🔗 Bridged port ${LISTEN_PORT} -> http://127.0.0.1:${TARGET_PORT}`);
     if (sidecarManager) {
         sidecarManager.setLsAddress(`127.0.0.1:${TARGET_PORT}`);
+        sidecarManager.getCsrfToken().catch(() => {});
     }
 }
 

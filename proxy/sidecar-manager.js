@@ -1,5 +1,6 @@
 const fs = require('node:fs');
 const path = require('node:path');
+const http = require('node:http');
 const { spawn } = require('node:child_process');
 const EventEmitter = require('node:events');
 
@@ -163,6 +164,7 @@ class SidecarManager extends EventEmitter {
         this.schedulerInterval = null;
         this.lastCheckedMinute = -1;
         this.lsAddress = null;
+        this.csrfToken = null;
     }
 
     setLsAddress(address) {
@@ -170,6 +172,16 @@ class SidecarManager extends EventEmitter {
             const clean = address.replace(/^https?:\/\//, '');
             this.lsAddress = clean;
             process.env.ANTIGRAVITY_LS_ADDRESS = clean;
+        }
+    }
+
+    setCsrfToken(token) {
+        if (token && typeof token === 'string') {
+            this.csrfToken = token.trim();
+            process.env.ANTIGRAVITY_CSRF_TOKEN = this.csrfToken;
+            try {
+                fs.writeFileSync('/tmp/antigravity_csrf_token', this.csrfToken, 'utf8');
+            } catch (e) {}
         }
     }
 
@@ -223,6 +235,58 @@ class SidecarManager extends EventEmitter {
         }
 
         return '';
+    }
+
+    async getCsrfToken() {
+        if (this.csrfToken) return this.csrfToken;
+        if (process.env.ANTIGRAVITY_CSRF_TOKEN) return process.env.ANTIGRAVITY_CSRF_TOKEN;
+
+        // Check /tmp/antigravity_csrf_token
+        const csrfFile = '/tmp/antigravity_csrf_token';
+        if (fs.existsSync(csrfFile)) {
+            try {
+                const token = fs.readFileSync(csrfFile, 'utf8').trim();
+                if (token) {
+                    this.csrfToken = token;
+                    return token;
+                }
+            } catch (e) {}
+        }
+
+        const lsAddress = this.getLsAddress();
+        if (lsAddress) {
+            const token = await this.fetchCsrfFromAddress(lsAddress);
+            if (token) {
+                this.setCsrfToken(token);
+                return token;
+            }
+        }
+
+        return '';
+    }
+
+    fetchCsrfFromAddress(lsAddress) {
+        return new Promise((resolve) => {
+            if (!lsAddress) return resolve('');
+            const [host, port] = lsAddress.split(':');
+            const req = http.request({
+                hostname: host || '127.0.0.1',
+                port: parseInt(port, 10),
+                path: '/',
+                method: 'GET',
+                timeout: 2000
+            }, (res) => {
+                let body = '';
+                res.on('data', chunk => body += chunk);
+                res.on('end', () => {
+                    const match = body.match(/"csrfToken":"([^"]+)"/);
+                    resolve(match ? match[1] : '');
+                });
+            });
+            req.on('error', () => resolve(''));
+            req.on('timeout', () => { req.destroy(); resolve(''); });
+            req.end();
+        });
     }
 
     /**
@@ -590,7 +654,7 @@ class SidecarManager extends EventEmitter {
     /**
      * Starts a continuous background worker process.
      */
-    startWorker(sidecar) {
+    async startWorker(sidecar) {
         if (!sidecar || !sidecar.command) return;
         const id = sidecar.id;
         this.stopWorker(id);
@@ -605,6 +669,7 @@ class SidecarManager extends EventEmitter {
         const logStream = fs.createWriteStream(logFile, { flags: 'a' });
 
         const lsAddress = this.getLsAddress();
+        const csrfToken = await this.getCsrfToken();
         const env = {
             ...process.env,
             ...sidecar.env,
@@ -615,6 +680,9 @@ class SidecarManager extends EventEmitter {
         };
         if (lsAddress && !env.ANTIGRAVITY_LS_ADDRESS) {
             env.ANTIGRAVITY_LS_ADDRESS = lsAddress;
+        }
+        if (csrfToken && !env.ANTIGRAVITY_CSRF_TOKEN) {
+            env.ANTIGRAVITY_CSRF_TOKEN = csrfToken;
         }
         if (sidecar.projectId) {
             env.PROJECT_ID = sidecar.projectId;
@@ -761,6 +829,7 @@ class SidecarManager extends EventEmitter {
         const logStream = fs.createWriteStream(logFile, { flags: 'w' });
 
         const lsAddress = this.getLsAddress();
+        const csrfToken = await this.getCsrfToken();
         const env = {
             ...process.env,
             ...sidecar.env,
@@ -771,6 +840,9 @@ class SidecarManager extends EventEmitter {
         };
         if (lsAddress && !env.ANTIGRAVITY_LS_ADDRESS) {
             env.ANTIGRAVITY_LS_ADDRESS = lsAddress;
+        }
+        if (csrfToken && !env.ANTIGRAVITY_CSRF_TOKEN) {
+            env.ANTIGRAVITY_CSRF_TOKEN = csrfToken;
         }
         if (sidecar.projectId) {
             env.PROJECT_ID = sidecar.projectId;
