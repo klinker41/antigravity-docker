@@ -125,6 +125,27 @@ test('Sidecar Manager - CRUD & Persistence', async (t) => {
         assert.ok(typeof logs === 'string');
     });
 
+    await t.test('resolves and injects ANTIGRAVITY_LS_ADDRESS into sidecar environment', async () => {
+        sidecarManager.setLsAddress('127.0.0.1:45678');
+        assert.equal(sidecarManager.getLsAddress(), '127.0.0.1:45678');
+
+        const envTestId = 'test-env-bot';
+        await sidecarManager.saveSidecar({
+            id: envTestId,
+            displayName: 'Env Test Bot',
+            command: process.execPath,
+            args: ['-e', 'console.log("LS_ADDR=" + (process.env.ANTIGRAVITY_LS_ADDRESS || "NONE"))'],
+            restartPolicy: 'never',
+            enabled: true
+        });
+
+        await new Promise(r => setTimeout(r, 400));
+        const logs = sidecarManager.getLogs(envTestId);
+        assert.ok(logs.includes('LS_ADDR=127.0.0.1:45678'));
+
+        await sidecarManager.deleteSidecar(envTestId);
+    });
+
     await t.test('lists registered projects', () => {
         const projects = sidecarManager.listProjects();
         assert.ok(Array.isArray(projects));

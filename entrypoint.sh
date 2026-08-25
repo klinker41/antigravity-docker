@@ -327,6 +327,7 @@ case "$1" in
                 detected_port="${BASH_REMATCH[2]}"
                 if [ -n "$detected_port" ]; then
                     echo "$detected_port" > /tmp/antigravity_port
+                    echo "127.0.0.1:$detected_port" > /tmp/antigravity_ls_address
                 fi
             fi
         done

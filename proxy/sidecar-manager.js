@@ -162,6 +162,67 @@ class SidecarManager extends EventEmitter {
         this.scheduledJobs = new Map();  // id -> { cronExpr, lastRun, nextRun, lastResult }
         this.schedulerInterval = null;
         this.lastCheckedMinute = -1;
+        this.lsAddress = null;
+    }
+
+    setLsAddress(address) {
+        if (address && typeof address === 'string') {
+            const clean = address.replace(/^https?:\/\//, '');
+            this.lsAddress = clean;
+            process.env.ANTIGRAVITY_LS_ADDRESS = clean;
+        }
+    }
+
+    getLsAddress() {
+        if (this.lsAddress) return this.lsAddress;
+        if (process.env.ANTIGRAVITY_LS_ADDRESS) return process.env.ANTIGRAVITY_LS_ADDRESS;
+
+        // Check /tmp/antigravity_ls_address
+        const lsFile = '/tmp/antigravity_ls_address';
+        if (fs.existsSync(lsFile)) {
+            try {
+                const addr = fs.readFileSync(lsFile, 'utf8').trim();
+                if (addr) {
+                    this.lsAddress = addr;
+                    return addr;
+                }
+            } catch (e) {}
+        }
+
+        // Check /tmp/antigravity_port
+        const portFile = process.env.PORT_FILE || '/tmp/antigravity_port';
+        if (fs.existsSync(portFile)) {
+            try {
+                const port = fs.readFileSync(portFile, 'utf8').trim();
+                if (port && /^\d+$/.test(port)) {
+                    const addr = `127.0.0.1:${port}`;
+                    this.lsAddress = addr;
+                    return addr;
+                }
+            } catch (e) {}
+        }
+
+        // Check cli.log or /tmp/cli.log
+        const possibleLogs = [
+            path.join(HOME_DIR, '.gemini/antigravity-cli/cli.log'),
+            '/tmp/cli.log'
+        ];
+        for (const logPath of possibleLogs) {
+            if (fs.existsSync(logPath)) {
+                try {
+                    const content = fs.readFileSync(logPath, 'utf8').slice(0, 8192);
+                    const match = content.match(/listening on random port at (\d+) for HTTP\s*$/m) ||
+                                  content.match(/(?:http:\/\/localhost:|http:\/\/127\.0\.0\.1:)(\d+)/i);
+                    if (match && match[1]) {
+                        const addr = `127.0.0.1:${match[1]}`;
+                        this.lsAddress = addr;
+                        return addr;
+                    }
+                } catch (e) {}
+            }
+        }
+
+        return '';
     }
 
     /**
@@ -543,13 +604,18 @@ class SidecarManager extends EventEmitter {
         const logFile = path.join(logsDir, 'worker.log');
         const logStream = fs.createWriteStream(logFile, { flags: 'a' });
 
+        const lsAddress = this.getLsAddress();
         const env = {
             ...process.env,
             ...sidecar.env,
             HOME: HOME_DIR,
             ANTIGRAVITY_EXECUTABLE_DATA_DIR: dataDir,
+            ANTIGRAVITY_AGENTAPI_EXE: path.join(LOCAL_BIN_DIR, 'agy'),
             PATH: `${AGY_BIN_DIR}:${LOCAL_BIN_DIR}:${process.env.PATH || ''}`
         };
+        if (lsAddress && !env.ANTIGRAVITY_LS_ADDRESS) {
+            env.ANTIGRAVITY_LS_ADDRESS = lsAddress;
+        }
         if (sidecar.projectId) {
             env.PROJECT_ID = sidecar.projectId;
             env.AGY_PROJECT_ID = sidecar.projectId;
@@ -694,13 +760,18 @@ class SidecarManager extends EventEmitter {
         const latestLogFile = path.join(logsDir, 'latest.log');
         const logStream = fs.createWriteStream(logFile, { flags: 'w' });
 
+        const lsAddress = this.getLsAddress();
         const env = {
             ...process.env,
             ...sidecar.env,
             HOME: HOME_DIR,
             ANTIGRAVITY_EXECUTABLE_DATA_DIR: dataDir,
+            ANTIGRAVITY_AGENTAPI_EXE: path.join(LOCAL_BIN_DIR, 'agy'),
             PATH: `${AGY_BIN_DIR}:${LOCAL_BIN_DIR}:${process.env.PATH || ''}`
         };
+        if (lsAddress && !env.ANTIGRAVITY_LS_ADDRESS) {
+            env.ANTIGRAVITY_LS_ADDRESS = lsAddress;
+        }
         if (sidecar.projectId) {
             env.PROJECT_ID = sidecar.projectId;
             env.AGY_PROJECT_ID = sidecar.projectId;

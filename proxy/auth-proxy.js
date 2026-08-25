@@ -3044,6 +3044,9 @@ server.on('upgrade', (req, clientSocket, head) => {
 function setTargetPort(port) {
     TARGET_PORT = parseInt(port, 10);
     console.log(`[Proxy Gateway] 🔗 Bridged port ${LISTEN_PORT} -> http://127.0.0.1:${TARGET_PORT}`);
+    if (sidecarManager) {
+        sidecarManager.setLsAddress(`127.0.0.1:${TARGET_PORT}`);
+    }
 }
 
 // Watch port file and logs for dynamic port detection
