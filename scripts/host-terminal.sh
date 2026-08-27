@@ -75,9 +75,10 @@ if ssh -n -o BatchMode=yes -o ConnectTimeout=3 "${BASE_SSH_OPTS[@]}" "${HOST_USE
 else
     KEY_COUNT=${#IDENTITY_ARGS[@]}
     if [ "$KEY_COUNT" -eq 0 ]; then
-        echo -e "\033[1;33m⚠️  No SSH private keys found in mounted ~/.ssh directory.\033[0m"
-        echo -e " Mount your host SSH directory in docker-compose.yml:"
-        echo -e "   \033[0;37m- ~/.ssh:/home/developer/.ssh:ro\033[0m"
+        echo -e "\033[1;33m⚠️  No SSH private keys found in ~/.ssh directory.\033[0m"
+        echo -e " Ensure a persistent SSH volume is mounted (e.g. \033[0;37m./data/ssh:/home/developer/.ssh\033[0m)"
+        echo -e " and generate a dedicated key inside the container:"
+        echo -e "   \033[1;36mssh-keygen -t ed25519 -f /home/developer/.ssh/id_ed25519\033[0m"
     else
         echo -e "\033[1;33m⚠️  Key authentication failed (${KEY_COUNT} private key(s) checked).\033[0m"
         echo -e " Public key(s) currently present in container:"
@@ -101,7 +102,7 @@ else
         echo -e "\033[1;31m===================================================================\033[0m"
         echo -e " Troubleshooting Tips:"
         echo -e "  1. Ensure SSH server (sshd) is running on ${HOST_ADDR}:${HOST_PORT}."
-        echo -e "  2. Ensure your host SSH public key is in ~/.ssh/authorized_keys on the host."
+        echo -e "  2. Ensure the container's public key is added to ~/.ssh/authorized_keys on the host."
         echo -e "  3. Check permissions on host: chmod 700 ~/.ssh && chmod 600 ~/.ssh/authorized_keys."
         echo ""
         read -p "Press Enter to start an internal container bash shell, or Ctrl+C to close: " _

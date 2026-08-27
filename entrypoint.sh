@@ -190,6 +190,42 @@ if [ "$(stat -c '%u' "$WORKSPACE_DIR" 2>/dev/null)" = "0" ]; then
     chown ${DEVELOPER_USER}:${DEVELOPER_USER} "$WORKSPACE_DIR" || true
 fi
 
+# Configure SSH directory, permissions, and client defaults
+SSH_DIR="/home/${DEVELOPER_USER}/.ssh"
+mkdir -p "$SSH_DIR"
+chown -R ${DEVELOPER_USER}:${DEVELOPER_USER} "$SSH_DIR"
+chmod 700 "$SSH_DIR"
+
+# Enforce strict permissions for SSH keys, configs, and known_hosts
+if [ -d "$SSH_DIR" ]; then
+    chmod 600 "$SSH_DIR"/id_* "$SSH_DIR"/*.pem "$SSH_DIR"/*.key 2>/dev/null || true
+    chmod 644 "$SSH_DIR"/*.pub "$SSH_DIR"/known_hosts "$SSH_DIR"/config 2>/dev/null || true
+fi
+
+# Ensure default SSH client config exists with accept-new host key policy
+if [ ! -f "$SSH_DIR/config" ]; then
+    cat <<EOF > "$SSH_DIR/config"
+Host *
+    StrictHostKeyChecking accept-new
+EOF
+    chown ${DEVELOPER_USER}:${DEVELOPER_USER} "$SSH_DIR/config"
+    chmod 644 "$SSH_DIR/config"
+fi
+
+# Seed common Git host keys into known_hosts if missing
+if [ ! -f "$SSH_DIR/known_hosts" ] || ! grep -q "github.com" "$SSH_DIR/known_hosts" 2>/dev/null; then
+    ssh-keyscan -t ed25519,rsa github.com >> "$SSH_DIR/known_hosts" 2>/dev/null || true
+    ssh-keyscan -t ed25519,rsa gitlab.com >> "$SSH_DIR/known_hosts" 2>/dev/null || true
+    chown ${DEVELOPER_USER}:${DEVELOPER_USER} "$SSH_DIR/known_hosts" 2>/dev/null || true
+    chmod 644 "$SSH_DIR/known_hosts" 2>/dev/null || true
+fi
+
+# Ensure developer ownership for .gitconfig if present
+GITCONFIG_FILE="/home/${DEVELOPER_USER}/.gitconfig"
+if [ -e "$GITCONFIG_FILE" ]; then
+    chown ${DEVELOPER_USER}:${DEVELOPER_USER} "$GITCONFIG_FILE" 2>/dev/null || true
+fi
+
 # Set umask so newly created files and directories inside mounted volumes are group readable/writable
 umask 0002
 

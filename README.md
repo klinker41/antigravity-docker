@@ -40,8 +40,8 @@ services:
     volumes:
       - <location-of-projects>:/workspace
       - <location-of-config>:/home/developer/.gemini
-      - <home-folder>/.gitconfig:/home/developer/.gitconfig:ro
-      - <home-folder>/.ssh:/home/developer/.ssh:ro
+      - <location-of-ssh>:/home/developer/.ssh
+      - <location-of-gitconfig>:/home/developer/.gitconfig
 ```
 
 ---
@@ -71,8 +71,8 @@ services:
 | :--- | :--- | :--- |
 | `<location-of-projects>` | `/workspace` | Host directory where your Git repositories and codebases live. |
 | `<location-of-config>` | `/home/developer/.gemini` | Host directory where Antigravity OAuth tokens, project configs, and sidecar definitions persist. |
-| `<home-folder>/.gitconfig` | `/home/developer/.gitconfig:ro` | *(Optional)* Mounts host Git configuration for authenticated commits. |
-| `<home-folder>/.ssh` | `/home/developer/.ssh:ro` | *(Required for Host Terminal & Git)* Mounts host SSH keys for private Git operations and host shell terminal access. |
+| `<location-of-ssh>` | `/home/developer/.ssh` | *(Recommended)* Host directory persisting container-dedicated SSH keys and configs. |
+| `<location-of-gitconfig>` | `/home/developer/.gitconfig` | *(Optional)* Host file persisting container Git configuration. |
 
 ---
 
@@ -102,6 +102,33 @@ docker run -it --rm \
 ```bash
 docker compose up -d
 ```
+
+### Step 3: Configure Dedicated SSH Keys & Git Identity (Recommended)
+To keep your container isolated from host credentials, generate dedicated SSH
+keys and Git identity inside the container:
+
+**1. Generate dedicated SSH keypair:**
+```bash
+docker compose exec antigravity ssh-keygen -t ed25519 -C "antigravity-container" -f /home/developer/.ssh/id_ed25519 -N ""
+```
+
+**2. Configure Git identity:**
+```bash
+docker compose exec antigravity git config --global user.name "Your Name"
+docker compose exec antigravity git config --global user.email "your.email@example.com"
+```
+
+**3. Authorize public key:**
+Display the generated public key:
+```bash
+docker compose exec antigravity cat /home/developer/.ssh/id_ed25519.pub
+```
+- **For GitHub / GitLab**: Add this public key under **Settings → SSH and GPG
+  keys** (or as a repository **Deploy Key** with write access).
+- **For Host Web Terminal**: If `ENABLE_TERMINAL=true` is enabled to run
+  commands on the host machine, append the public key to your host's
+  `~/.ssh/authorized_keys` (on Unraid, save to
+  `/boot/config/ssh/root/authorized_keys` to persist across reboots).
 
 ---
 
@@ -154,13 +181,15 @@ Antigravity UI or navigating directly to `/sidecars`.
 ## 🛡️ Privacy & Telemetry Management
 
 By default, `BLOCK_TELEMETRY=true` is enabled to prevent usage telemetry,
-analytics, and diagnostic tracking from being sent back to Google while keeping
-core agent capabilities, Gemini model APIs, and authentication fully operational.
+analytics, and diagnostic tracking from being sent back to Google while
+keeping core agent capabilities, Gemini model APIs, and authentication fully
+operational.
 
 ### How it Works:
-- **In-Container DNS Sinkholing**: Telemetry hostnames are sinkholed to `0.0.0.0`
-  directly inside the container (`/etc/hosts`), resulting in immediate socket
-  rejection (`ECONNREFUSED`) with zero DNS lookup or request timeout latency.
+- **In-Container DNS Sinkholing**: Telemetry hostnames are sinkholed to
+  `0.0.0.0` directly inside the container (`/etc/hosts`), resulting in
+  immediate socket rejection (`ECONNREFUSED`) with zero DNS lookup or request
+  timeout latency.
 - **Environment Opt-Outs**: Automatically exports `DO_NOT_TRACK=1`,
   `OTEL_SDK_DISABLED=true`, `OTEL_TRACES_EXPORTER=none`,
   `OTEL_METRICS_EXPORTER=none`, and `OTEL_LOGS_EXPORTER=none`.

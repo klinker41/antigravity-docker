@@ -25,5 +25,5 @@ services:
     volumes:
       - ./workspace:/workspace
       - ./data/gemini:/home/developer/.gemini
-      - ~/.gitconfig:/home/developer/.gitconfig:ro
-      - ~/.ssh:/home/developer/.ssh:ro
+      - ./data/ssh:/home/developer/.ssh
+      - ./data/gitconfig:/home/developer/.gitconfig
