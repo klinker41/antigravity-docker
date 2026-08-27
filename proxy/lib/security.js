@@ -38,7 +38,6 @@ function readRequestBody(req, maxBytes = 64 * 1024) {
                 exceeded = true;
                 req.removeListener('data', onData);
                 req.removeListener('end', onEnd);
-                req.removeListener('error', onError);
                 req.resume(); // drain incoming data to avoid hanging socket
                 reject(new Error('Payload Too Large'));
                 return;
