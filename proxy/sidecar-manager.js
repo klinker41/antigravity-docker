@@ -15,6 +15,42 @@ const AGY_BIN_DIR = path.join(HOME_DIR, '.gemini/antigravity-cli/bin');
 const LOCAL_BIN_DIR = path.join(HOME_DIR, '.local/bin');
 
 /**
+ * Strict ID sanitization ensuring no path traversal or dangerous characters.
+ */
+function sanitizeSidecarId(rawId) {
+    if (!rawId || typeof rawId !== 'string') {
+        throw new Error('Sidecar ID must be a non-empty string.');
+    }
+    const trimmed = rawId.trim();
+    if (trimmed.includes('..') || trimmed.startsWith('/') || trimmed.endsWith('/')) {
+        throw new Error('Invalid Sidecar ID: path traversal elements are not allowed.');
+    }
+    const segments = trimmed.split('/');
+    if (segments.length > 2) {
+        throw new Error('Invalid Sidecar ID: nested directory hierarchies are not allowed.');
+    }
+    for (const seg of segments) {
+        if (!/^[a-zA-Z0-9_-]+$/.test(seg)) {
+            throw new Error(`Invalid Sidecar ID segment '${seg}': only alphanumeric characters, underscores, and hyphens are allowed.`);
+        }
+    }
+    return trimmed;
+}
+
+/**
+ * Resolves a subpath safely within a base directory, verifying no traversal outside.
+ */
+function resolveSecureSubpath(baseDir, id, subDir = '') {
+    const safeId = sanitizeSidecarId(id);
+    const target = subDir ? path.resolve(baseDir, safeId, subDir) : path.resolve(baseDir, safeId);
+    const normalizedBase = path.resolve(baseDir);
+    if (!target.startsWith(normalizedBase + path.sep) && target !== normalizedBase) {
+        throw new Error('Security Error: Target path resolved outside base directory.');
+    }
+    return target;
+}
+
+/**
  * Parses a single field in a 5-field cron expression.
  * Returns a Set of allowed integer values within [min, max].
  */
@@ -180,7 +216,9 @@ class SidecarManager extends EventEmitter {
             this.csrfToken = token.trim();
             process.env.ANTIGRAVITY_CSRF_TOKEN = this.csrfToken;
             try {
-                fs.writeFileSync('/tmp/antigravity_csrf_token', this.csrfToken, 'utf8');
+                this.ensureDirectories();
+                const secureCsrfFile = path.join(RUNTIME_DATA_DIR, 'csrf_token');
+                fs.writeFileSync(secureCsrfFile, this.csrfToken, { encoding: 'utf8', mode: 0o600 });
             } catch (e) {}
         }
     }
@@ -188,6 +226,18 @@ class SidecarManager extends EventEmitter {
     getLsAddress() {
         if (this.lsAddress) return this.lsAddress;
         if (process.env.ANTIGRAVITY_LS_ADDRESS) return process.env.ANTIGRAVITY_LS_ADDRESS;
+
+        // Check secure ls address file first
+        const secureLsFile = path.join(RUNTIME_DATA_DIR, 'ls_address');
+        if (fs.existsSync(secureLsFile)) {
+            try {
+                const addr = fs.readFileSync(secureLsFile, 'utf8').trim();
+                if (addr) {
+                    this.lsAddress = addr;
+                    return addr;
+                }
+            } catch (e) {}
+        }
 
         // Check /tmp/antigravity_ls_address
         const lsFile = '/tmp/antigravity_ls_address';
@@ -241,7 +291,19 @@ class SidecarManager extends EventEmitter {
         if (this.csrfToken) return this.csrfToken;
         if (process.env.ANTIGRAVITY_CSRF_TOKEN) return process.env.ANTIGRAVITY_CSRF_TOKEN;
 
-        // Check /tmp/antigravity_csrf_token
+        // Check secure csrf token file in runtime data dir
+        const secureCsrfFile = path.join(RUNTIME_DATA_DIR, 'csrf_token');
+        if (fs.existsSync(secureCsrfFile)) {
+            try {
+                const token = fs.readFileSync(secureCsrfFile, 'utf8').trim();
+                if (token) {
+                    this.csrfToken = token;
+                    return token;
+                }
+            } catch (e) {}
+        }
+
+        // Fallback check /tmp/antigravity_csrf_token
         const csrfFile = '/tmp/antigravity_csrf_token';
         if (fs.existsSync(csrfFile)) {
             try {
@@ -500,10 +562,9 @@ class SidecarManager extends EventEmitter {
      */
     async saveSidecar(data) {
         if (!data || !data.id) throw new Error('Sidecar ID is required.');
-        const rawId = String(data.id).trim();
-        const id = rawId.replace(/[^a-zA-Z0-9_\-\/]/g, '-');
+        const id = sanitizeSidecarId(data.id);
 
-        const dirPath = path.join(SIDECARS_DIR, id);
+        const dirPath = resolveSecureSubpath(SIDECARS_DIR, id);
         fs.mkdirSync(dirPath, { recursive: true });
 
         const sidecarJson = {
@@ -556,31 +617,33 @@ class SidecarManager extends EventEmitter {
      * Toggles a sidecar's enabled state in config.json.
      */
     async toggleSidecar(id, enabled) {
+        const cleanId = sanitizeSidecarId(id);
         const config = this.readConfig();
         if (!config.sidecars) config.sidecars = {};
-        if (!config.sidecars[id]) config.sidecars[id] = {};
+        if (!config.sidecars[cleanId]) config.sidecars[cleanId] = {};
 
-        config.sidecars[id].enabled = Boolean(enabled);
+        config.sidecars[cleanId].enabled = Boolean(enabled);
         this.writeConfig(config);
 
-        console.log(`[Sidecar Manager] 🔄 Toggled sidecar '${id}' -> ${enabled ? 'ENABLED' : 'DISABLED'}`);
-        await this.syncSidecarState(id);
-        return this.getSidecar(id);
+        console.log(`[Sidecar Manager] 🔄 Toggled sidecar '${cleanId}' -> ${enabled ? 'ENABLED' : 'DISABLED'}`);
+        await this.syncSidecarState(cleanId);
+        return this.getSidecar(cleanId);
     }
 
     /**
      * Deletes a sidecar directory and removes it from config.json.
      */
     async deleteSidecar(id) {
-        this.stopSidecar(id);
+        const cleanId = sanitizeSidecarId(id);
+        this.stopSidecar(cleanId);
 
         const config = this.readConfig();
-        if (config.sidecars && config.sidecars[id]) {
-            delete config.sidecars[id];
+        if (config.sidecars && config.sidecars[cleanId]) {
+            delete config.sidecars[cleanId];
             this.writeConfig(config);
         }
 
-        const dirPath = path.join(SIDECARS_DIR, id);
+        const dirPath = resolveSecureSubpath(SIDECARS_DIR, cleanId);
         if (fs.existsSync(dirPath)) {
             try {
                 fs.rmSync(dirPath, { recursive: true, force: true });
@@ -589,7 +652,7 @@ class SidecarManager extends EventEmitter {
             }
         }
 
-        console.log(`[Sidecar Manager] 🗑️  Deleted sidecar '${id}'`);
+        console.log(`[Sidecar Manager] 🗑️  Deleted sidecar '${cleanId}'`);
         return true;
     }
 
@@ -656,12 +719,12 @@ class SidecarManager extends EventEmitter {
      */
     async startWorker(sidecar) {
         if (!sidecar || !sidecar.command) return;
-        const id = sidecar.id;
+        const id = sanitizeSidecarId(sidecar.id);
         this.stopWorker(id);
 
-        const sidecarDir = path.join(SIDECARS_DIR, id);
-        const dataDir = path.join(RUNTIME_DATA_DIR, id, 'data');
-        const logsDir = path.join(RUNTIME_DATA_DIR, id, 'logs');
+        const sidecarDir = resolveSecureSubpath(SIDECARS_DIR, id);
+        const dataDir = resolveSecureSubpath(RUNTIME_DATA_DIR, id, 'data');
+        const logsDir = resolveSecureSubpath(RUNTIME_DATA_DIR, id, 'logs');
         fs.mkdirSync(dataDir, { recursive: true });
         fs.mkdirSync(logsDir, { recursive: true });
 
@@ -754,7 +817,8 @@ class SidecarManager extends EventEmitter {
      * Stops a running worker process.
      */
     stopWorker(id) {
-        const worker = this.runningWorkers.get(id);
+        const cleanId = sanitizeSidecarId(id);
+        const worker = this.runningWorkers.get(cleanId);
         if (worker) {
             if (worker.timer) clearTimeout(worker.timer);
             if (worker.process && !worker.process.killed) {
@@ -767,8 +831,8 @@ class SidecarManager extends EventEmitter {
                     }, 2000);
                 } catch (e) {}
             }
-            this.runningWorkers.delete(id);
-            console.log(`[Sidecar Manager] ⏹️  Stopped worker '${id}'`);
+            this.runningWorkers.delete(cleanId);
+            console.log(`[Sidecar Manager] ⏹️  Stopped worker '${cleanId}'`);
         }
     }
 
@@ -776,8 +840,9 @@ class SidecarManager extends EventEmitter {
      * Stops any worker or scheduled job for a sidecar.
      */
     stopSidecar(id) {
-        this.stopWorker(id);
-        this.scheduledJobs.delete(id);
+        const cleanId = sanitizeSidecarId(id);
+        this.stopWorker(cleanId);
+        this.scheduledJobs.delete(cleanId);
     }
 
     /**
@@ -806,7 +871,7 @@ class SidecarManager extends EventEmitter {
      * Executes a scheduled sidecar task (command or agentapi prompt).
      */
     async executeScheduledJob(sidecar) {
-        const id = sidecar.id;
+        const id = sanitizeSidecarId(sidecar.id);
         const args = sidecar.args || [];
         if (args.length < 2) {
             console.warn(`[Sidecar Manager] ⚠️ Scheduled sidecar '${id}' has insufficient arguments:`, args);
@@ -815,10 +880,10 @@ class SidecarManager extends EventEmitter {
 
         const execCommand = args[1];
         const execArgs = args.slice(2);
-        const sidecarDir = path.join(SIDECARS_DIR, id);
-        const dataDir = path.join(RUNTIME_DATA_DIR, id, 'data');
-        const logsDir = path.join(RUNTIME_DATA_DIR, id, 'logs');
-        const eventsDir = path.join(RUNTIME_DATA_DIR, id, 'events');
+        const sidecarDir = resolveSecureSubpath(SIDECARS_DIR, id);
+        const dataDir = resolveSecureSubpath(RUNTIME_DATA_DIR, id, 'data');
+        const logsDir = resolveSecureSubpath(RUNTIME_DATA_DIR, id, 'logs');
+        const eventsDir = resolveSecureSubpath(RUNTIME_DATA_DIR, id, 'events');
         fs.mkdirSync(dataDir, { recursive: true });
         fs.mkdirSync(logsDir, { recursive: true });
         fs.mkdirSync(eventsDir, { recursive: true });
@@ -901,16 +966,17 @@ class SidecarManager extends EventEmitter {
      * Manually triggers an immediate execution of a sidecar.
      */
     async triggerSidecar(id) {
-        const sidecar = this.getSidecar(id);
-        if (!sidecar) throw new Error(`Sidecar '${id}' not found.`);
+        const cleanId = sanitizeSidecarId(id);
+        const sidecar = this.getSidecar(cleanId);
+        if (!sidecar) throw new Error(`Sidecar '${cleanId}' not found.`);
 
-        console.log(`[Sidecar Manager] ⚡ Manual trigger requested for '${id}'`);
+        console.log(`[Sidecar Manager] ⚡ Manual trigger requested for '${cleanId}'`);
         if (sidecar.isScheduled) {
             await this.executeScheduledJob(sidecar);
-            return { message: `Triggered scheduled job for '${id}'` };
+            return { message: `Triggered scheduled job for '${cleanId}'` };
         } else {
             this.startWorker(sidecar);
-            return { message: `Restarted worker '${id}'` };
+            return { message: `Restarted worker '${cleanId}'` };
         }
     }
 
@@ -918,10 +984,11 @@ class SidecarManager extends EventEmitter {
      * Reads recent log entries for a sidecar.
      */
     getLogs(id) {
-        const logsDir = path.join(RUNTIME_DATA_DIR, id, 'logs');
-        if (!fs.existsSync(logsDir)) return 'No logs recorded yet.';
-
         try {
+            const cleanId = sanitizeSidecarId(id);
+            const logsDir = resolveSecureSubpath(RUNTIME_DATA_DIR, cleanId, 'logs');
+            if (!fs.existsSync(logsDir)) return 'No logs recorded yet.';
+
             const files = fs.readdirSync(logsDir)
                 .filter(f => f.endsWith('.log'))
                 .sort()
@@ -930,7 +997,8 @@ class SidecarManager extends EventEmitter {
             if (files.length === 0) return 'No logs recorded yet.';
 
             const targetFile = files.includes('latest.log') ? 'latest.log' : (files.includes('worker.log') ? 'worker.log' : files[0]);
-            const fullPath = path.join(logsDir, targetFile);
+            const cleanTargetFile = path.basename(targetFile);
+            const fullPath = path.join(logsDir, cleanTargetFile);
             const content = fs.readFileSync(fullPath, 'utf8');
             return content.slice(-16384) || 'Log file is empty.';
         } catch (e) {
@@ -944,5 +1012,7 @@ instance.parseCronField = parseCronField;
 instance.matchesCron = matchesCron;
 instance.describeCron = describeCron;
 instance.getNextCronRun = getNextCronRun;
+instance.sanitizeSidecarId = sanitizeSidecarId;
+instance.resolveSecureSubpath = resolveSecureSubpath;
 
 module.exports = instance;

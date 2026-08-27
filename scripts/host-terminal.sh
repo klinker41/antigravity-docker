@@ -9,9 +9,14 @@ HOST_ADDR="${HOST_SSH_HOST:-host.docker.internal}"
 HOST_PORT="${HOST_SSH_PORT:-22}"
 HOST_DIR="${HOST_SSH_DIR:-}"
 
-# Remote command to run upon login
+# Remote command to run upon login with safe path escaping
 if [ -n "$HOST_DIR" ]; then
-    REMOTE_SHELL_CMD="cd '$HOST_DIR' 2>/dev/null || true; exec \${SHELL:-/bin/bash} -l"
+    if [[ "$HOST_DIR" =~ [[:cntrl:]] ]]; then
+        echo "Error: Invalid HOST_SSH_DIR containing control characters." >&2
+        exit 1
+    fi
+    SAFE_HOST_DIR=$(printf '%q' "$HOST_DIR")
+    REMOTE_SHELL_CMD="cd ${SAFE_HOST_DIR} 2>/dev/null || true; exec \${SHELL:-/bin/bash} -l"
 else
     REMOTE_SHELL_CMD="exec \${SHELL:-/bin/bash} -l"
 fi
@@ -39,15 +44,16 @@ fi
 echo -e "\033[1;34m-------------------------------------------------------------------\033[0m"
 
 # Prepare secure runtime SSH directory to fix any read-only volume permission issues
-SSH_RUNTIME_DIR="/tmp/.ssh_runtime_$$"
-mkdir -p "$SSH_RUNTIME_DIR"
+SSH_RUNTIME_DIR=$(mktemp -d /tmp/.ssh_runtime_XXXXXX)
 chmod 700 "$SSH_RUNTIME_DIR"
+trap 'rm -rf "$SSH_RUNTIME_DIR"' EXIT INT TERM
 
 IDENTITY_ARGS=()
+KNOWN_HOSTS_FILE="/home/developer/.ssh/known_hosts"
 
 if [ -d "/home/developer/.ssh" ]; then
     # Copy keys to runtime dir to guarantee strict 0600 permissions
-    cp -r /home/developer/.ssh/* "$SSH_RUNTIME_DIR/" 2>/dev/null || true
+    cp -L /home/developer/.ssh/* "$SSH_RUNTIME_DIR/" 2>/dev/null || true
     chmod 700 "$SSH_RUNTIME_DIR" 2>/dev/null || true
     chmod 600 "$SSH_RUNTIME_DIR"/* 2>/dev/null || true
     chmod 644 "$SSH_RUNTIME_DIR"/*.pub "$SSH_RUNTIME_DIR"/known_hosts 2>/dev/null || true
@@ -59,10 +65,10 @@ if [ -d "/home/developer/.ssh" ]; then
     done
 fi
 
-# Base SSH Options
+# Base SSH Options with strict host key checking accept-new
 BASE_SSH_OPTS=(
-    -o StrictHostKeyChecking=no
-    -o UserKnownHostsFile=/dev/null
+    -o StrictHostKeyChecking=accept-new
+    -o UserKnownHostsFile="${SSH_RUNTIME_DIR}/known_hosts"
     -p "$HOST_PORT"
     "${IDENTITY_ARGS[@]}"
 )

@@ -12,7 +12,7 @@ services:
       - PGID=1000
       - RC_NAME=server-agent
       - AGY_PORT=4400
-      - AUTH_PASSWORD=changeme
+      - AUTH_PASSWORD=${AUTH_PASSWORD:-}
       - BLOCK_TELEMETRY=true
       - ENABLE_IDE=true
       - ENABLE_TERMINAL=true

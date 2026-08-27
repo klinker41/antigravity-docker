@@ -33,6 +33,7 @@ const IDE_PORT = parseInt(process.env.IDE_PORT || '8080', 10);
 
 const ENABLE_IDE = isFeatureEnabled(process.env.ENABLE_IDE, true);
 const ENABLE_TERMINAL = isFeatureEnabled(process.env.ENABLE_TERMINAL, true);
+const TRUST_PROXY = isFeatureEnabled(process.env.TRUST_PROXY, false);
 
 // In-Memory Session Store: Map<sessionToken, { createdAt: number, expiresAt: number }>
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
@@ -63,13 +64,14 @@ function safeCompare(a, b) {
     return crypto.timingSafeEqual(hashA, hashB);
 }
 
-// Extract client IP address (supporting reverse proxy X-Forwarded-For)
+// Extract client IP address (only trust reverse proxy X-Forwarded-For if TRUST_PROXY is enabled)
 function getClientIp(req) {
-    const forwarded = req.headers['x-forwarded-for'];
-    if (forwarded) {
+    const remote = req.socket?.remoteAddress || '127.0.0.1';
+    if (TRUST_PROXY && req.headers['x-forwarded-for']) {
+        const forwarded = req.headers['x-forwarded-for'];
         return forwarded.split(',')[0].trim();
     }
-    return req.socket?.remoteAddress || '127.0.0.1';
+    return remote;
 }
 
 // Check rate limit status for login
@@ -140,6 +142,7 @@ function applySecurityHeaders(res, req) {
     res.setHeader('X-Frame-Options', 'SAMEORIGIN');
     res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
     res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+    res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: https:; connect-src 'self' ws: wss:; frame-ancestors 'self';");
     res.setHeader('X-Accel-Buffering', 'no');
     const isHttps = req.headers['x-forwarded-proto'] === 'https' || req.socket?.encrypted;
     if (isHttps) {
@@ -1420,44 +1423,12 @@ function renderStatusPage(health) {
         </div>`;
 
     const bodyHtml = `
-        <div class="status-grid">
-            <div class="grid-item">
-                <div class="grid-label">Instance Status</div>
-                <div class="grid-value ${isUp ? 'val-success' : 'val-error'}">
-                    ${isUp ? 'ONLINE' : 'OFFLINE'}
+        <div class="status-grid" style="grid-template-columns: 1fr; margin-bottom: 24px;">
+            <div class="grid-item" style="text-align: center; align-items: center;">
+                <div class="grid-label">Status</div>
+                <div class="grid-value ${isUp ? 'val-success' : 'val-error'}" style="font-size: 16px; margin-top: 4px;">
+                    ${isUp ? 'OK' : 'OFFLINE'}
                 </div>
-            </div>
-            <div class="grid-item">
-                <div class="grid-label">Agent Host</div>
-                <div class="grid-value"><code>${INSTANCE_NAME}</code></div>
-            </div>
-            <div class="grid-item">
-                <div class="grid-label">HTTP Code</div>
-                <div class="grid-value"><code>${isUp ? '200 OK' : '503 Unavailable'}</code></div>
-            </div>
-            <div class="grid-item">
-                <div class="grid-label">Response Time</div>
-                <div class="grid-value"><code>${health.latency !== undefined ? health.latency + ' ms' : 'N/A'}</code></div>
-            </div>
-            <div class="grid-item">
-                <div class="grid-label">Target Port</div>
-                <div class="grid-value"><code>${TARGET_PORT || 'None'}</code></div>
-            </div>
-            <div class="grid-item">
-                <div class="grid-label">Gateway Port</div>
-                <div class="grid-value"><code>${LISTEN_PORT}</code></div>
-            </div>
-            <div class="grid-item">
-                <div class="grid-label">Sidecar Manager</div>
-                <div class="grid-value"><code>ENABLED (/sidecars)</code></div>
-            </div>
-            <div class="grid-item">
-                <div class="grid-label">Web IDE</div>
-                <div class="grid-value"><code>${ENABLE_IDE ? 'ENABLED (/ide/)' : 'DISABLED'}</code></div>
-            </div>
-            <div class="grid-item">
-                <div class="grid-label">Host Terminal</div>
-                <div class="grid-value"><code>${ENABLE_TERMINAL ? 'ENABLED (/terminal/)' : 'DISABLED'}</code></div>
             </div>
         </div>
 
@@ -1468,12 +1439,6 @@ function renderStatusPage(health) {
                 <svg class="btn-icon" viewBox="0 0 20 20" fill="currentColor">
                     <path fill-rule="evenodd" d="M10.293 3.293a1 1 0 011.414 0l6 6a1 1 0 010 1.414l-6 6a1 1 0 01-1.414-1.414L14.586 11H3a1 1 0 110-2h11.586l-4.293-4.293a1 1 0 010-1.414z" clip-rule="evenodd" />
                 </svg>
-            </a>
-            <a href="/sidecars" class="btn-secondary" title="Open Sidecar Manager">
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line>
-                </svg>
-                <span>Sidecars</span>
             </a>
             <a href="/status" class="btn-secondary" title="Refresh health status">
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1500,12 +1465,11 @@ function renderStatusPage(health) {
     return renderPageLayout({
         title: 'Google Antigravity - Status',
         headMeta: !isUp ? '<meta http-equiv="refresh" content="5">' : '',
-        subtitle: isUp ? 'Antigravity instance is operational and healthy.' : 'Antigravity instance is currently offline or unreachable.',
+        subtitle: isUp ? 'Antigravity instance is operational and healthy.' : 'Antigravity instance is currently unavailable.',
         statusPill,
-        error: !isUp ? (health.error || 'Upstream Antigravity agent process is unreachable.') : '',
         bodyHtml,
         footerExtra: '&bull; <a href="/status?format=json" class="json-link">JSON Format</a>',
-        cardMaxWidth: 500
+        cardMaxWidth: 420
     });
 }
 
@@ -1757,6 +1721,16 @@ function renderSidecarsPage() {
         const promptCronExpr = document.getElementById('promptCronExpr');
         const promptProject = document.getElementById('promptProject');
 
+        function escapeHtml(str) {
+            if (str === null || str === undefined) return '';
+            return String(str)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
         function showToast(msg) {
             const toast = document.getElementById('toast');
             const toastMsg = document.getElementById('toastMessage');
@@ -1789,7 +1763,7 @@ function renderSidecarsPage() {
                 sidecarsData = await res.json();
                 renderList();
             } catch (e) {
-                listContainer.innerHTML = '<div class="error-banner">Failed to load sidecars: ' + e.message + '</div>';
+                listContainer.innerHTML = '<div class="error-banner">Failed to load sidecars: ' + escapeHtml(e.message) + '</div>';
             }
         }
 
@@ -1813,8 +1787,19 @@ function renderSidecarsPage() {
             let html = '';
             for (const s of sidecarsData) {
                 const isChecked = s.enabled ? 'checked' : '';
+                const escId = escapeHtml(s.id);
+                const escDisplayName = escapeHtml(s.displayName || s.id);
+                const escDescription = escapeHtml(s.description || '');
+                const escCronExpr = escapeHtml(s.cronExpr || '');
+                const escCronDesc = escapeHtml(s.cronDescription || s.cronExpr || '');
+                const escCommand = escapeHtml(s.command || '');
+                const escArgs = escapeHtml((s.args || []).join(' '));
+                const escProjectId = escapeHtml(s.projectId || '');
+                const escRestartPolicy = escapeHtml(s.restartPolicy || 'always');
+                const escPid = escapeHtml(s.pid || '');
+
                 let statusBadge = '<span class="chip chip-muted">STOPPED</span>';
-                if (s.status === 'running') statusBadge = '<span class="chip chip-green"><span class="status-dot status-dot-success"></span> RUNNING ' + (s.pid ? '(PID ' + s.pid + ')' : '') + '</span>';
+                if (s.status === 'running') statusBadge = '<span class="chip chip-green"><span class="status-dot status-dot-success"></span> RUNNING ' + (s.pid ? '(PID ' + escPid + ')' : '') + '</span>';
                 else if (s.status === 'scheduled') statusBadge = '<span class="chip chip-cyan"><span class="status-dot status-dot-success"></span> SCHEDULED</span>';
                 else if (s.status === 'starting') statusBadge = '<span class="chip chip-purple"><span class="status-dot status-dot-warning"></span> STARTING</span>';
 
@@ -1822,42 +1807,42 @@ function renderSidecarsPage() {
 
                 let detailsChip = '';
                 if (s.isScheduled) {
-                    detailsChip = '<span class="chip">⏰ ' + (s.cronDescription || s.cronExpr) + ' <code>' + (s.cronExpr || '') + '</code></span>';
+                    detailsChip = '<span class="chip">⏰ ' + escCronDesc + ' <code>' + escCronExpr + '</code></span>';
                 } else {
-                    detailsChip = '<span class="chip">⚙️ <code>' + s.command + ' ' + (s.args || []).join(' ') + '</code> (Restart: ' + s.restartPolicy + ')</span>';
+                    detailsChip = '<span class="chip">⚙️ <code>' + escCommand + ' ' + escArgs + '</code> (Restart: ' + escRestartPolicy + ')</span>';
                 }
 
                 let projChip = '';
                 if (s.projectId) {
-                    projChip = '<span class="chip">📁 Project: <code>' + s.projectId + '</code></span>';
+                    projChip = '<span class="chip">📁 Project: <code>' + escProjectId + '</code></span>';
                 }
 
                 let nextRunChip = '';
                 if (s.nextRun) {
                     const d = new Date(s.nextRun);
-                    nextRunChip = '<span class="chip chip-muted">Next run: ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + ' (' + d.toLocaleDateString() + ')</span>';
+                    nextRunChip = '<span class="chip chip-muted">Next run: ' + escapeHtml(d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })) + ' (' + escapeHtml(d.toLocaleDateString()) + ')</span>';
                 }
 
                 html += \`
-                <div class="content-card" data-id="\${s.id}">
+                <div class="content-card" data-id="\${escId}">
                     <div class="card-header">
                         <div>
                             <div class="card-title-row">
-                                <span class="card-title">\${s.displayName || s.id}</span>
-                                <span class="card-id-code">\${s.id}</span>
+                                <span class="card-title">\${escDisplayName}</span>
+                                <span class="card-id-code">\${escId}</span>
                                 \${typeBadge}
                                 \${statusBadge}
                             </div>
                         </div>
                         <div>
                             <label class="switch" title="Toggle On/Off">
-                                <input type="checkbox" class="toggle-switch-input" data-id="\${s.id}" \${isChecked}>
+                                <input type="checkbox" class="toggle-switch-input" data-id="\${escId}" \${isChecked}>
                                 <span class="slider"></span>
                             </label>
                         </div>
                     </div>
 
-                    \${s.description ? '<p class="card-desc">' + s.description + '</p>' : ''}
+                    \${s.description ? '<p class="card-desc">' + escDescription + '</p>' : ''}
 
                     <div class="card-chips">
                         \${detailsChip}
@@ -1867,28 +1852,28 @@ function renderSidecarsPage() {
 
                     <div class="card-actions">
                         <div class="actions-left">
-                            <button type="button" class="btn-secondary btn-run" data-id="\${s.id}" title="Run now">
+                            <button type="button" class="btn-secondary btn-run" data-id="\${escId}" title="Run now">
                                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                                     <polygon points="5 3 19 12 5 21 5 3"></polygon>
                                 </svg>
                                 <span>Run Now</span>
                             </button>
-                            <button type="button" class="btn-secondary btn-logs" data-id="\${s.id}" title="View recent logs">
+                            <button type="button" class="btn-secondary btn-logs" data-id="\${escId}" title="View recent logs">
                                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                                     <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line>
                                 </svg>
                                 <span>Logs</span>
                             </button>
-                            <button type="button" class="btn-secondary btn-edit" data-id="\${s.id}" title="Edit sidecar">
-                                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <button type="button" class="btn-secondary btn-edit" data-id="\${escId}" title="Edit sidecar">
+                                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                                     <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
                                 </svg>
                                 <span>Edit</span>
                             </button>
                         </div>
                         <div class="actions-right">
-                            <button type="button" class="btn-danger btn-delete" data-id="\${s.id}" title="Delete sidecar">
-                                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <button type="button" class="btn-danger btn-delete" data-id="\${escId}" title="Delete sidecar">
+                                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                                     <polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
                                 </svg>
                                 <span>Delete</span>
@@ -2534,21 +2519,7 @@ const server = http.createServer(async (req, res) => {
                     'Cache-Control': 'no-cache, no-store, must-revalidate'
                 });
                 res.end(JSON.stringify({
-                    status: health.up ? 'ok' : 'error',
-                    up: health.up,
-                    statusCode: statusCode,
-                    instance: INSTANCE_NAME,
-                    gatewayPort: LISTEN_PORT,
-                    targetPort: TARGET_PORT || null,
-                    services: {
-                        antigravity: { port: TARGET_PORT || null, up: health.up, enabled: true },
-                        sidecarManager: { path: '/sidecars', enabled: true },
-                        webIde: { port: ENABLE_IDE ? IDE_PORT : null, path: '/ide/', enabled: ENABLE_IDE },
-                        hostTerminal: { port: ENABLE_TERMINAL ? TERMINAL_PORT : null, path: '/terminal/', enabled: ENABLE_TERMINAL }
-                    },
-                    latencyMs: health.latency !== undefined ? health.latency : null,
-                    error: health.error || null,
-                    timestamp: new Date().toISOString()
+                    status: health.up ? 'ok' : 'error'
                 }, null, 2));
                 return;
             }
@@ -2853,8 +2824,13 @@ const server = http.createServer(async (req, res) => {
                 }
             }
 
+            const allowedOrigins = process.env.ALLOWED_ORIGINS ? new Set(process.env.ALLOWED_ORIGINS.split(',').map(s => s.trim())) : null;
             if (resHeaders['access-control-allow-origin'] && req.headers.origin) {
-                resHeaders['access-control-allow-origin'] = req.headers.origin;
+                if (allowedOrigins && allowedOrigins.has(req.headers.origin)) {
+                    resHeaders['access-control-allow-origin'] = req.headers.origin;
+                } else if (!allowedOrigins) {
+                    delete resHeaders['access-control-allow-origin'];
+                }
             }
 
             resHeaders['x-accel-buffering'] = 'no';

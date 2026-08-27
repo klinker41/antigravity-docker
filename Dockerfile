@@ -66,7 +66,7 @@ RUN curl -fsSL https://code-server.dev/install.sh | sh && \
     curl -fsSL "https://github.com/tsl0922/ttyd/releases/download/1.7.7/ttyd.${TTYD_ARCH}" -o /usr/local/bin/ttyd && \
     chmod +x /usr/local/bin/ttyd
 
-# 5. Create non-root developer user with sudo privileges
+# 5. Create non-root developer user
 ARG USERNAME=developer
 ARG USER_UID=1000
 ARG USER_GID=1000
@@ -82,9 +82,7 @@ RUN if id -u ubuntu >/dev/null 2>&1; then userdel -f -r ubuntu || true; fi && \
         useradd --uid ${USER_UID} --gid ${USER_GID} -m -s /bin/bash ${USERNAME}; \
     else \
         usermod -l ${USERNAME} -d /home/${USERNAME} -m $(id -un ${USER_UID}); \
-    fi && \
-    echo "${USERNAME} ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers.d/${USERNAME} && \
-    chmod 0440 /etc/sudoers.d/${USERNAME}
+    fi
 
 # 6. Install Antigravity CLI (agy) for developer user
 USER ${USERNAME}

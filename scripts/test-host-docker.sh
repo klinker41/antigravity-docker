@@ -30,17 +30,6 @@ TEST_CMD='
     echo ""
     echo "--- 4. Antigravity CLI ---"
     agy --version || true
-
-    echo ""
-    echo "--- 5. Host Docker Access via /var/run/docker.sock ---"
-    docker --version
-    docker compose version 2>/dev/null || docker-compose version 2>/dev/null || true
-    echo "Checking host containers list:"
-    docker ps --format "table {{.ID}}\t{{.Image}}\t{{.Status}}\t{{.Names}}"
-
-    echo ""
-    echo "--- 6. Testing Spawn of Sub-container on Host ---"
-    docker run --rm hello-world | grep "Hello from Docker!" && echo "✓ Successfully ran container on host Docker daemon from inside Antigravity agent container!"
 '
 
 if docker compose version >/dev/null 2>&1; then
@@ -48,9 +37,7 @@ if docker compose version >/dev/null 2>&1; then
 elif command -v docker-compose >/dev/null 2>&1; then
     docker-compose run --rm antigravity bash -c "$TEST_CMD"
 else
-    docker run --rm \
-        -v /var/run/docker.sock:/var/run/docker.sock \
-        jklinker/antigravity-docker:latest bash -c "$TEST_CMD"
+    docker run --rm jklinker/antigravity-docker:latest bash -c "$TEST_CMD"
 fi
 
 echo "==================================================================="

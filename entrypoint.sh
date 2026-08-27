@@ -226,8 +226,8 @@ if [ -e "$GITCONFIG_FILE" ]; then
     chown ${DEVELOPER_USER}:${DEVELOPER_USER} "$GITCONFIG_FILE" 2>/dev/null || true
 fi
 
-# Set umask so newly created files and directories inside mounted volumes are group readable/writable
-umask 0002
+# Set umask to enforce secure default file creation permissions
+umask 0022
 
 # 3. Configure Telemetry Blocking (DNS Sinkhole and OpenTelemetry opt-outs)
 BLOCK_TELEMETRY="${BLOCK_TELEMETRY:-true}"
@@ -333,7 +333,7 @@ case "$1" in
         export HOST_SSH_HOST="${HOST_SSH_HOST:-host.docker.internal}"
         export HOST_SSH_PORT="${HOST_SSH_PORT:-22}"
         export HOST_SSH_DIR="${HOST_SSH_DIR:-}"
-        node /usr/local/bin/auth-proxy.js &
+        gosu "$DEVELOPER_USER" node /usr/local/bin/auth-proxy.js &
 
         if [ ! -s "$TOKEN_FILE" ]; then
             echo "==================================================================="
