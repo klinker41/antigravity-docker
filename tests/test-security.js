@@ -131,6 +131,17 @@ test('Security - HTTP Proxy Gateway & Status Endpoint (SEC-06, SEC-07, SEC-10, S
             assert.equal(res.body.includes('15566'), false);
         });
 
+        await t.test('rejects login requests exceeding maximum payload size with 413 (SEC-15)', async () => {
+            const oversizedBody = 'password=' + 'a'.repeat(32 * 1024);
+            const res = await makeRequest('/__auth/login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: oversizedBody
+            });
+            assert.equal(res.status, 413);
+            assert.ok(res.body.includes('Payload Too Large'));
+        });
+
         await t.test('does not trust spoofed X-Forwarded-For when TRUST_PROXY is false (SEC-06)', async () => {
             for (let i = 0; i < 5; i++) {
                 await makeRequest('/__auth/login', {
@@ -165,4 +176,42 @@ test('Security - HTTP Proxy Gateway & Status Endpoint (SEC-06, SEC-07, SEC-10, S
     } finally {
         proxyProc.kill('SIGKILL');
     }
+});
+
+test('Security - Body Parser & Multibyte Handling (SEC-16)', async (t) => {
+    const { readRequestBody, readJsonBody } = require('../proxy/lib/security.js');
+    const { Readable } = require('node:stream');
+
+    await t.test('readRequestBody preserves multibyte UTF-8 characters split across chunks', async () => {
+        // Multi-byte character 🚀 is 4 bytes: [0xf0, 0x9f, 0x9a, 0x80]
+        const fullBuffer = Buffer.from('{"msg":"🚀 hello world"}', 'utf8');
+        const splitIdx = 10; // Splitting in the middle of multi-byte sequence
+        const chunk1 = fullBuffer.subarray(0, splitIdx);
+        const chunk2 = fullBuffer.subarray(splitIdx);
+
+        const stream = new Readable({
+            read() {
+                this.push(chunk1);
+                this.push(chunk2);
+                this.push(null);
+            }
+        });
+
+        const parsed = await readJsonBody(stream, 1024);
+        assert.equal(parsed.msg, '🚀 hello world');
+    });
+
+    await t.test('readRequestBody enforces maximum byte limit', async () => {
+        const stream = new Readable({
+            read() {
+                this.push(Buffer.alloc(500, 'a'));
+                this.push(Buffer.alloc(600, 'b'));
+                this.push(null);
+            }
+        });
+
+        await assert.rejects(async () => {
+            await readRequestBody(stream, 1000);
+        }, /Payload Too Large/);
+    });
 });

@@ -52,10 +52,21 @@ function resolveSecureSubpath(baseDir, id, subDir = '') {
 
 /**
  * Safely reads a file's trimmed UTF-8 content if the file exists.
+ * Optionally limits read size to maxBytes to avoid reading massive log files.
  */
-function readFileIfExists(filePath) {
+function readFileIfExists(filePath, maxBytes = 0) {
     try {
         if (fs.existsSync(filePath)) {
+            if (maxBytes > 0) {
+                const fd = fs.openSync(filePath, 'r');
+                try {
+                    const buf = Buffer.alloc(maxBytes);
+                    const bytesRead = fs.readSync(fd, buf, 0, maxBytes, 0);
+                    return buf.subarray(0, bytesRead).toString('utf8').trim();
+                } finally {
+                    fs.closeSync(fd);
+                }
+            }
             return fs.readFileSync(filePath, 'utf8').trim();
         }
     } catch (e) {}
@@ -266,10 +277,10 @@ class SidecarManager extends EventEmitter {
             '/tmp/cli.log'
         ];
         for (const logPath of possibleLogs) {
-            const content = readFileIfExists(logPath);
+            const content = readFileIfExists(logPath, 8192);
             if (content) {
-                const match = content.slice(0, 8192).match(/listening on random port at (\d+) for HTTP\s*$/m) ||
-                              content.slice(0, 8192).match(/(?:http:\/\/localhost:|http:\/\/127\.0\.0\.1:)(\d+)/i);
+                const match = content.match(/listening on random port at (\d+) for HTTP\s*$/m) ||
+                              content.match(/(?:http:\/\/localhost:|http:\/\/127\.0\.0\.1:)(\d+)/i);
                 if (match && match[1]) {
                     const addr = `127.0.0.1:${match[1]}`;
                     this.lsAddress = addr;

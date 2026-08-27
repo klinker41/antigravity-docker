@@ -27,22 +27,38 @@ function applySecurityHeaders(res, req) {
 // Read raw request body as string with maximum byte length protection
 function readRequestBody(req, maxBytes = 64 * 1024) {
     return new Promise((resolve, reject) => {
-        let body = '';
+        const chunks = [];
+        let totalBytes = 0;
         let exceeded = false;
-        req.on('data', chunk => {
+
+        const onData = (chunk) => {
             if (exceeded) return;
-            body += chunk.toString();
-            if (Buffer.byteLength(body, 'utf8') > maxBytes) {
+            totalBytes += chunk.length;
+            if (totalBytes > maxBytes) {
                 exceeded = true;
-                req.destroy();
+                req.removeListener('data', onData);
+                req.removeListener('end', onEnd);
+                req.removeListener('error', onError);
+                req.resume(); // drain incoming data to avoid hanging socket
                 reject(new Error('Payload Too Large'));
+                return;
             }
-        });
-        req.on('end', () => {
+            chunks.push(chunk);
+        };
+
+        const onEnd = () => {
             if (exceeded) return;
-            resolve(body);
-        });
-        req.on('error', reject);
+            resolve(Buffer.concat(chunks).toString('utf8'));
+        };
+
+        const onError = (err) => {
+            if (exceeded) return;
+            reject(err);
+        };
+
+        req.on('data', onData);
+        req.on('end', onEnd);
+        req.on('error', onError);
     });
 }
 

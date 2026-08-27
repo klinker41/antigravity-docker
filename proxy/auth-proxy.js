@@ -54,7 +54,15 @@ function checkPortFile() {
         ];
         for (const logPath of possibleLogs) {
             if (fs.existsSync(logPath)) {
-                const logHead = fs.readFileSync(logPath, 'utf8').slice(0, 4096);
+                let logHead = '';
+                const fd = fs.openSync(logPath, 'r');
+                try {
+                    const buf = Buffer.alloc(4096);
+                    const bytesRead = fs.readSync(fd, buf, 0, 4096, 0);
+                    logHead = buf.subarray(0, bytesRead).toString('utf8');
+                } finally {
+                    fs.closeSync(fd);
+                }
                 const match = logHead.match(/listening on random port at (\d+) for HTTP\s*$/m) ||
                               logHead.match(/(?:http:\/\/localhost:|http:\/\/127\.0\.0\.1:)(\d+)/i);
                 if (match && match[1]) {
