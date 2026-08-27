@@ -193,6 +193,131 @@ const ANTIGRAVITY_LOGO_SVG = `<svg class="logo-svg" viewBox="0 0 36 36" fill="no
     </defs>
 </svg>`;
 
+const FAVICON_SVG_CONTENT = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 36 36" width="100%" height="100%" fill="none">
+    <path d="M18 3L23.5 12.5H12.5L18 3Z" fill="url(#brand-grad)" />
+    <path d="M18 12L27 27.5H9L18 12Z" fill="url(#brand-grad-2)" opacity="0.9" />
+    <circle cx="18" cy="20" r="3.5" fill="#ffffff" />
+    <defs>
+        <linearGradient id="brand-grad" x1="12.5" y1="3" x2="23.5" y2="12.5" gradientUnits="userSpaceOnUse">
+            <stop stop-color="#38bdf8" />
+            <stop offset="1" stop-color="#1a73e8" />
+        </linearGradient>
+        <linearGradient id="brand-grad-2" x1="9" y1="12" x2="27" y2="27.5" gradientUnits="userSpaceOnUse">
+            <stop stop-color="#4285f4" />
+            <stop offset="1" stop-color="#a78bfa" />
+        </linearGradient>
+    </defs>
+</svg>`;
+
+const FAVICON_SVG_BUFFER = Buffer.from(FAVICON_SVG_CONTENT, 'utf8');
+const assetCache = new Map();
+
+function loadAsset(filename, fallbackBuffer = Buffer.alloc(0)) {
+    const possiblePaths = [
+        path.join(__dirname, '../assets', filename),
+        path.join(__dirname, 'assets', filename),
+        path.join('/usr/local/share/antigravity/assets', filename),
+        path.join('/workspace/antigravity-docker/assets', filename)
+    ];
+    for (const p of possiblePaths) {
+        try {
+            if (fs.existsSync(p)) {
+                return fs.readFileSync(p);
+            }
+        } catch (e) {}
+    }
+    return fallbackBuffer;
+}
+
+function getCachedAsset(filename, defaultBuffer) {
+    if (assetCache.has(filename)) return assetCache.get(filename);
+    const buf = loadAsset(filename, defaultBuffer);
+    if (buf && buf.length > 0) {
+        assetCache.set(filename, buf);
+        return buf;
+    }
+    return defaultBuffer;
+}
+
+function isFaviconRequest(pathname) {
+    if (
+        pathname === '/favicon.ico' ||
+        pathname === '/favicon.svg' ||
+        pathname === '/favicon.png' ||
+        pathname === '/apple-touch-icon.png' ||
+        pathname === '/apple-touch-icon-precomposed.png' ||
+        pathname === '/terminal/favicon.ico' ||
+        pathname === '/terminal/favicon.svg' ||
+        pathname === '/terminal/favicon.png' ||
+        pathname === '/terminal/apple-touch-icon.png' ||
+        pathname === '/ide/favicon.ico' ||
+        pathname === '/ide/favicon.svg' ||
+        pathname === '/ide/favicon.png' ||
+        pathname === '/ide/apple-touch-icon.png' ||
+        pathname.startsWith('/ide/_static/src/browser/media/favicon') ||
+        pathname.startsWith('/ide/_static/src/browser/media/pwa-icon') ||
+        pathname.endsWith('/workbench/browser/media/favicon.ico') ||
+        pathname.endsWith('/resources/server/favicon.ico')
+    ) {
+        return true;
+    }
+    return false;
+}
+
+function handleFaviconRequest(req, res, pathname) {
+    let contentType = 'image/svg+xml; charset=utf-8';
+    let data = FAVICON_SVG_BUFFER;
+
+    if (pathname.endsWith('.svg')) {
+        contentType = 'image/svg+xml; charset=utf-8';
+        data = getCachedAsset('favicon.svg', FAVICON_SVG_BUFFER);
+    } else if (pathname.endsWith('.ico')) {
+        contentType = 'image/x-icon';
+        data = getCachedAsset('favicon.ico', FAVICON_SVG_BUFFER);
+    } else if (pathname.includes('512')) {
+        contentType = 'image/png';
+        const name = pathname.includes('maskable') ? 'pwa-icon-maskable-512.png' : 'pwa-icon-512.png';
+        data = getCachedAsset(name, getCachedAsset('favicon.png', FAVICON_SVG_BUFFER));
+    } else if (pathname.includes('192')) {
+        contentType = 'image/png';
+        const name = pathname.includes('maskable') ? 'pwa-icon-maskable-192.png' : 'pwa-icon-192.png';
+        data = getCachedAsset(name, getCachedAsset('favicon.png', FAVICON_SVG_BUFFER));
+    } else if (pathname.includes('apple-touch-icon')) {
+        contentType = 'image/png';
+        data = getCachedAsset('apple-touch-icon.png', getCachedAsset('favicon.png', FAVICON_SVG_BUFFER));
+    } else if (pathname.endsWith('.png')) {
+        contentType = 'image/png';
+        data = getCachedAsset('favicon.png', FAVICON_SVG_BUFFER);
+    }
+
+    res.writeHead(200, {
+        'Content-Type': contentType,
+        'Content-Length': data.length,
+        'Cache-Control': 'public, max-age=86400, must-revalidate',
+        'X-Content-Type-Options': 'nosniff'
+    });
+    res.end(data);
+}
+
+// Helper to strip existing favicon/touch-icon links and inject unified Antigravity favicon links
+function replaceFaviconInHtml(html) {
+    const cleaned = html.replace(/<link\b(?:"[^"]*"|'[^']*'|[^'">])*?>/gis, (tag) => {
+        if (/rel\s*=\s*["'](?:shortcut |alternate )?icon["']/i.test(tag) ||
+            /rel\s*=\s*["']apple-touch-icon(?:-precomposed)?["']/i.test(tag)) {
+            return '';
+        }
+        return tag;
+    });
+
+    const faviconTags = '<link rel="icon" type="image/svg+xml" href="/favicon.svg"><link rel="alternate icon" href="/favicon.ico"><link rel="apple-touch-icon" href="/apple-touch-icon.png">';
+    if (cleaned.includes('</head>')) {
+        return cleaned.replace('</head>', `${faviconTags}</head>`);
+    } else if (cleaned.includes('<head>')) {
+        return cleaned.replace('<head>', `<head>${faviconTags}`);
+    }
+    return `${faviconTags}${cleaned}`;
+}
+
 // Shared Base CSS for all Antigravity Gateway pages (Login, Status, Sidecars, Modals, Logs)
 const BASE_PAGE_CSS = `
 :root {
@@ -1252,6 +1377,9 @@ function renderPageLayout({
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+    <link rel="alternate icon" href="/favicon.ico">
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png">
     ${headMeta}
     <title>${title}</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -2340,7 +2468,26 @@ function buildInjectedScript() {
         }
     }
 
+    function enforceFavicon() {
+        const icons = document.querySelectorAll("link[rel*='icon']");
+        if (icons.length === 0) {
+            const icon = document.createElement('link');
+            icon.rel = 'icon';
+            icon.type = 'image/svg+xml';
+            icon.href = '/favicon.svg';
+            document.head.appendChild(icon);
+        } else {
+            for (const icon of icons) {
+                if (icon.getAttribute('href') !== '/favicon.svg') {
+                    icon.setAttribute('type', 'image/svg+xml');
+                    icon.setAttribute('href', '/favicon.svg');
+                }
+            }
+        }
+    }
+
     function runInjection() {
+        enforceFavicon();
         tryInjectSidebar();
     }
 
@@ -2351,12 +2498,16 @@ function buildInjectedScript() {
     }
 
     const observer = new MutationObserver(() => {
+        enforceFavicon();
         if (!document.getElementById('agy-injected-tools-group')) {
             tryInjectSidebar();
         }
     });
 
     observer.observe(document.body, { childList: true, subtree: true });
+    if (document.head) {
+        observer.observe(document.head, { childList: true, subtree: true, attributes: true, attributeFilter: ['href'] });
+    }
 })();
 `;
 }
@@ -2395,6 +2546,12 @@ function proxyToTerminal(req, res, targetPath) {
     proxyHeaders['host'] = `localhost:${TERMINAL_PORT}`;
     proxyHeaders['origin'] = `http://localhost:${TERMINAL_PORT}`;
 
+    // Request uncompressed body only for top-level HTML requests to preserve compression on web assets
+    const wantsHtml = (req.headers.accept || '').includes('text/html') || targetPath === '/' || targetPath === '/terminal' || targetPath === '/terminal/';
+    if (wantsHtml) {
+        proxyHeaders['accept-encoding'] = 'identity';
+    }
+
     const proxyReq = http.request({
         hostname: '127.0.0.1',
         port: TERMINAL_PORT,
@@ -2413,6 +2570,49 @@ function proxyToTerminal(req, res, targetPath) {
             }
         }
         resHeaders['x-accel-buffering'] = 'no';
+
+        const encoding = resHeaders['content-encoding'];
+        const isUncompressed = !encoding || encoding === 'identity';
+        const isHtmlResponse = (resHeaders['content-type'] || '').includes('text/html') && isUncompressed;
+        if (isHtmlResponse && req.method === 'GET') {
+            const chunks = [];
+            let totalLength = 0;
+            const MAX_HTML_BUFFER_BYTES = 5 * 1024 * 1024;
+            let tooLarge = false;
+
+            proxyRes.on('data', (chunk) => {
+                if (tooLarge) {
+                    res.write(chunk);
+                    return;
+                }
+                totalLength += chunk.length;
+                if (totalLength > MAX_HTML_BUFFER_BYTES) {
+                    tooLarge = true;
+                    res.writeHead(proxyRes.statusCode, resHeaders);
+                    res.flushHeaders();
+                    for (const c of chunks) res.write(c);
+                    res.write(chunk);
+                    return;
+                }
+                chunks.push(chunk);
+            });
+
+            proxyRes.on('end', () => {
+                if (tooLarge) {
+                    res.end();
+                    return;
+                }
+                let html = Buffer.concat(chunks).toString('utf8');
+                html = replaceFaviconInHtml(html);
+                html = html.replace(/<title>ttyd - Terminal<\/title>/i, '<title>Antigravity Terminal</title>');
+                resHeaders['content-length'] = Buffer.byteLength(html, 'utf8');
+                delete resHeaders['content-encoding'];
+                res.writeHead(proxyRes.statusCode, resHeaders);
+                res.end(html);
+            });
+            return;
+        }
+
         res.writeHead(proxyRes.statusCode, resHeaders);
         res.flushHeaders();
 
@@ -2446,6 +2646,12 @@ function proxyToIde(req, res, targetPath) {
     proxyHeaders['host'] = `localhost:${IDE_PORT}`;
     proxyHeaders['origin'] = `http://localhost:${IDE_PORT}`;
 
+    // Request uncompressed body only for top-level HTML requests to preserve gzip/brotli on IDE bundles
+    const wantsHtml = (req.headers.accept || '').includes('text/html') || targetPath === '/' || targetPath.startsWith('/?');
+    if (wantsHtml) {
+        proxyHeaders['accept-encoding'] = 'identity';
+    }
+
     const proxyReq = http.request({
         hostname: '127.0.0.1',
         port: IDE_PORT,
@@ -2472,6 +2678,48 @@ function proxyToIde(req, res, targetPath) {
             }
         }
         resHeaders['x-accel-buffering'] = 'no';
+
+        const ideEncoding = resHeaders['content-encoding'];
+        const ideIsUncompressed = !ideEncoding || ideEncoding === 'identity';
+        const isHtmlResponse = (resHeaders['content-type'] || '').includes('text/html') && ideIsUncompressed;
+        if (isHtmlResponse && req.method === 'GET') {
+            const chunks = [];
+            let totalLength = 0;
+            const MAX_HTML_BUFFER_BYTES = 5 * 1024 * 1024;
+            let tooLarge = false;
+
+            proxyRes.on('data', (chunk) => {
+                if (tooLarge) {
+                    res.write(chunk);
+                    return;
+                }
+                totalLength += chunk.length;
+                if (totalLength > MAX_HTML_BUFFER_BYTES) {
+                    tooLarge = true;
+                    res.writeHead(proxyRes.statusCode, resHeaders);
+                    res.flushHeaders();
+                    for (const c of chunks) res.write(c);
+                    res.write(chunk);
+                    return;
+                }
+                chunks.push(chunk);
+            });
+
+            proxyRes.on('end', () => {
+                if (tooLarge) {
+                    res.end();
+                    return;
+                }
+                let html = Buffer.concat(chunks).toString('utf8');
+                html = replaceFaviconInHtml(html);
+                resHeaders['content-length'] = Buffer.byteLength(html, 'utf8');
+                delete resHeaders['content-encoding'];
+                res.writeHead(proxyRes.statusCode, resHeaders);
+                res.end(html);
+            });
+            return;
+        }
+
         res.writeHead(proxyRes.statusCode, resHeaders);
         res.flushHeaders();
 
@@ -2505,6 +2753,12 @@ const server = http.createServer(async (req, res) => {
     try {
         applySecurityHeaders(res, req);
         const parsedUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+
+        // 0. Handle Favicons & App Icons (ALWAYS UNAUTHENTICATED)
+        if (isFaviconRequest(parsedUrl.pathname)) {
+            handleFaviconRequest(req, res, parsedUrl.pathname);
+            return;
+        }
 
         // 1. Handle /status health check endpoint (ALWAYS UNAUTHENTICATED)
         if (parsedUrl.pathname === '/status' || parsedUrl.pathname === '/status/') {
@@ -2801,8 +3055,8 @@ const server = http.createServer(async (req, res) => {
             proxyHeaders['referer'] = req.headers['referer'].replace(/^https?:\/\/[^\/]+/, `http://localhost:${TARGET_PORT}`);
         }
 
-        // Request uncompressed body for SPA routes to enable DOM injection
-        if (isSpaRoute(parsedUrl.pathname)) {
+        // Request uncompressed body only for SPA document routes and HTML requests to preserve compression
+        if (isSpaRoute(parsedUrl.pathname) || (req.headers.accept || '').includes('text/html')) {
             proxyHeaders['accept-encoding'] = 'identity';
         }
 
@@ -2835,20 +3089,48 @@ const server = http.createServer(async (req, res) => {
 
             resHeaders['x-accel-buffering'] = 'no';
 
-            const isHtmlResponse = (resHeaders['content-type'] || '').includes('text/html');
+            const agyEncoding = resHeaders['content-encoding'];
+            const agyIsUncompressed = !agyEncoding || agyEncoding === 'identity';
+            const isHtmlResponse = (resHeaders['content-type'] || '').includes('text/html') && agyIsUncompressed;
 
-            // INTERCEPT HTML RESPONSES TO INJECT WORKSPACE TOOLS BUTTONS
+            // INTERCEPT HTML RESPONSES TO INJECT WORKSPACE TOOLS BUTTONS AND OVERRIDE FAVICON
             if (isHtmlResponse && req.method === 'GET') {
                 const chunks = [];
+                let totalLength = 0;
+                const MAX_HTML_BUFFER_BYTES = 5 * 1024 * 1024;
+                let tooLarge = false;
+
                 proxyRes.on('data', (chunk) => {
+                    if (tooLarge) {
+                        res.write(chunk);
+                        return;
+                    }
+                    totalLength += chunk.length;
+                    if (totalLength > MAX_HTML_BUFFER_BYTES) {
+                        tooLarge = true;
+                        res.writeHead(proxyRes.statusCode, resHeaders);
+                        res.flushHeaders();
+                        for (const c of chunks) res.write(c);
+                        res.write(chunk);
+                        return;
+                    }
                     chunks.push(chunk);
                 });
+
                 proxyRes.on('end', () => {
+                    if (tooLarge) {
+                        res.end();
+                        return;
+                    }
                     let html = Buffer.concat(chunks).toString('utf8');
                     const csrfMatch = html.match(/"csrfToken":"([^"]+)"/);
                     if (csrfMatch && sidecarManager) {
                         sidecarManager.setCsrfToken(csrfMatch[1]);
                     }
+
+                    // Remove existing upstream/emoji favicon tags and inject Antigravity favicon
+                    html = replaceFaviconInHtml(html);
+
                     const customScript = buildInjectedScript();
                     if (customScript) {
                         const injection = `<style>${INJECTED_UI_STYLES}</style><script id="agy-injected-tools-script">${customScript}</script>`;

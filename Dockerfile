@@ -103,6 +103,18 @@ RUN mkdir -p /home/${USERNAME}/.gemini \
              /workspace && \
     chown -R ${USERNAME}:${USERNAME} /home/${USERNAME} /workspace
 
+COPY assets/ /usr/local/share/antigravity/assets/
+RUN if [ -d /usr/lib/code-server/src/browser/media ]; then \
+        cp /usr/local/share/antigravity/assets/favicon.svg /usr/lib/code-server/src/browser/media/favicon.svg && \
+        cp /usr/local/share/antigravity/assets/favicon.svg /usr/lib/code-server/src/browser/media/favicon-dark-support.svg && \
+        cp /usr/local/share/antigravity/assets/favicon.ico /usr/lib/code-server/src/browser/media/favicon.ico && \
+        cp /usr/local/share/antigravity/assets/pwa-icon-192.png /usr/lib/code-server/src/browser/media/pwa-icon-192.png 2>/dev/null || true && \
+        cp /usr/local/share/antigravity/assets/pwa-icon-512.png /usr/lib/code-server/src/browser/media/pwa-icon-512.png 2>/dev/null || true; \
+    fi && \
+    if [ -d /usr/lib/code-server/lib/vscode/resources/server ]; then \
+        cp /usr/local/share/antigravity/assets/favicon.ico /usr/lib/code-server/lib/vscode/resources/server/favicon.ico 2>/dev/null || true; \
+    fi
+
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY proxy/auth-proxy.js /usr/local/bin/auth-proxy.js
 COPY proxy/sidecar-manager.js /usr/local/bin/sidecar-manager.js

@@ -297,6 +297,22 @@ case "$1" in
 
         # 1. Start code-server (VS Code Web IDE) on 127.0.0.1:8080 if enabled
         if [ "$ENABLE_IDE" = "true" ] || [ "$ENABLE_IDE" = "1" ] || [ "$ENABLE_IDE" = "yes" ] || [ "$ENABLE_IDE" = "on" ]; then
+            ASSETS_DIR="/usr/local/share/antigravity/assets"
+            [ ! -d "$ASSETS_DIR" ] && ASSETS_DIR="/workspace/assets"
+            [ ! -d "$ASSETS_DIR" ] && ASSETS_DIR="/workspace/antigravity-docker/assets"
+            if [ -d "$ASSETS_DIR" ]; then
+                if [ -d /usr/lib/code-server/src/browser/media ]; then
+                    cp "$ASSETS_DIR"/favicon.svg /usr/lib/code-server/src/browser/media/favicon.svg 2>/dev/null || true
+                    cp "$ASSETS_DIR"/favicon.svg /usr/lib/code-server/src/browser/media/favicon-dark-support.svg 2>/dev/null || true
+                    cp "$ASSETS_DIR"/favicon.ico /usr/lib/code-server/src/browser/media/favicon.ico 2>/dev/null || true
+                    cp "$ASSETS_DIR"/pwa-icon-192.png /usr/lib/code-server/src/browser/media/pwa-icon-192.png 2>/dev/null || true
+                    cp "$ASSETS_DIR"/pwa-icon-512.png /usr/lib/code-server/src/browser/media/pwa-icon-512.png 2>/dev/null || true
+                fi
+                if [ -d /usr/lib/code-server/lib/vscode/resources/server ]; then
+                    cp "$ASSETS_DIR"/favicon.ico /usr/lib/code-server/lib/vscode/resources/server/favicon.ico 2>/dev/null || true
+                fi
+            fi
+
             echo " 🟢 Starting code-server Web IDE on internal port 8080"
             gosu "$DEVELOPER_USER" code-server \
                 --bind-addr 127.0.0.1:8080 \
