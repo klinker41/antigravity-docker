@@ -157,10 +157,10 @@ test('Security - HTTP Proxy Gateway & Status Endpoint (SEC-06, SEC-07, SEC-10, S
         });
 
         await t.test('Sidecar UI script contains escapeHtml utility (SEC-05)', () => {
-            const proxyCode = fs.readFileSync(path.join(__dirname, '../proxy/auth-proxy.js'), 'utf8');
-            assert.ok(proxyCode.includes('function escapeHtml(str)'));
-            assert.ok(proxyCode.includes('escDisplayName'));
-            assert.ok(proxyCode.includes('escDescription'));
+            const pagesCode = fs.readFileSync(path.join(__dirname, '../proxy/lib/pages.js'), 'utf8');
+            assert.ok(pagesCode.includes('function escapeHtml(str)'));
+            assert.ok(pagesCode.includes('escDisplayName'));
+            assert.ok(pagesCode.includes('escDescription'));
         });
     } finally {
         proxyProc.kill('SIGKILL');

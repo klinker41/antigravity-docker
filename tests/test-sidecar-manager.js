@@ -316,10 +316,10 @@ test('Sidecar Manager - HTTP Proxy Integration', async (t) => {
 
             // When proxy receives an upstream HTML response (simulated or rendered)
             // Verify buildInjectedScript includes Sidecar Manager
-            const proxyCode = fs.readFileSync(path.join(__dirname, '../proxy/auth-proxy.js'), 'utf8');
-            assert.ok(proxyCode.includes('Sidecar Manager'));
-            assert.ok(proxyCode.includes('/sidecars'));
-            assert.ok(proxyCode.includes('agy-injected-btn-sidecars'));
+            const injectionCode = fs.readFileSync(path.join(__dirname, '../proxy/lib/ui-injection.js'), 'utf8');
+            assert.ok(injectionCode.includes('Sidecar Manager'));
+            assert.ok(injectionCode.includes('/sidecars'));
+            assert.ok(injectionCode.includes('agy-injected-btn-sidecars'));
         });
     } finally {
         proxyProc.kill('SIGKILL');
