@@ -1135,13 +1135,19 @@ function renderPageLayout({
 </html>`;
 }
 
+// Shared Status Pill HTML Component
+function renderStatusPill(type, label, labelId = '') {
+    const idAttr = labelId ? ` id="${labelId}"` : '';
+    return `
+        <div class="status-pill status-pill-${type}">
+            <span class="status-dot status-dot-${type}"></span>
+            <span${idAttr}>${label}</span>
+        </div>`;
+}
+
 // Modern Google Antigravity Dark Theme Login Page HTML
 function renderLoginPage(error = '') {
-    const statusPill = `
-        <div class="status-pill status-pill-success">
-            <span class="status-dot status-dot-success"></span>
-            <span>Gateway Secured</span>
-        </div>`;
+    const statusPill = renderStatusPill('success', 'Gateway Secured');
 
     const bodyHtml = `
         <form method="POST" action="/__auth/login">
@@ -1244,12 +1250,10 @@ function checkUpstreamHealth(port, timeoutMs = 2000) {
 // Modern Google Antigravity Dark Theme Status Page HTML
 function renderStatusPage(health) {
     const isUp = Boolean(health && health.up);
-
-    const statusPill = `
-        <div class="status-pill ${isUp ? 'status-pill-success' : 'status-pill-error'}">
-            <span class="status-dot ${isUp ? 'status-dot-success' : 'status-dot-error'}"></span>
-            <span>${isUp ? 'Operational &bull; 200 OK' : 'Service Unavailable &bull; 503'}</span>
-        </div>`;
+    const statusPill = renderStatusPill(
+        isUp ? 'success' : 'error',
+        isUp ? 'Operational &bull; 200 OK' : 'Service Unavailable &bull; 503'
+    );
 
     const bodyHtml = `
         <div class="status-grid" style="grid-template-columns: 1fr; margin-bottom: 24px;">
@@ -1304,11 +1308,7 @@ function renderStatusPage(health) {
 
 // Modern 503 Starting Up Page HTML for Antigravity Core
 function renderStartingPage() {
-    const statusPill = `
-        <div class="status-pill status-pill-warning">
-            <span class="status-dot status-dot-warning"></span>
-            <span>Initializing</span>
-        </div>`;
+    const statusPill = renderStatusPill('warning', 'Initializing');
 
     const bodyHtml = `
         <div class="spinner"></div>
@@ -1327,11 +1327,7 @@ function renderStartingPage() {
 
 // Modern 503 Starting Up Page HTML for Sub-services (IDE / Terminal)
 function renderServiceStartingPage(serviceName) {
-    const statusPill = `
-        <div class="status-pill status-pill-warning">
-            <span class="status-dot status-dot-warning"></span>
-            <span>Initializing ${serviceName}</span>
-        </div>`;
+    const statusPill = renderStatusPill('warning', `Initializing ${serviceName}`);
 
     const bodyHtml = `
         <div class="spinner"></div>
@@ -1350,11 +1346,7 @@ function renderServiceStartingPage(serviceName) {
 
 // Modern Google Antigravity Sidecar Manager UI HTML
 function renderSidecarsPage() {
-    const statusPill = `
-        <div class="status-pill status-pill-success">
-            <span class="status-dot status-dot-success"></span>
-            <span id="subsystem-pill">Sidecar Subsystem Active</span>
-        </div>`;
+    const statusPill = renderStatusPill('success', 'Sidecar Subsystem Active', 'subsystem-pill');
 
     const bodyHtml = `
         <div class="top-toolbar">
@@ -1998,6 +1990,7 @@ function renderSidecarsPage() {
 
 module.exports = {
     renderPageLayout,
+    renderStatusPill,
     renderLoginPage,
     renderStatusPage,
     renderStartingPage,

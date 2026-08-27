@@ -51,6 +51,18 @@ function resolveSecureSubpath(baseDir, id, subDir = '') {
 }
 
 /**
+ * Safely reads a file's trimmed UTF-8 content if the file exists.
+ */
+function readFileIfExists(filePath) {
+    try {
+        if (fs.existsSync(filePath)) {
+            return fs.readFileSync(filePath, 'utf8').trim();
+        }
+    } catch (e) {}
+    return null;
+}
+
+/**
  * Parses a single field in a 5-field cron expression.
  * Returns a Set of allowed integer values within [min, max].
  */
@@ -227,60 +239,42 @@ class SidecarManager extends EventEmitter {
         if (this.lsAddress) return this.lsAddress;
         if (process.env.ANTIGRAVITY_LS_ADDRESS) return process.env.ANTIGRAVITY_LS_ADDRESS;
 
-        // Check secure ls address file first
-        const secureLsFile = path.join(RUNTIME_DATA_DIR, 'ls_address');
-        if (fs.existsSync(secureLsFile)) {
-            try {
-                const addr = fs.readFileSync(secureLsFile, 'utf8').trim();
-                if (addr) {
-                    this.lsAddress = addr;
-                    return addr;
-                }
-            } catch (e) {}
+        // Check known address and port files
+        const addressCandidates = [
+            path.join(RUNTIME_DATA_DIR, 'ls_address'),
+            '/tmp/antigravity_ls_address',
+        ];
+        for (const filePath of addressCandidates) {
+            const addr = readFileIfExists(filePath);
+            if (addr) {
+                this.lsAddress = addr;
+                return addr;
+            }
         }
 
-        // Check /tmp/antigravity_ls_address
-        const lsFile = '/tmp/antigravity_ls_address';
-        if (fs.existsSync(lsFile)) {
-            try {
-                const addr = fs.readFileSync(lsFile, 'utf8').trim();
-                if (addr) {
-                    this.lsAddress = addr;
-                    return addr;
-                }
-            } catch (e) {}
+        // Check port file
+        const port = readFileIfExists(process.env.PORT_FILE || '/tmp/antigravity_port');
+        if (port && /^\d+$/.test(port)) {
+            const addr = `127.0.0.1:${port}`;
+            this.lsAddress = addr;
+            return addr;
         }
 
-        // Check /tmp/antigravity_port
-        const portFile = process.env.PORT_FILE || '/tmp/antigravity_port';
-        if (fs.existsSync(portFile)) {
-            try {
-                const port = fs.readFileSync(portFile, 'utf8').trim();
-                if (port && /^\d+$/.test(port)) {
-                    const addr = `127.0.0.1:${port}`;
-                    this.lsAddress = addr;
-                    return addr;
-                }
-            } catch (e) {}
-        }
-
-        // Check cli.log or /tmp/cli.log
+        // Check cli logs
         const possibleLogs = [
             path.join(HOME_DIR, '.gemini/antigravity-cli/cli.log'),
             '/tmp/cli.log'
         ];
         for (const logPath of possibleLogs) {
-            if (fs.existsSync(logPath)) {
-                try {
-                    const content = fs.readFileSync(logPath, 'utf8').slice(0, 8192);
-                    const match = content.match(/listening on random port at (\d+) for HTTP\s*$/m) ||
-                                  content.match(/(?:http:\/\/localhost:|http:\/\/127\.0\.0\.1:)(\d+)/i);
-                    if (match && match[1]) {
-                        const addr = `127.0.0.1:${match[1]}`;
-                        this.lsAddress = addr;
-                        return addr;
-                    }
-                } catch (e) {}
+            const content = readFileIfExists(logPath);
+            if (content) {
+                const match = content.slice(0, 8192).match(/listening on random port at (\d+) for HTTP\s*$/m) ||
+                              content.slice(0, 8192).match(/(?:http:\/\/localhost:|http:\/\/127\.0\.0\.1:)(\d+)/i);
+                if (match && match[1]) {
+                    const addr = `127.0.0.1:${match[1]}`;
+                    this.lsAddress = addr;
+                    return addr;
+                }
             }
         }
 
@@ -291,28 +285,16 @@ class SidecarManager extends EventEmitter {
         if (this.csrfToken) return this.csrfToken;
         if (process.env.ANTIGRAVITY_CSRF_TOKEN) return process.env.ANTIGRAVITY_CSRF_TOKEN;
 
-        // Check secure csrf token file in runtime data dir
-        const secureCsrfFile = path.join(RUNTIME_DATA_DIR, 'csrf_token');
-        if (fs.existsSync(secureCsrfFile)) {
-            try {
-                const token = fs.readFileSync(secureCsrfFile, 'utf8').trim();
-                if (token) {
-                    this.csrfToken = token;
-                    return token;
-                }
-            } catch (e) {}
-        }
-
-        // Fallback check /tmp/antigravity_csrf_token
-        const csrfFile = '/tmp/antigravity_csrf_token';
-        if (fs.existsSync(csrfFile)) {
-            try {
-                const token = fs.readFileSync(csrfFile, 'utf8').trim();
-                if (token) {
-                    this.csrfToken = token;
-                    return token;
-                }
-            } catch (e) {}
+        const csrfCandidates = [
+            path.join(RUNTIME_DATA_DIR, 'csrf_token'),
+            '/tmp/antigravity_csrf_token',
+        ];
+        for (const filePath of csrfCandidates) {
+            const token = readFileIfExists(filePath);
+            if (token) {
+                this.csrfToken = token;
+                return token;
+            }
         }
 
         const lsAddress = this.getLsAddress();
@@ -715,22 +697,9 @@ class SidecarManager extends EventEmitter {
     }
 
     /**
-     * Starts a continuous background worker process.
+     * Constructs environment variables dictionary for sidecar execution.
      */
-    async startWorker(sidecar) {
-        if (!sidecar || !sidecar.command) return;
-        const id = sanitizeSidecarId(sidecar.id);
-        this.stopWorker(id);
-
-        const sidecarDir = resolveSecureSubpath(SIDECARS_DIR, id);
-        const dataDir = resolveSecureSubpath(RUNTIME_DATA_DIR, id, 'data');
-        const logsDir = resolveSecureSubpath(RUNTIME_DATA_DIR, id, 'logs');
-        fs.mkdirSync(dataDir, { recursive: true });
-        fs.mkdirSync(logsDir, { recursive: true });
-
-        const logFile = path.join(logsDir, 'worker.log');
-        const logStream = fs.createWriteStream(logFile, { flags: 'a' });
-
+    async buildSidecarEnv(sidecar, dataDir) {
         const lsAddress = this.getLsAddress();
         const csrfToken = await this.getCsrfToken();
         const env = {
@@ -752,6 +721,26 @@ class SidecarManager extends EventEmitter {
             env.AGY_PROJECT_ID = sidecar.projectId;
             env.ANTIGRAVITY_PROJECT_ID = sidecar.projectId;
         }
+        return env;
+    }
+
+    /**
+     * Starts a continuous background worker process.
+     */
+    async startWorker(sidecar) {
+        if (!sidecar || !sidecar.command) return;
+        const id = sanitizeSidecarId(sidecar.id);
+        this.stopWorker(id);
+
+        const sidecarDir = resolveSecureSubpath(SIDECARS_DIR, id);
+        const dataDir = resolveSecureSubpath(RUNTIME_DATA_DIR, id, 'data');
+        const logsDir = resolveSecureSubpath(RUNTIME_DATA_DIR, id, 'logs');
+        fs.mkdirSync(dataDir, { recursive: true });
+        fs.mkdirSync(logsDir, { recursive: true });
+
+        const logFile = path.join(logsDir, 'worker.log');
+        const logStream = fs.createWriteStream(logFile, { flags: 'a' });
+        const env = await this.buildSidecarEnv(sidecar, dataDir);
 
         console.log(`[Sidecar Manager] 🚀 Starting worker '${id}': ${sidecar.command} ${(sidecar.args || []).join(' ')}`);
 
@@ -892,28 +881,7 @@ class SidecarManager extends EventEmitter {
         const logFile = path.join(logsDir, `${timestamp}.log`);
         const latestLogFile = path.join(logsDir, 'latest.log');
         const logStream = fs.createWriteStream(logFile, { flags: 'w' });
-
-        const lsAddress = this.getLsAddress();
-        const csrfToken = await this.getCsrfToken();
-        const env = {
-            ...process.env,
-            ...sidecar.env,
-            HOME: HOME_DIR,
-            ANTIGRAVITY_EXECUTABLE_DATA_DIR: dataDir,
-            ANTIGRAVITY_AGENTAPI_EXE: path.join(LOCAL_BIN_DIR, 'agy'),
-            PATH: `${AGY_BIN_DIR}:${LOCAL_BIN_DIR}:${process.env.PATH || ''}`
-        };
-        if (lsAddress && !env.ANTIGRAVITY_LS_ADDRESS) {
-            env.ANTIGRAVITY_LS_ADDRESS = lsAddress;
-        }
-        if (csrfToken && !env.ANTIGRAVITY_CSRF_TOKEN) {
-            env.ANTIGRAVITY_CSRF_TOKEN = csrfToken;
-        }
-        if (sidecar.projectId) {
-            env.PROJECT_ID = sidecar.projectId;
-            env.AGY_PROJECT_ID = sidecar.projectId;
-            env.ANTIGRAVITY_PROJECT_ID = sidecar.projectId;
-        }
+        const env = await this.buildSidecarEnv(sidecar, dataDir);
 
         // Special logging if agentapi prompt is fired
         if (execCommand === 'agentapi' && execArgs[0] === 'new-conversation') {

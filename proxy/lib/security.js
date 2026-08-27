@@ -24,8 +24,8 @@ function applySecurityHeaders(res, req) {
     }
 }
 
-// Read and parse JSON body helper
-function readJsonBody(req, maxBytes = 64 * 1024) {
+// Read raw request body as string with maximum byte length protection
+function readRequestBody(req, maxBytes = 64 * 1024) {
     return new Promise((resolve, reject) => {
         let body = '';
         let exceeded = false;
@@ -40,19 +40,25 @@ function readJsonBody(req, maxBytes = 64 * 1024) {
         });
         req.on('end', () => {
             if (exceeded) return;
-            try {
-                const parsed = body ? JSON.parse(body) : {};
-                resolve(parsed);
-            } catch (err) {
-                reject(new Error('Invalid JSON'));
-            }
+            resolve(body);
         });
         req.on('error', reject);
     });
 }
 
+// Read and parse JSON body helper
+async function readJsonBody(req, maxBytes = 64 * 1024) {
+    const body = await readRequestBody(req, maxBytes);
+    try {
+        return body ? JSON.parse(body) : {};
+    } catch (err) {
+        throw new Error('Invalid JSON');
+    }
+}
+
 module.exports = {
     safeCompare,
     applySecurityHeaders,
+    readRequestBody,
     readJsonBody,
 };

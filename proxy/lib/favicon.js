@@ -49,26 +49,28 @@ function getCachedAsset(filename, defaultBuffer) {
     return defaultBuffer;
 }
 
+const EXACT_FAVICON_PATHS = new Set([
+    '/favicon.ico',
+    '/favicon.svg',
+    '/favicon.png',
+    '/apple-touch-icon.png',
+    '/apple-touch-icon-precomposed.png',
+    '/terminal/favicon.ico',
+    '/terminal/favicon.svg',
+    '/terminal/favicon.png',
+    '/terminal/apple-touch-icon.png',
+    '/ide/favicon.ico',
+    '/ide/favicon.svg',
+    '/ide/favicon.png',
+    '/ide/apple-touch-icon.png',
+]);
+
 function isFaviconRequest(pathname) {
-    if (
-        pathname === '/favicon.ico' ||
-        pathname === '/favicon.svg' ||
-        pathname === '/favicon.png' ||
-        pathname === '/apple-touch-icon.png' ||
-        pathname === '/apple-touch-icon-precomposed.png' ||
-        pathname === '/terminal/favicon.ico' ||
-        pathname === '/terminal/favicon.svg' ||
-        pathname === '/terminal/favicon.png' ||
-        pathname === '/terminal/apple-touch-icon.png' ||
-        pathname === '/ide/favicon.ico' ||
-        pathname === '/ide/favicon.svg' ||
-        pathname === '/ide/favicon.png' ||
-        pathname === '/ide/apple-touch-icon.png' ||
-        pathname.startsWith('/ide/_static/src/browser/media/favicon') ||
+    if (EXACT_FAVICON_PATHS.has(pathname)) return true;
+    if (pathname.startsWith('/ide/_static/src/browser/media/favicon') ||
         pathname.startsWith('/ide/_static/src/browser/media/pwa-icon') ||
         pathname.endsWith('/workbench/browser/media/favicon.ico') ||
-        pathname.endsWith('/resources/server/favicon.ico')
-    ) {
+        pathname.endsWith('/resources/server/favicon.ico')) {
         return true;
     }
     return false;

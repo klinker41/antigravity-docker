@@ -3,14 +3,14 @@
 
 const http = require('node:http');
 const fs = require('node:fs');
+const crypto = require('node:crypto');
 
 const { LISTEN_PORT, AUTH_PASSWORD, PORT_FILE, ENABLE_TERMINAL, ENABLE_IDE } = require('./lib/config');
 const { isAuthenticated, activeSessions, loginRateLimiter, parseCookies, getClientIp, checkRateLimit, recordFailedAttempt, SESSION_TTL_MS } = require('./lib/session');
-const { safeCompare, applySecurityHeaders, readJsonBody } = require('./lib/security');
+const { safeCompare, applySecurityHeaders, readRequestBody, readJsonBody } = require('./lib/security');
 const { isFaviconRequest, handleFaviconRequest } = require('./lib/favicon');
 const { renderLoginPage, renderStatusPage, renderStartingPage, renderSidecarsPage, checkUpstreamHealth } = require('./lib/pages');
 const { proxyToTerminal, proxyToIde, isSpaRoute, proxyToUpstream, handleWebSocketUpgrade } = require('./lib/proxy');
-const crypto = require('node:crypto');
 
 let sidecarManager;
 try {
@@ -130,23 +130,8 @@ const server = http.createServer(async (req, res) => {
                 return;
             }
 
-            let body = '';
-            let exceeded = false;
-            const MAX_BODY_BYTES = 16 * 1024; // 16 KB max payload
-
-            req.on('data', chunk => {
-                if (exceeded) return;
-                body += chunk.toString();
-                if (Buffer.byteLength(body, 'utf8') > MAX_BODY_BYTES) {
-                    exceeded = true;
-                    res.writeHead(413, { 'Content-Type': 'text/plain' });
-                    res.end('Payload Too Large');
-                    req.destroy();
-                }
-            });
-
-            req.on('end', () => {
-                if (exceeded) return;
+            try {
+                const body = await readRequestBody(req, 16 * 1024);
                 const params = new URLSearchParams(body);
                 const enteredPassword = params.get('password') || '';
 
@@ -173,7 +158,15 @@ const server = http.createServer(async (req, res) => {
                     res.writeHead(401, { 'Content-Type': 'text/html; charset=utf-8' });
                     res.end(renderLoginPage('Incorrect password. Please try again.'));
                 }
-            });
+            } catch (err) {
+                if (err.message === 'Payload Too Large') {
+                    res.writeHead(413, { 'Content-Type': 'text/plain' });
+                    res.end('Payload Too Large');
+                } else {
+                    res.writeHead(400, { 'Content-Type': 'text/plain' });
+                    res.end('Bad Request');
+                }
+            }
             return;
         }
 

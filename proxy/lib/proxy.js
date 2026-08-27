@@ -312,6 +312,20 @@ function proxyToUpstream(req, res, targetPort, sidecarManager) {
     req.pipe(proxyReq, { end: true });
 }
 
+// Helper to serialize HTTP status and headers into raw wire format
+function formatRawHttpResponse(statusCode, statusMessage, headers) {
+    let raw = `HTTP/1.1 ${statusCode}${statusMessage ? ' ' + statusMessage : ''}\r\n`;
+    for (const [key, value] of Object.entries(headers)) {
+        if (Array.isArray(value)) {
+            for (const v of value) raw += `${key}: ${v}\r\n`;
+        } else {
+            raw += `${key}: ${value}\r\n`;
+        }
+    }
+    raw += '\r\n';
+    return raw;
+}
+
 // Handle WebSocket / Upgrade requests
 function handleWebSocketUpgrade(req, clientSocket, head, targetPort) {
     const parsedUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
@@ -364,16 +378,7 @@ function handleWebSocketUpgrade(req, clientSocket, head, targetPort) {
     upstreamReq.on('upgrade', (upstreamRes, upstreamSocket, upstreamHead) => {
         upstreamSocket.setNoDelay(true);
 
-        let rawResponse = `HTTP/1.1 101 Switching Protocols\r\n`;
-        for (const [key, value] of Object.entries(upstreamRes.headers)) {
-            if (Array.isArray(value)) {
-                for (const v of value) rawResponse += `${key}: ${v}\r\n`;
-            } else {
-                rawResponse += `${key}: ${value}\r\n`;
-            }
-        }
-        rawResponse += '\r\n';
-
+        const rawResponse = formatRawHttpResponse(101, 'Switching Protocols', upstreamRes.headers);
         clientSocket.write(rawResponse);
         if (upstreamHead && upstreamHead.length > 0) clientSocket.write(upstreamHead);
         if (head && head.length > 0) upstreamSocket.write(head);
@@ -395,15 +400,7 @@ function handleWebSocketUpgrade(req, clientSocket, head, targetPort) {
     });
 
     upstreamReq.on('response', (upstreamRes) => {
-        let rawResponse = `HTTP/1.1 ${upstreamRes.statusCode} ${upstreamRes.statusMessage || ''}\r\n`;
-        for (const [key, value] of Object.entries(upstreamRes.headers)) {
-            if (Array.isArray(value)) {
-                for (const v of value) rawResponse += `${key}: ${v}\r\n`;
-            } else {
-                rawResponse += `${key}: ${value}\r\n`;
-            }
-        }
-        rawResponse += '\r\n';
+        const rawResponse = formatRawHttpResponse(upstreamRes.statusCode, upstreamRes.statusMessage || '', upstreamRes.headers);
         clientSocket.write(rawResponse);
         upstreamRes.pipe(clientSocket);
     });
