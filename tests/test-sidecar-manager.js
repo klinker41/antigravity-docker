@@ -320,6 +320,11 @@ test('Sidecar Manager - HTTP Proxy Integration', async (t) => {
             assert.ok(injectionCode.includes('Sidecar Manager'));
             assert.ok(injectionCode.includes('/sidecars'));
             assert.ok(injectionCode.includes('agy-injected-btn-sidecars'));
+
+            const { INJECTED_UI_STYLES } = require('../proxy/lib/ui-injection');
+            assert.ok(INJECTED_UI_STYLES.includes('@media (max-width: 768px)'));
+            assert.ok(INJECTED_UI_STYLES.includes('.agy-injected-tools-group'));
+            assert.ok(INJECTED_UI_STYLES.includes('display: none !important;'));
         });
     } finally {
         proxyProc.kill('SIGKILL');

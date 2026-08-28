@@ -103,6 +103,13 @@ const INJECTED_UI_STYLES = `
 .agy-injected-btn:hover .agy-injected-external-icon {
     opacity: 0.9;
 }
+
+/* Hide injected workspace tools on mobile layouts */
+@media (max-width: 768px) {
+    .agy-injected-tools-group {
+        display: none !important;
+    }
+}
 `;
 
 // Build dynamically injected script for Left-hand Navigation Tools
