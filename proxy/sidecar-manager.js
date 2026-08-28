@@ -8,8 +8,10 @@ const HOME_DIR = process.env.HOME || '/home/developer';
 const GEMINI_CONFIG_DIR = process.env.GEMINI_CONFIG_DIR || path.join(HOME_DIR, '.gemini/config');
 const SIDECARS_DIR = path.join(GEMINI_CONFIG_DIR, 'sidecars');
 const PLUGINS_DIR = path.join(GEMINI_CONFIG_DIR, 'plugins');
+const PLUGINS_CONFIG_FILE = path.join(GEMINI_CONFIG_DIR, 'plugins.json');
 const CONFIG_FILE = path.join(GEMINI_CONFIG_DIR, 'config.json');
 const PROJECTS_DIR = path.join(GEMINI_CONFIG_DIR, 'projects');
+const WORKSPACE_DIR = process.env.WORKSPACE_DIR || '/workspace';
 const RUNTIME_DATA_DIR = process.env.GEMINI_RUNTIME_DIR || path.join(HOME_DIR, '.gemini/antigravity/sidecar_data');
 const AGY_BIN_DIR = path.join(HOME_DIR, '.gemini/antigravity-cli/bin');
 const LOCAL_BIN_DIR = path.join(HOME_DIR, '.local/bin');
@@ -434,6 +436,137 @@ class SidecarManager extends EventEmitter {
     }
 
     /**
+     * Scans a single plugin directory for sidecars in <pluginDir>/sidecars/<name>/sidecar.json
+     */
+    scanPluginDir(pluginDir, pluginNameFallback, sidecars, sidecarsConfig, discoveredPluginDirs) {
+        if (!pluginDir || typeof pluginDir !== 'string') return;
+        try {
+            if (!fs.existsSync(pluginDir)) return;
+            const resolvedPluginDir = path.resolve(pluginDir);
+            if (discoveredPluginDirs.has(resolvedPluginDir)) return;
+            discoveredPluginDirs.add(resolvedPluginDir);
+
+            let pluginName = pluginNameFallback || path.basename(resolvedPluginDir);
+            const pluginJsonPath = path.join(resolvedPluginDir, 'plugin.json');
+            let pluginDisabledByDefault = false;
+
+            if (fs.existsSync(pluginJsonPath)) {
+                try {
+                    const pluginJson = JSON.parse(fs.readFileSync(pluginJsonPath, 'utf8'));
+                    if (pluginJson.name && typeof pluginJson.name === 'string') {
+                        pluginName = pluginJson.name.trim();
+                    }
+                    if (pluginJson.disabled === true) {
+                        pluginDisabledByDefault = true;
+                    }
+                } catch (e) {}
+            }
+
+            // Sanitize pluginName for valid ID formatting
+            const cleanPluginName = pluginName.replace(/[^a-zA-Z0-9_-]/g, '-').replace(/^-+|-+$/g, '') || 'plugin';
+
+            const pluginSidecarsDir = path.join(resolvedPluginDir, 'sidecars');
+            if (fs.existsSync(pluginSidecarsDir)) {
+                const subEntries = fs.readdirSync(pluginSidecarsDir, { withFileTypes: true });
+                for (const sub of subEntries) {
+                    if (sub.isDirectory()) {
+                        const sidecarName = sub.name;
+                        const cleanSidecarName = sidecarName.replace(/[^a-zA-Z0-9_-]/g, '-').replace(/^-+|-+$/g, '');
+                        if (!cleanSidecarName) continue;
+                        const id = `${cleanPluginName}/${cleanSidecarName}`;
+                        const sidecarDir = path.join(pluginSidecarsDir, sidecarName);
+                        const sidecarJsonPath = path.join(sidecarDir, 'sidecar.json');
+                        if (fs.existsSync(sidecarJsonPath)) {
+                            try {
+                                const parsed = JSON.parse(fs.readFileSync(sidecarJsonPath, 'utf8'));
+                                const userConf = sidecarsConfig[id] || {};
+                                const isEnabled = Boolean(
+                                    userConf.enabled !== undefined
+                                        ? userConf.enabled
+                                        : (parsed.enabled !== undefined ? parsed.enabled : !pluginDisabledByDefault)
+                                );
+                                const projectId = userConf.projectId || parsed.projectId || '';
+
+                                sidecars.push(this.formatSidecarInfo(id, parsed, isEnabled, projectId, true, sidecarDir));
+                            } catch (e) {
+                                console.error(`[Sidecar Manager] Failed parsing ${sidecarJsonPath}:`, e.message);
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (e) {
+            console.error(`[Sidecar Manager] Error scanning plugin folder ${pluginDir}:`, e.message);
+        }
+    }
+
+    /**
+     * Parses a plugins.json configuration file and scans entries / inherits.
+     */
+    loadPluginsJson(filePath, sidecars, sidecarsConfig, discoveredPluginDirs, visitedConfigFiles = new Set()) {
+        if (!filePath || typeof filePath !== 'string') return;
+        try {
+            if (!fs.existsSync(filePath)) return;
+            const resolvedPath = path.resolve(filePath);
+            if (visitedConfigFiles.has(resolvedPath)) return;
+            visitedConfigFiles.add(resolvedPath);
+
+            const content = fs.readFileSync(resolvedPath, 'utf8');
+            const parsed = JSON.parse(content);
+            const baseDir = path.dirname(resolvedPath);
+
+            // Handle inherits
+            if (Array.isArray(parsed.inherits)) {
+                for (const item of parsed.inherits) {
+                    if (item && item.path) {
+                        let inheritPath = item.path;
+                        if (inheritPath.startsWith('~/')) {
+                            inheritPath = path.join(HOME_DIR, inheritPath.slice(2));
+                        } else if (!path.isAbsolute(inheritPath)) {
+                            inheritPath = path.resolve(baseDir, inheritPath);
+                        }
+                        this.loadPluginsJson(inheritPath, sidecars, sidecarsConfig, discoveredPluginDirs, visitedConfigFiles);
+                    }
+                }
+            }
+
+            // Handle entries
+            if (Array.isArray(parsed.entries)) {
+                for (const entry of parsed.entries) {
+                    if (entry && entry.path) {
+                        let entryPath = entry.path;
+                        if (entryPath.startsWith('~/')) {
+                            entryPath = path.join(HOME_DIR, entryPath.slice(2));
+                        } else if (!path.isAbsolute(entryPath)) {
+                            entryPath = path.resolve(baseDir, entryPath);
+                        }
+
+                        if (fs.existsSync(entryPath)) {
+                            const stat = fs.statSync(entryPath);
+                            if (stat.isDirectory()) {
+                                const hasPluginJson = fs.existsSync(path.join(entryPath, 'plugin.json'));
+                                const hasSidecars = fs.existsSync(path.join(entryPath, 'sidecars'));
+                                if (hasPluginJson || hasSidecars) {
+                                    this.scanPluginDir(entryPath, null, sidecars, sidecarsConfig, discoveredPluginDirs);
+                                } else {
+                                    const subs = fs.readdirSync(entryPath, { withFileTypes: true });
+                                    for (const sub of subs) {
+                                        if (sub.isDirectory()) {
+                                            this.scanPluginDir(path.join(entryPath, sub.name), sub.name, sidecars, sidecarsConfig, discoveredPluginDirs);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (e) {
+            console.error(`[Sidecar Manager] Error processing plugins config ${filePath}:`, e.message);
+        }
+    }
+
+    /**
      * Discovers all sidecars from ~/.gemini/config/sidecars and plugins.
      */
     listSidecars() {
@@ -441,6 +574,7 @@ class SidecarManager extends EventEmitter {
         const sidecars = [];
         const config = this.readConfig();
         const sidecarsConfig = config.sidecars || {};
+        const discoveredPluginDirs = new Set();
 
         // 1. Scan global sidecars (~/.gemini/config/sidecars/<id>/sidecar.json)
         try {
@@ -449,7 +583,8 @@ class SidecarManager extends EventEmitter {
                 for (const entry of entries) {
                     if (entry.isDirectory()) {
                         const id = entry.name;
-                        const sidecarJsonPath = path.join(SIDECARS_DIR, id, 'sidecar.json');
+                        const sidecarDir = path.join(SIDECARS_DIR, id);
+                        const sidecarJsonPath = path.join(sidecarDir, 'sidecar.json');
                         if (fs.existsSync(sidecarJsonPath)) {
                             try {
                                 const parsed = JSON.parse(fs.readFileSync(sidecarJsonPath, 'utf8'));
@@ -457,7 +592,7 @@ class SidecarManager extends EventEmitter {
                                 const isEnabled = Boolean(userConf.enabled !== undefined ? userConf.enabled : parsed.enabled);
                                 const projectId = userConf.projectId || parsed.projectId || '';
 
-                                sidecars.push(this.formatSidecarInfo(id, parsed, isEnabled, projectId, false));
+                                sidecars.push(this.formatSidecarInfo(id, parsed, isEnabled, projectId, false, sidecarDir));
                             } catch (e) {
                                 console.error(`[Sidecar Manager] Failed parsing ${sidecarJsonPath}:`, e.message);
                             }
@@ -467,33 +602,40 @@ class SidecarManager extends EventEmitter {
             }
         } catch (e) {}
 
-        // 2. Scan plugin sidecars (~/.gemini/config/plugins/<plugin>/sidecars/<name>/sidecar.json)
+        // 2. Scan plugin sidecars from ~/.gemini/config/plugins/
         try {
             if (fs.existsSync(PLUGINS_DIR)) {
                 const pluginEntries = fs.readdirSync(PLUGINS_DIR, { withFileTypes: true });
                 for (const pluginEntry of pluginEntries) {
                     if (pluginEntry.isDirectory()) {
-                        const pluginName = pluginEntry.name;
-                        const pluginSidecarsDir = path.join(PLUGINS_DIR, pluginName, 'sidecars');
-                        if (fs.existsSync(pluginSidecarsDir)) {
-                            const subEntries = fs.readdirSync(pluginSidecarsDir, { withFileTypes: true });
-                            for (const sub of subEntries) {
-                                if (sub.isDirectory()) {
-                                    const sidecarName = sub.name;
-                                    const id = `${pluginName}/${sidecarName}`;
-                                    const sidecarJsonPath = path.join(pluginSidecarsDir, sidecarName, 'sidecar.json');
-                                    if (fs.existsSync(sidecarJsonPath)) {
-                                        try {
-                                            const parsed = JSON.parse(fs.readFileSync(sidecarJsonPath, 'utf8'));
-                                            const userConf = sidecarsConfig[id] || {};
-                                            const isEnabled = Boolean(userConf.enabled !== undefined ? userConf.enabled : parsed.enabled);
-                                            const projectId = userConf.projectId || parsed.projectId || '';
+                        this.scanPluginDir(path.join(PLUGINS_DIR, pluginEntry.name), pluginEntry.name, sidecars, sidecarsConfig, discoveredPluginDirs);
+                    }
+                }
+            }
+        } catch (e) {}
 
-                                            sidecars.push(this.formatSidecarInfo(id, parsed, isEnabled, projectId, true));
-                                        } catch (e) {}
-                                    }
-                                }
-                            }
+        // 3. Scan plugins registered in plugins.json (~/.gemini/config/plugins.json and workspace plugins.json)
+        const pluginsJsonCandidates = [
+            PLUGINS_CONFIG_FILE,
+            path.join(WORKSPACE_DIR, '.agents', 'plugins.json'),
+            path.join(WORKSPACE_DIR, '.agent', 'plugins.json'),
+            path.join(WORKSPACE_DIR, 'plugins.json')
+        ];
+        for (const candidate of pluginsJsonCandidates) {
+            this.loadPluginsJson(candidate, sidecars, sidecarsConfig, discoveredPluginDirs);
+        }
+
+        // 4. Scan workspace directories for plugins (e.g. /workspace/* with plugin.json or sidecars/)
+        try {
+            if (fs.existsSync(WORKSPACE_DIR)) {
+                const wsEntries = fs.readdirSync(WORKSPACE_DIR, { withFileTypes: true });
+                for (const entry of wsEntries) {
+                    if (entry.isDirectory() && !entry.name.startsWith('.') && entry.name !== 'node_modules' && entry.name !== 'dist' && entry.name !== 'build') {
+                        const candidateDir = path.join(WORKSPACE_DIR, entry.name);
+                        const hasPluginJson = fs.existsSync(path.join(candidateDir, 'plugin.json'));
+                        const hasSidecars = fs.existsSync(path.join(candidateDir, 'sidecars'));
+                        if (hasPluginJson && hasSidecars) {
+                            this.scanPluginDir(candidateDir, entry.name, sidecars, sidecarsConfig, discoveredPluginDirs);
                         }
                     }
                 }
@@ -503,7 +645,7 @@ class SidecarManager extends EventEmitter {
         return sidecars;
     }
 
-    formatSidecarInfo(id, parsed, isEnabled, projectId, isPlugin = false) {
+    formatSidecarInfo(id, parsed, isEnabled, projectId, isPlugin = false, sidecarDir = null) {
         const isScheduled = parsed.builtin === 'schedule';
         const cronExpr = isScheduled && Array.isArray(parsed.args) ? parsed.args[0] : '';
         const workerInfo = this.runningWorkers.get(id);
@@ -520,6 +662,8 @@ class SidecarManager extends EventEmitter {
             }
         }
 
+        const resolvedDir = sidecarDir || (isPlugin ? null : resolveSecureSubpath(SIDECARS_DIR, id));
+
         return {
             id,
             displayName: parsed.display_name || id,
@@ -532,6 +676,8 @@ class SidecarManager extends EventEmitter {
             enabled: isEnabled,
             projectId: projectId || '',
             isPlugin,
+            pluginName: isPlugin ? id.split('/')[0] : null,
+            directory: resolvedDir,
             isScheduled,
             cronExpr,
             cronDescription: isScheduled ? describeCron(cronExpr) : '',
@@ -549,6 +695,18 @@ class SidecarManager extends EventEmitter {
         return all.find(s => s.id === id) || null;
     }
 
+    getSidecarDir(id) {
+        const sidecar = this.getSidecar(id);
+        if (sidecar && sidecar.directory) {
+            return sidecar.directory;
+        }
+        const cleanId = sanitizeSidecarId(id);
+        if (cleanId.includes('/')) {
+            return null;
+        }
+        return resolveSecureSubpath(SIDECARS_DIR, cleanId);
+    }
+
     /**
      * Saves or creates a sidecar definition in ~/.gemini/config/sidecars/<id>/sidecar.json
      * and updates ~/.gemini/config/config.json with enabled state and projectId.
@@ -556,40 +714,43 @@ class SidecarManager extends EventEmitter {
     async saveSidecar(data) {
         if (!data || !data.id) throw new Error('Sidecar ID is required.');
         const id = sanitizeSidecarId(data.id);
+        const isPlugin = id.includes('/') || Boolean(data.isPlugin);
 
-        const dirPath = resolveSecureSubpath(SIDECARS_DIR, id);
-        fs.mkdirSync(dirPath, { recursive: true });
+        if (!isPlugin) {
+            const dirPath = resolveSecureSubpath(SIDECARS_DIR, id);
+            fs.mkdirSync(dirPath, { recursive: true });
 
-        const sidecarJson = {
-            display_name: data.displayName || data.display_name || id,
-            description: data.description || '',
-            restart_policy: data.restartPolicy || data.restart_policy || 'always'
-        };
+            const sidecarJson = {
+                display_name: data.displayName || data.display_name || id,
+                description: data.description || '',
+                restart_policy: data.restartPolicy || data.restart_policy || 'always'
+            };
 
-        if (data.builtin) {
-            sidecarJson.builtin = data.builtin;
-        } else if (data.command) {
-            sidecarJson.command = data.command;
-        } else if (data.isScheduled) {
-            sidecarJson.builtin = 'schedule';
-        } else {
-            throw new Error('Either command or builtin must be specified.');
+            if (data.builtin) {
+                sidecarJson.builtin = data.builtin;
+            } else if (data.command) {
+                sidecarJson.command = data.command;
+            } else if (data.isScheduled) {
+                sidecarJson.builtin = 'schedule';
+            } else {
+                throw new Error('Either command or builtin must be specified.');
+            }
+
+            if (Array.isArray(data.args)) {
+                sidecarJson.args = data.args;
+            } else if (typeof data.args === 'string') {
+                sidecarJson.args = data.args.split('\n').map(s => s.trim()).filter(Boolean);
+            } else {
+                sidecarJson.args = [];
+            }
+
+            if (data.env && typeof data.env === 'object') {
+                sidecarJson.env = data.env;
+            }
+
+            const sidecarFilePath = path.join(dirPath, 'sidecar.json');
+            fs.writeFileSync(sidecarFilePath, JSON.stringify(sidecarJson, null, 2), 'utf8');
         }
-
-        if (Array.isArray(data.args)) {
-            sidecarJson.args = data.args;
-        } else if (typeof data.args === 'string') {
-            sidecarJson.args = data.args.split('\n').map(s => s.trim()).filter(Boolean);
-        } else {
-            sidecarJson.args = [];
-        }
-
-        if (data.env && typeof data.env === 'object') {
-            sidecarJson.env = data.env;
-        }
-
-        const sidecarFilePath = path.join(dirPath, 'sidecar.json');
-        fs.writeFileSync(sidecarFilePath, JSON.stringify(sidecarJson, null, 2), 'utf8');
 
         // Update config.json
         const config = this.readConfig();
@@ -624,7 +785,8 @@ class SidecarManager extends EventEmitter {
     }
 
     /**
-     * Deletes a sidecar directory and removes it from config.json.
+     * Deletes a sidecar directory (for global sidecars) and removes it from config.json.
+     * For plugin sidecars, only clears config.json settings without deleting files on disk.
      */
     async deleteSidecar(id) {
         const cleanId = sanitizeSidecarId(id);
@@ -636,12 +798,14 @@ class SidecarManager extends EventEmitter {
             this.writeConfig(config);
         }
 
-        const dirPath = resolveSecureSubpath(SIDECARS_DIR, cleanId);
-        if (fs.existsSync(dirPath)) {
-            try {
-                fs.rmSync(dirPath, { recursive: true, force: true });
-            } catch (e) {
-                console.error(`[Sidecar Manager] Error deleting folder ${dirPath}:`, e.message);
+        if (!cleanId.includes('/')) {
+            const dirPath = resolveSecureSubpath(SIDECARS_DIR, cleanId);
+            if (fs.existsSync(dirPath)) {
+                try {
+                    fs.rmSync(dirPath, { recursive: true, force: true });
+                } catch (e) {
+                    console.error(`[Sidecar Manager] Error deleting folder ${dirPath}:`, e.message);
+                }
             }
         }
 
@@ -710,16 +874,25 @@ class SidecarManager extends EventEmitter {
     /**
      * Constructs environment variables dictionary for sidecar execution.
      */
-    async buildSidecarEnv(sidecar, dataDir) {
+    async buildSidecarEnv(sidecar, dataDir, sidecarDir = null) {
         const lsAddress = this.getLsAddress();
         const csrfToken = await this.getCsrfToken();
+        const pathEntries = [];
+        if (sidecarDir && fs.existsSync(sidecarDir)) {
+            pathEntries.push(sidecarDir);
+        }
+        pathEntries.push(AGY_BIN_DIR, LOCAL_BIN_DIR);
+        if (process.env.PATH) {
+            pathEntries.push(process.env.PATH);
+        }
+
         const env = {
             ...process.env,
             ...sidecar.env,
             HOME: HOME_DIR,
             ANTIGRAVITY_EXECUTABLE_DATA_DIR: dataDir,
             ANTIGRAVITY_AGENTAPI_EXE: path.join(LOCAL_BIN_DIR, 'agy'),
-            PATH: `${AGY_BIN_DIR}:${LOCAL_BIN_DIR}:${process.env.PATH || ''}`
+            PATH: pathEntries.join(':')
         };
         if (lsAddress && !env.ANTIGRAVITY_LS_ADDRESS) {
             env.ANTIGRAVITY_LS_ADDRESS = lsAddress;
@@ -743,7 +916,7 @@ class SidecarManager extends EventEmitter {
         const id = sanitizeSidecarId(sidecar.id);
         this.stopWorker(id);
 
-        const sidecarDir = resolveSecureSubpath(SIDECARS_DIR, id);
+        const sidecarDir = sidecar.directory || this.getSidecarDir(id);
         const dataDir = resolveSecureSubpath(RUNTIME_DATA_DIR, id, 'data');
         const logsDir = resolveSecureSubpath(RUNTIME_DATA_DIR, id, 'logs');
         fs.mkdirSync(dataDir, { recursive: true });
@@ -751,13 +924,13 @@ class SidecarManager extends EventEmitter {
 
         const logFile = path.join(logsDir, 'worker.log');
         const logStream = fs.createWriteStream(logFile, { flags: 'a' });
-        const env = await this.buildSidecarEnv(sidecar, dataDir);
+        const env = await this.buildSidecarEnv(sidecar, dataDir, sidecarDir);
 
         console.log(`[Sidecar Manager] 🚀 Starting worker '${id}': ${sidecar.command} ${(sidecar.args || []).join(' ')}`);
 
         try {
             const child = spawn(sidecar.command, sidecar.args || [], {
-                cwd: fs.existsSync(sidecarDir) ? sidecarDir : HOME_DIR,
+                cwd: (sidecarDir && fs.existsSync(sidecarDir)) ? sidecarDir : HOME_DIR,
                 env,
                 stdio: ['ignore', 'pipe', 'pipe']
             });
@@ -880,7 +1053,7 @@ class SidecarManager extends EventEmitter {
 
         const execCommand = args[1];
         const execArgs = args.slice(2);
-        const sidecarDir = resolveSecureSubpath(SIDECARS_DIR, id);
+        const sidecarDir = sidecar.directory || this.getSidecarDir(id);
         const dataDir = resolveSecureSubpath(RUNTIME_DATA_DIR, id, 'data');
         const logsDir = resolveSecureSubpath(RUNTIME_DATA_DIR, id, 'logs');
         const eventsDir = resolveSecureSubpath(RUNTIME_DATA_DIR, id, 'events');
@@ -892,7 +1065,7 @@ class SidecarManager extends EventEmitter {
         const logFile = path.join(logsDir, `${timestamp}.log`);
         const latestLogFile = path.join(logsDir, 'latest.log');
         const logStream = fs.createWriteStream(logFile, { flags: 'w' });
-        const env = await this.buildSidecarEnv(sidecar, dataDir);
+        const env = await this.buildSidecarEnv(sidecar, dataDir, sidecarDir);
 
         // Special logging if agentapi prompt is fired
         if (execCommand === 'agentapi' && execArgs[0] === 'new-conversation') {
@@ -904,7 +1077,7 @@ class SidecarManager extends EventEmitter {
 
         try {
             const child = spawn(execCommand, execArgs, {
-                cwd: fs.existsSync(sidecarDir) ? sidecarDir : HOME_DIR,
+                cwd: (sidecarDir && fs.existsSync(sidecarDir)) ? sidecarDir : HOME_DIR,
                 env,
                 stdio: ['ignore', 'pipe', 'pipe']
             });

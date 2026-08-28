@@ -171,6 +171,12 @@ Antigravity UI or navigating directly to `/sidecars`.
 - **Interactive Management**: Toggle sidecars on or off in real-time, trigger
   manual runs immediately with one click, view live stdout/stderr logs, and edit
   configurations.
+- **Plugin Sidecars & Binaries**: Automatically discovers sidecars packaged
+  within plugins (`<plugin folder>/sidecars/<sidecar name>/sidecar.json`),
+  namespacing them as `<plugin-name>/<sidecar-name>`. Adjacent executable
+  binaries and companion scripts residing beside `sidecar.json` can be executed
+  directly via relative paths or command name (automatically prepended to
+  `PATH`).
 - **Spec-Compliant Persistence**: Sidecar configurations are saved to
   `~/.gemini/config/sidecars/<id>/sidecar.json` and enabled states are stored in
   `~/.gemini/config/config.json`.

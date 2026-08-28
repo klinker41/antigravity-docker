@@ -330,3 +330,137 @@ test('Sidecar Manager - HTTP Proxy Integration', async (t) => {
         proxyProc.kill('SIGKILL');
     }
 });
+
+test('Sidecar Manager - Plugin Sidecars & Adjacent Binaries', async (t) => {
+    const HOME_DIR = process.env.HOME || '/home/developer';
+    const GEMINI_CONFIG_DIR = process.env.GEMINI_CONFIG_DIR || path.join(HOME_DIR, '.gemini/config');
+    const PLUGINS_DIR = path.join(GEMINI_CONFIG_DIR, 'plugins');
+
+    const testPluginDir = path.join(PLUGINS_DIR, 'test-plugin-runner');
+    const testSidecarDir = path.join(testPluginDir, 'sidecars', 'runner-bot');
+    const extPluginDir = '/tmp/test-external-plugin';
+    const extSidecarDir = path.join(extPluginDir, 'sidecars', 'ext-bot');
+    const pluginsJsonPath = path.join(GEMINI_CONFIG_DIR, 'plugins.json');
+
+    // Setup test plugin 1 in ~/.gemini/config/plugins/
+    fs.mkdirSync(testSidecarDir, { recursive: true });
+    fs.writeFileSync(path.join(testPluginDir, 'plugin.json'), JSON.stringify({ name: 'test-plugin-runner' }, null, 2), 'utf8');
+
+    // Create an adjacent binary executable
+    const binaryPath = path.join(testSidecarDir, 'custom_binary');
+    fs.writeFileSync(binaryPath, '#!/bin/sh\necho "CWD_PATH=$(pwd)"\necho "ARG1=$1"\n', { encoding: 'utf8', mode: 0o755 });
+
+    fs.writeFileSync(path.join(testSidecarDir, 'sidecar.json'), JSON.stringify({
+        display_name: 'Plugin Runner Bot',
+        description: 'Test sidecar inside plugin with adjacent binary',
+        command: 'custom_binary',
+        args: ['hello-adjacent-binary'],
+        restart_policy: 'never',
+        enabled: false
+    }, null, 2), 'utf8');
+
+    // Setup test plugin 2 registered via plugins.json
+    fs.mkdirSync(extSidecarDir, { recursive: true });
+    fs.writeFileSync(path.join(extPluginDir, 'plugin.json'), JSON.stringify({ name: 'test-ext-plugin' }, null, 2), 'utf8');
+    const extBinaryPath = path.join(extSidecarDir, 'ext_binary');
+    fs.writeFileSync(extBinaryPath, '#!/bin/sh\necho "EXT_CWD=$(pwd)"\necho "EXT_ARG=$1"\n', { encoding: 'utf8', mode: 0o755 });
+
+    fs.writeFileSync(path.join(extSidecarDir, 'sidecar.json'), JSON.stringify({
+        display_name: 'External Plugin Bot',
+        command: './ext_binary',
+        args: ['external-arg'],
+        restart_policy: 'never',
+        enabled: false
+    }, null, 2), 'utf8');
+
+    let originalPluginsJson = null;
+    if (fs.existsSync(pluginsJsonPath)) {
+        originalPluginsJson = fs.readFileSync(pluginsJsonPath, 'utf8');
+    }
+
+    try {
+        // Register external plugin in plugins.json
+        fs.writeFileSync(pluginsJsonPath, JSON.stringify({
+            entries: [{ path: extPluginDir }]
+        }, null, 2), 'utf8');
+
+        await t.test('discovers sidecars from ~/.gemini/config/plugins and plugins.json', () => {
+            const sidecars = sidecarManager.listSidecars();
+            const pluginSidecar = sidecars.find(s => s.id === 'test-plugin-runner/runner-bot');
+            assert.ok(pluginSidecar, 'Should discover plugin sidecar from plugins folder');
+            assert.equal(pluginSidecar.isPlugin, true);
+            assert.equal(pluginSidecar.pluginName, 'test-plugin-runner');
+            assert.equal(pluginSidecar.displayName, 'Plugin Runner Bot');
+            assert.equal(pluginSidecar.directory, testSidecarDir);
+
+            const extSidecar = sidecars.find(s => s.id === 'test-ext-plugin/ext-bot');
+            assert.ok(extSidecar, 'Should discover external plugin sidecar via plugins.json');
+            assert.equal(extSidecar.isPlugin, true);
+            assert.equal(extSidecar.pluginName, 'test-ext-plugin');
+            assert.equal(extSidecar.directory, extSidecarDir);
+        });
+
+        await t.test('executes adjacent binary found via PATH with sidecar dir as cwd', async () => {
+            const sidecarId = 'test-plugin-runner/runner-bot';
+            await sidecarManager.toggleSidecar(sidecarId, true);
+
+            const sidecar = sidecarManager.getSidecar(sidecarId);
+            assert.equal(sidecar.enabled, true);
+
+            await sidecarManager.triggerSidecar(sidecarId);
+            await new Promise(r => setTimeout(r, 400));
+
+            const logs = sidecarManager.getLogs(sidecarId);
+            assert.ok(logs.includes(`CWD_PATH=${testSidecarDir}`), `Logs should show cwd as sidecar directory: ${logs}`);
+            assert.ok(logs.includes('ARG1=hello-adjacent-binary'), `Logs should capture arguments passed: ${logs}`);
+
+            await sidecarManager.toggleSidecar(sidecarId, false);
+        });
+
+        await t.test('executes relative binary ./ext_binary with sidecar dir as cwd', async () => {
+            const extId = 'test-ext-plugin/ext-bot';
+            await sidecarManager.toggleSidecar(extId, true);
+
+            await sidecarManager.triggerSidecar(extId);
+            await new Promise(r => setTimeout(r, 400));
+
+            const logs = sidecarManager.getLogs(extId);
+            assert.ok(logs.includes(`EXT_CWD=${extSidecarDir}`), `Logs should show cwd as external sidecar directory: ${logs}`);
+            assert.ok(logs.includes('EXT_ARG=external-arg'), `Logs should capture external argument: ${logs}`);
+
+            await sidecarManager.toggleSidecar(extId, false);
+        });
+
+        await t.test('deleting a plugin sidecar removes config override without deleting plugin source files', async () => {
+            const sidecarId = 'test-plugin-runner/runner-bot';
+            await sidecarManager.saveSidecar({
+                id: sidecarId,
+                enabled: true,
+                projectId: 'test-project-123'
+            });
+
+            let config = sidecarManager.readConfig();
+            assert.ok(config.sidecars[sidecarId]);
+
+            await sidecarManager.deleteSidecar(sidecarId);
+
+            config = sidecarManager.readConfig();
+            assert.equal(config.sidecars[sidecarId], undefined, 'Config override should be removed');
+
+            // Plugin directory and files must still exist!
+            assert.ok(fs.existsSync(testSidecarDir), 'Plugin sidecar folder must remain on disk');
+            assert.ok(fs.existsSync(binaryPath), 'Plugin binary must remain on disk');
+            assert.ok(fs.existsSync(path.join(testSidecarDir, 'sidecar.json')), 'Plugin sidecar.json must remain on disk');
+        });
+    } finally {
+        // Clean up test directories
+        try { fs.rmSync(testPluginDir, { recursive: true, force: true }); } catch (e) {}
+        try { fs.rmSync(extPluginDir, { recursive: true, force: true }); } catch (e) {}
+        if (originalPluginsJson) {
+            fs.writeFileSync(pluginsJsonPath, originalPluginsJson, 'utf8');
+        } else {
+            try { fs.unlinkSync(pluginsJsonPath); } catch (e) {}
+        }
+    }
+});
+

@@ -1625,6 +1625,7 @@ function renderSidecarsPage() {
                 else if (s.status === 'starting') statusBadge = '<span class="chip chip-purple"><span class="status-dot status-dot-warning"></span> STARTING</span>';
 
                 const typeBadge = s.isScheduled ? '<span class="chip chip-purple">SCHEDULED JOB</span>' : '<span class="chip chip-cyan">WORKER</span>';
+                const pluginBadge = s.isPlugin ? '<span class="chip chip-purple">PLUGIN</span>' : '';
 
                 let detailsChip = '';
                 if (s.isScheduled) {
@@ -1644,6 +1645,16 @@ function renderSidecarsPage() {
                     nextRunChip = '<span class="chip chip-muted">Next run: ' + escapeHtml(d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })) + ' (' + escapeHtml(d.toLocaleDateString()) + ')</span>';
                 }
 
+                const deleteTooltip = s.isPlugin ? 'Reset plugin sidecar configuration' : 'Delete sidecar';
+                const deleteLabel = s.isPlugin ? 'Reset' : 'Delete';
+                const editBtnHtml = s.isPlugin ? '' : \`
+                            <button type="button" class="btn-secondary btn-edit" data-id="\${escId}" title="Edit sidecar">
+                                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                                    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+                                </svg>
+                                <span>Edit</span>
+                            </button>\`;
+
                 html += \`
                 <div class="content-card" data-id="\${escId}">
                     <div class="card-header">
@@ -1651,6 +1662,7 @@ function renderSidecarsPage() {
                             <div class="card-title-row">
                                 <span class="card-title">\${escDisplayName}</span>
                                 <span class="card-id-code">\${escId}</span>
+                                \${pluginBadge}
                                 \${typeBadge}
                                 \${statusBadge}
                             </div>
@@ -1684,20 +1696,14 @@ function renderSidecarsPage() {
                                     <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line>
                                 </svg>
                                 <span>Logs</span>
-                            </button>
-                            <button type="button" class="btn-secondary btn-edit" data-id="\${escId}" title="Edit sidecar">
-                                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                                    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
-                                </svg>
-                                <span>Edit</span>
-                            </button>
+                            </button>\${editBtnHtml}
                         </div>
                         <div class="actions-right">
-                            <button type="button" class="btn-danger btn-delete" data-id="\${escId}" title="Delete sidecar">
+                            <button type="button" class="btn-danger btn-delete" data-id="\${escId}" title="\${deleteTooltip}">
                                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                                     <polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
                                 </svg>
-                                <span>Delete</span>
+                                <span>\${deleteLabel}</span>
                             </button>
                         </div>
                     </div>
@@ -1765,17 +1771,22 @@ function renderSidecarsPage() {
             document.querySelectorAll('.btn-delete').forEach(btn => {
                 btn.addEventListener('click', async () => {
                     const id = btn.dataset.id;
-                    if (confirm(\`Are you sure you want to delete sidecar '\${id}'?\`)) {
+                    const sidecarItem = sidecarsData.find(item => item.id === id);
+                    const promptMsg = sidecarItem && sidecarItem.isPlugin
+                        ? \`Reset configuration for plugin sidecar '\${id}'? This will restore its default plugin settings.\`
+                        : \`Are you sure you want to delete sidecar '\${id}'?\`;
+
+                    if (confirm(promptMsg)) {
                         try {
                             const res = await fetch('/api/sidecars/' + encodeURIComponent(id), { method: 'DELETE' });
                             if (res.ok) {
-                                showToast(\`Deleted sidecar '\${id}'\`);
+                                showToast(sidecarItem && sidecarItem.isPlugin ? \`Reset sidecar '\${id}'\` : \`Deleted sidecar '\${id}'\`);
                                 fetchSidecars();
                             } else {
-                                showToast('Failed to delete sidecar');
+                                showToast('Failed to remove sidecar');
                             }
                         } catch (e) {
-                            showToast('Error deleting sidecar');
+                            showToast('Error removing sidecar');
                         }
                     }
                 });
