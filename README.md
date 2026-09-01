@@ -56,6 +56,7 @@ services:
 | `PGID` | `1000` | Group ID for the internal developer user. Set to your host group's GID to prevent file permission mismatches. |
 | `RC_NAME` | `server-agent` | Identifier name for this server instance. |
 | `AGY_PORT` | `4400` | Port exposed by the built-in web gateway. |
+| `AGY_HUB_PORT` | `4402` | Internal upstream port passed to `agy --hub-port`. |
 | `AUTH_PASSWORD` | *(empty)* | Optional password to protect web access. When set, prompts for login and remembers session for 30 days. |
 | `BLOCK_TELEMETRY` | `true` | When `true` (default), blocks Google usage telemetry, analytics, crash reporting, and diagnostic tracking domains via in-container DNS sinkholing (`0.0.0.0`) and disables OpenTelemetry exporters, while keeping Gemini model APIs and authentication working seamlessly. |
 | `ENABLE_IDE` | `true` | Set to `false` to disable the VS Code Web IDE service and hide its UI button. |

@@ -54,6 +54,8 @@ test('Favicon & App Icon Management', async (t) => {
         env: {
             ...process.env,
             AGY_PORT: String(TEST_PROXY_PORT),
+            AGY_HUB_PORT: String(TEST_TARGET_PORT),
+            PORT_FILE: '/tmp/test_favicon_port_nonexistent',
             AUTH_PASSWORD: TEST_PASSWORD,
             INITIAL_TARGET_PORT: String(TEST_TARGET_PORT),
             TERMINAL_PORT: String(TEST_TERMINAL_PORT),

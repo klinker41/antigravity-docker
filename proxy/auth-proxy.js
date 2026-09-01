@@ -5,7 +5,7 @@ const http = require('node:http');
 const fs = require('node:fs');
 const crypto = require('node:crypto');
 
-const { LISTEN_PORT, AUTH_PASSWORD, PORT_FILE, ENABLE_TERMINAL, ENABLE_IDE } = require('./lib/config');
+const { LISTEN_PORT, AGY_HUB_PORT, AUTH_PASSWORD, PORT_FILE, ENABLE_TERMINAL, ENABLE_IDE } = require('./lib/config');
 const { isAuthenticated, activeSessions, loginRateLimiter, parseCookies, getClientIp, checkRateLimit, recordFailedAttempt, SESSION_TTL_MS } = require('./lib/session');
 const { safeCompare, applySecurityHeaders, readRequestBody, readJsonBody } = require('./lib/security');
 const { isFaviconRequest, handleFaviconRequest } = require('./lib/favicon');
@@ -23,11 +23,16 @@ try {
     }
 }
 
-let TARGET_PORT = parseInt(process.env.INITIAL_TARGET_PORT || '0', 10);
+let TARGET_PORT = AGY_HUB_PORT;
+if (sidecarManager && TARGET_PORT) {
+    sidecarManager.setLsAddress(`127.0.0.1:${TARGET_PORT}`);
+}
 
 // Update dynamic target port
 function setTargetPort(port) {
-    TARGET_PORT = parseInt(port, 10);
+    const newPort = parseInt(port, 10);
+    if (!newPort || newPort === TARGET_PORT) return;
+    TARGET_PORT = newPort;
     console.log(`[Proxy Gateway] 🔗 Bridged port ${LISTEN_PORT} -> http://127.0.0.1:${TARGET_PORT}`);
     if (sidecarManager) {
         sidecarManager.setLsAddress(`127.0.0.1:${TARGET_PORT}`);
@@ -35,43 +40,14 @@ function setTargetPort(port) {
     }
 }
 
-// Watch port file and logs for dynamic port detection
+// Check port file for dynamic port overrides if present
 function checkPortFile() {
     try {
         if (fs.existsSync(PORT_FILE)) {
             const content = fs.readFileSync(PORT_FILE, 'utf8').trim();
             const port = parseInt(content, 10);
-            if (port) {
-                if (port !== TARGET_PORT) {
-                    setTargetPort(port);
-                }
-                return;
-            }
-        }
-
-        const possibleLogs = [
-            '/home/developer/.gemini/antigravity-cli/cli.log'
-        ];
-        for (const logPath of possibleLogs) {
-            if (fs.existsSync(logPath)) {
-                let logHead = '';
-                const fd = fs.openSync(logPath, 'r');
-                try {
-                    const buf = Buffer.alloc(4096);
-                    const bytesRead = fs.readSync(fd, buf, 0, 4096, 0);
-                    logHead = buf.subarray(0, bytesRead).toString('utf8');
-                } finally {
-                    fs.closeSync(fd);
-                }
-                const match = logHead.match(/listening on random port at (\d+) for HTTP\s*$/m) ||
-                              logHead.match(/(?:http:\/\/localhost:|http:\/\/127\.0\.0\.1:)(\d+)/i);
-                if (match && match[1]) {
-                    const port = parseInt(match[1], 10);
-                    if (port && port !== TARGET_PORT) {
-                        setTargetPort(port);
-                    }
-                    return;
-                }
+            if (port && port !== TARGET_PORT) {
+                setTargetPort(port);
             }
         }
     } catch (e) {}

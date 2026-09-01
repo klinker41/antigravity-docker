@@ -251,6 +251,11 @@ class SidecarManager extends EventEmitter {
     getLsAddress() {
         if (this.lsAddress) return this.lsAddress;
         if (process.env.ANTIGRAVITY_LS_ADDRESS) return process.env.ANTIGRAVITY_LS_ADDRESS;
+        if (process.env.AGY_HUB_PORT) {
+            const addr = `127.0.0.1:${process.env.AGY_HUB_PORT}`;
+            this.lsAddress = addr;
+            return addr;
+        }
 
         // Check known address and port files
         const addressCandidates = [
@@ -273,25 +278,8 @@ class SidecarManager extends EventEmitter {
             return addr;
         }
 
-        // Check cli logs
-        const possibleLogs = [
-            path.join(HOME_DIR, '.gemini/antigravity-cli/cli.log'),
-            '/tmp/cli.log'
-        ];
-        for (const logPath of possibleLogs) {
-            const content = readFileIfExists(logPath, 8192);
-            if (content) {
-                const match = content.match(/listening on random port at (\d+) for HTTP\s*$/m) ||
-                              content.match(/(?:http:\/\/localhost:|http:\/\/127\.0\.0\.1:)(\d+)/i);
-                if (match && match[1]) {
-                    const addr = `127.0.0.1:${match[1]}`;
-                    this.lsAddress = addr;
-                    return addr;
-                }
-            }
-        }
-
-        return '';
+        const fallbackPort = process.env.AGY_HUB_PORT || '4402';
+        return `127.0.0.1:${fallbackPort}`;
     }
 
     async getCsrfToken() {

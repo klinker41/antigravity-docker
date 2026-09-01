@@ -9,6 +9,7 @@ WORKSPACE_DIR="/workspace"
 # Instance name and target port
 INSTANCE_NAME="${RC_NAME:-server-agent}"
 TARGET_PORT="${AGY_PORT:-4400}"
+AGY_HUB_PORT="${AGY_HUB_PORT:-4402}"
 
 # 1. Dynamically configure user/group UID and GID (PUID/PGID)
 PUID="${PUID:-1000}"
@@ -286,11 +287,14 @@ case "$1" in
         echo "Follow the prompt below to sign in to your Google Account."
         echo "Once authenticated, your token will be saved to persistent storage."
         echo "==================================================================="
-        exec gosu "$DEVELOPER_USER" agy --remote-control --remote-control-name "$INSTANCE_NAME"
+        exec gosu "$DEVELOPER_USER" agy --remote-control --remote-control-name "$INSTANCE_NAME" --hub-port "$AGY_HUB_PORT"
         ;;
 
     daemon)
-        rm -f /tmp/antigravity_port
+        rm -f /tmp/antigravity_port /tmp/antigravity_ls_address
+        echo "$AGY_HUB_PORT" > /tmp/antigravity_port
+        echo "127.0.0.1:$AGY_HUB_PORT" > /tmp/antigravity_ls_address
+        chown "$DEVELOPER_USER":"$DEVELOPER_USER" /tmp/antigravity_port /tmp/antigravity_ls_address 2>/dev/null || true
 
         ENABLE_IDE="${ENABLE_IDE:-true}"
         ENABLE_TERMINAL="${ENABLE_TERMINAL:-true}"
@@ -341,6 +345,7 @@ case "$1" in
         fi
 
         export AGY_PORT="${TARGET_PORT}"
+        export AGY_HUB_PORT="${AGY_HUB_PORT}"
         export AUTH_PASSWORD="${AUTH_PASSWORD:-}"
         export BLOCK_TELEMETRY="${BLOCK_TELEMETRY}"
         export ENABLE_IDE="${ENABLE_IDE}"
@@ -372,17 +377,8 @@ case "$1" in
 
         cd "$WORKSPACE_DIR"
 
-        # Launch agy, printing output while capturing the exact web server port
-        gosu "$DEVELOPER_USER" agy --remote-control --remote-control-name "$INSTANCE_NAME" 2>&1 | while IFS= read -r line; do
-            echo "$line"
-            if [[ "$line" =~ (http://localhost:|http://127\.0\.0\.1:)([0-9]+) ]]; then
-                detected_port="${BASH_REMATCH[2]}"
-                if [ -n "$detected_port" ]; then
-                    echo "$detected_port" > /tmp/antigravity_port
-                    echo "127.0.0.1:$detected_port" > /tmp/antigravity_ls_address
-                fi
-            fi
-        done
+        # Launch agy directly with explicit hub port
+        exec gosu "$DEVELOPER_USER" agy --remote-control --remote-control-name "$INSTANCE_NAME" --hub-port "$AGY_HUB_PORT"
         ;;
 
     *)

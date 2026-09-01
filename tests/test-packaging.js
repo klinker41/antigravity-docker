@@ -50,18 +50,26 @@ test('Container Packaging & Module Resolution (DOCKER-01)', async (t) => {
             const isolatedProxyScript = path.join(mockUsrLocalBin, 'auth-proxy.js');
             assert.ok(fs.existsSync(isolatedProxyScript), 'auth-proxy.js must exist in simulated /usr/local/bin');
 
-            // Attempt to start auth-proxy.js from the isolated directory
+            // Attempt to start auth-proxy.js from the isolated directory with mock upstream
             const TEST_PORT = 17788;
+            const TEST_UPSTREAM_PORT = 17789;
             let stderrOutput = '';
             let stdoutOutput = '';
+
+            const mockUpstream = http.createServer((req, res) => {
+                res.writeHead(200, { 'Content-Type': 'text/plain' });
+                res.end('Mock Upstream OK');
+            });
+            await new Promise((resolve) => mockUpstream.listen(TEST_UPSTREAM_PORT, '127.0.0.1', resolve));
 
             const proxyProc = spawn(process.execPath, [isolatedProxyScript], {
                 cwd: mockUsrLocalBin,
                 env: {
                     ...process.env,
                     AGY_PORT: String(TEST_PORT),
+                    AGY_HUB_PORT: String(TEST_UPSTREAM_PORT),
                     AUTH_PASSWORD: '',
-                    INITIAL_TARGET_PORT: '0',
+                    PORT_FILE: '/tmp/test_pkg_port_nonexistent',
                     ENABLE_IDE: 'false',
                     ENABLE_TERMINAL: 'false'
                 },
@@ -95,7 +103,7 @@ test('Container Packaging & Module Resolution (DOCKER-01)', async (t) => {
             assert.equal(stderrOutput.includes('Cannot find module'), false, `auth-proxy failed with missing module in container layout:\n${stderrOutput}`);
             assert.ok(started, `auth-proxy should start successfully in simulated container layout. Stderr: ${stderrOutput}`);
 
-            // Verify HTTP status endpoint responds
+            // Verify HTTP status endpoint responds with 200 OK
             const statusRes = await new Promise((resolve, reject) => {
                 const req = http.get(`http://127.0.0.1:${TEST_PORT}/status`, (res) => {
                     let body = '';
@@ -107,6 +115,7 @@ test('Container Packaging & Module Resolution (DOCKER-01)', async (t) => {
 
             assert.equal(statusRes.status, 200);
             proxyProc.kill('SIGKILL');
+            mockUpstream.close();
         } finally {
             fs.rmSync(tempBase, { recursive: true, force: true });
         }

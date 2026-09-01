@@ -7,6 +7,7 @@ function isFeatureEnabled(val, defaultVal = true) {
 }
 
 const LISTEN_PORT = parseInt(process.env.AGY_PORT || '4400', 10);
+const AGY_HUB_PORT = parseInt(process.env.AGY_HUB_PORT || process.env.INITIAL_TARGET_PORT || '4402', 10);
 const AUTH_PASSWORD = process.env.AUTH_PASSWORD || '';
 const PORT_FILE = process.env.PORT_FILE || '/tmp/antigravity_port';
 const INSTANCE_NAME = process.env.RC_NAME || 'server-agent';
@@ -20,6 +21,7 @@ const TRUST_PROXY = isFeatureEnabled(process.env.TRUST_PROXY, false);
 module.exports = {
     isFeatureEnabled,
     LISTEN_PORT,
+    AGY_HUB_PORT,
     AUTH_PASSWORD,
     PORT_FILE,
     INSTANCE_NAME,
