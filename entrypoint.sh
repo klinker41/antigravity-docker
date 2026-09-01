@@ -291,7 +291,7 @@ case "$1" in
         ;;
 
     daemon)
-        rm -f /tmp/antigravity_port /tmp/antigravity_ls_address
+        rm -f /tmp/antigravity_port /tmp/antigravity_ls_address /tmp/antigravity_csrf_token "${GEMINI_DIR:-/home/$DEVELOPER_USER/.gemini}/antigravity/sidecar_data/csrf_token"
         echo "$AGY_HUB_PORT" > /tmp/antigravity_port
         echo "127.0.0.1:$AGY_HUB_PORT" > /tmp/antigravity_ls_address
         chown "$DEVELOPER_USER":"$DEVELOPER_USER" /tmp/antigravity_port /tmp/antigravity_ls_address 2>/dev/null || true

@@ -238,13 +238,19 @@ class SidecarManager extends EventEmitter {
 
     setCsrfToken(token) {
         if (token && typeof token === 'string') {
-            this.csrfToken = token.trim();
-            process.env.ANTIGRAVITY_CSRF_TOKEN = this.csrfToken;
+            const cleanToken = token.trim();
+            if (!cleanToken) return;
+            const changed = this.csrfToken !== cleanToken;
+            this.csrfToken = cleanToken;
+            process.env.ANTIGRAVITY_CSRF_TOKEN = cleanToken;
             try {
                 this.ensureDirectories();
                 const secureCsrfFile = path.join(RUNTIME_DATA_DIR, 'csrf_token');
                 fs.writeFileSync(secureCsrfFile, this.csrfToken, { encoding: 'utf8', mode: 0o600 });
             } catch (e) {}
+            if (changed) {
+                this.emit('csrfTokenChanged', cleanToken);
+            }
         }
     }
 
@@ -284,8 +290,24 @@ class SidecarManager extends EventEmitter {
 
     async getCsrfToken() {
         if (this.csrfToken) return this.csrfToken;
-        if (process.env.ANTIGRAVITY_CSRF_TOKEN) return process.env.ANTIGRAVITY_CSRF_TOKEN;
 
+        // 1. Prioritize fetching live from LS address if reachable
+        const lsAddress = this.getLsAddress();
+        if (lsAddress) {
+            const liveToken = await this.fetchCsrfFromAddress(lsAddress);
+            if (liveToken) {
+                this.setCsrfToken(liveToken);
+                return liveToken;
+            }
+        }
+
+        // 2. Check process environment
+        if (process.env.ANTIGRAVITY_CSRF_TOKEN) {
+            this.csrfToken = process.env.ANTIGRAVITY_CSRF_TOKEN.trim();
+            return this.csrfToken;
+        }
+
+        // 3. Check candidate files
         const csrfCandidates = [
             path.join(RUNTIME_DATA_DIR, 'csrf_token'),
             '/tmp/antigravity_csrf_token',
@@ -293,17 +315,8 @@ class SidecarManager extends EventEmitter {
         for (const filePath of csrfCandidates) {
             const token = readFileIfExists(filePath);
             if (token) {
-                this.csrfToken = token;
-                return token;
-            }
-        }
-
-        const lsAddress = this.getLsAddress();
-        if (lsAddress) {
-            const token = await this.fetchCsrfFromAddress(lsAddress);
-            if (token) {
-                this.setCsrfToken(token);
-                return token;
+                this.csrfToken = token.trim();
+                return this.csrfToken;
             }
         }
 
@@ -334,12 +347,30 @@ class SidecarManager extends EventEmitter {
         });
     }
 
+    async waitForUpstream(maxWaitMs = 5000, pollIntervalMs = 250) {
+        const lsAddress = this.getLsAddress();
+        if (!lsAddress) return false;
+        const start = Date.now();
+        while (Date.now() - start < maxWaitMs) {
+            const token = await this.fetchCsrfFromAddress(lsAddress);
+            if (token) {
+                this.setCsrfToken(token);
+                return true;
+            }
+            await new Promise(r => setTimeout(r, pollIntervalMs));
+        }
+        return false;
+    }
+
     /**
      * Initializes directories and starts all enabled sidecars.
      */
-    async init() {
+    async init(options = {}) {
         this.ensureDirectories();
         console.log('[Sidecar Manager] 🚀 Initializing Sidecar Manager subsystem...');
+        if (options.waitForUpstream !== false) {
+            await this.waitForUpstream(options.maxWaitMs || 5000, options.pollIntervalMs || 250);
+        }
         await this.reload();
 
         // Start 1-minute ticker for cron scheduler
