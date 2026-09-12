@@ -14,7 +14,10 @@ const {
     geminiToolsToAnthropic,
     geminiToolsToOpenAI,
     geminiContentsToAnthropic,
-    geminiContentsToOpenAI
+    geminiContentsToOpenAI,
+    getFunctionCall,
+    getFunctionResponse,
+    resolveToolCallId
 } = require('../proxy/lib/transcoder');
 
 test('Stream Transcoder - Anthropic & OpenAI Event Normalization', async (t) => {
@@ -800,5 +803,339 @@ test('Stream Transcoder - Anthropic & OpenAI Event Normalization', async (t) => 
         assert.equal(events.find(e => e.type === 'text')?.text, 'recovered without reasoning effort');
 
         mockServer.close();
+    });
+
+    await t.test('getFunctionCall and getFunctionResponse handle camelCase and snake_case keys', () => {
+        // camelCase
+        const call1 = getFunctionCall({ functionCall: { name: 'view_file', args: { path: '/a' }, id: 'call_1' } });
+        assert.deepEqual(call1, { name: 'view_file', args: { path: '/a' }, id: 'call_1' });
+
+        // snake_case
+        const call2 = getFunctionCall({ function_call: { name: 'view_file', arguments: { path: '/b' } } });
+        assert.deepEqual(call2, { name: 'view_file', args: { path: '/b' }, id: null });
+
+        // camelCase response
+        const resp1 = getFunctionResponse({ functionResponse: { name: 'view_file', response: { content: 'ok' }, id: 'uuid-1' } });
+        assert.deepEqual(resp1, { name: 'view_file', response: { content: 'ok' }, id: 'uuid-1' });
+
+        // snake_case response
+        const resp2 = getFunctionResponse({ function_response: { name: 'view_file', response: 'file content' } });
+        assert.deepEqual(resp2, { name: 'view_file', response: 'file content', id: null });
+
+        // toolResponse / tool_response
+        const resp3 = getFunctionResponse({ toolResponse: { name: 'exec', output: { exitCode: 0 } } });
+        assert.deepEqual(resp3, { name: 'exec', response: { exitCode: 0 }, id: null });
+
+        // invalid
+        assert.equal(getFunctionCall({ text: 'hi' }), null);
+        assert.equal(getFunctionResponse({ text: 'hi' }), null);
+    });
+
+    await t.test('geminiContentsToOpenAI and geminiContentsToAnthropic resolve mismatched/step-UUID response IDs', () => {
+        const contents = [
+            {
+                role: 'user',
+                parts: [{ text: 'Please check the file' }]
+            },
+            {
+                role: 'model',
+                parts: [
+                    {
+                        functionCall: {
+                            name: 'view_file',
+                            args: { AbsolutePath: '/workspace/test.txt' },
+                            id: 'call_77dmBdLVZtd0B6VabLNsPyKg'
+                        }
+                    }
+                ]
+            },
+            {
+                role: 'user',
+                parts: [
+                    {
+                        function_response: {
+                            name: 'view_file',
+                            id: '5cf6b004-cad6-4d2c-b487-9720dcb29a41', // Step UUID from agy wire data
+                            response: { content: 'File contents here' }
+                        }
+                    }
+                ]
+            }
+        ];
+
+        // 1. Test OpenAI conversion
+        const openAiMessages = geminiContentsToOpenAI(contents);
+        assert.equal(openAiMessages.length, 3);
+        assert.equal(openAiMessages[0].role, 'user');
+        assert.equal(openAiMessages[1].role, 'assistant');
+        assert.equal(openAiMessages[1].tool_calls?.[0]?.id, 'call_77dmBdLVZtd0B6VabLNsPyKg');
+        assert.equal(openAiMessages[2].role, 'tool');
+        // Critical invariant: tool_call_id MUST match the tool call's ID, not the step UUID
+        assert.equal(openAiMessages[2].tool_call_id, 'call_77dmBdLVZtd0B6VabLNsPyKg');
+        assert.deepEqual(JSON.parse(openAiMessages[2].content), { content: 'File contents here' });
+
+        // 2. Test Anthropic conversion
+        const { messages: anthropicMessages } = geminiContentsToAnthropic(contents);
+        assert.equal(anthropicMessages.length, 3);
+        assert.equal(anthropicMessages[1].role, 'assistant');
+        assert.equal(anthropicMessages[1].content[0].type, 'tool_use');
+        assert.equal(anthropicMessages[1].content[0].id, 'call_77dmBdLVZtd0B6VabLNsPyKg');
+        assert.equal(anthropicMessages[2].role, 'user');
+        assert.equal(anthropicMessages[2].content[0].type, 'tool_result');
+        assert.equal(anthropicMessages[2].content[0].tool_use_id, 'call_77dmBdLVZtd0B6VabLNsPyKg');
+    });
+
+    await t.test('geminiContentsToOpenAI matches by global pending queue if name is omitted in function_response', () => {
+        const contents = [
+            {
+                role: 'model',
+                parts: [
+                    {
+                        functionCall: {
+                            name: 'run_cmd',
+                            args: { cmd: 'ls' },
+                            id: 'call_cmd_123'
+                        }
+                    }
+                ]
+            },
+            {
+                role: 'user',
+                parts: [
+                    {
+                        function_response: {
+                            // name omitted
+                            id: 'internal-step-id',
+                            response: 'file1.txt'
+                        }
+                    }
+                ]
+            }
+        ];
+
+        const openAiMessages = geminiContentsToOpenAI(contents);
+        assert.equal(openAiMessages[1].role, 'tool');
+        assert.equal(openAiMessages[1].tool_call_id, 'call_cmd_123');
+        assert.equal(openAiMessages[1].content, 'file1.txt');
+    });
+
+    await t.test('chatMessagesToResponsesInput remaps unknown call IDs and synthesizes outputs for orphaned calls', () => {
+        const messages = [
+            {
+                role: 'user',
+                content: 'Help me'
+            },
+            {
+                role: 'assistant',
+                content: 'Running tool',
+                tool_calls: [
+                    {
+                        id: 'call_foo_999',
+                        function: { name: 'list_dir', arguments: '{"path":"/tmp"}' }
+                    },
+                    {
+                        id: 'call_bar_888',
+                        function: { name: 'read_url', arguments: '{"url":"http://test"}' }
+                    }
+                ]
+            },
+            {
+                role: 'tool',
+                tool_call_id: 'call_unknown', // Mismatched or unknown tool_call_id
+                content: 'dir contents'
+            }
+            // Note: call_bar_888 has no tool output in messages
+        ];
+
+        const input = chatMessagesToResponsesInput(messages);
+
+        // Verify call_foo_999 was properly paired with the tool output
+        const callOutputs = input.filter(i => i.type === 'function_call_output');
+        assert.equal(callOutputs.length, 2, 'Must have 2 outputs (one remapped, one synthesized)');
+
+        const firstOutput = callOutputs.find(o => o.call_id === 'call_foo_999');
+        assert.ok(firstOutput, 'First output must be remapped to call_foo_999');
+        assert.equal(firstOutput.output, 'dir contents');
+
+        // Verify call_bar_888 received a synthesized empty output
+        const secondOutput = callOutputs.find(o => o.call_id === 'call_bar_888');
+        assert.ok(secondOutput, 'Second orphaned output must be synthesized for call_bar_888');
+        assert.equal(secondOutput.output, '{}');
+    });
+
+    await t.test('callOpenAIResponsesStream guarantees all function_call items have matching function_call_output items', async () => {
+        let capturedPayload = null;
+
+        const mockServer = http.createServer((req, res) => {
+            let body = '';
+            req.on('data', chunk => body += chunk);
+            req.on('end', () => {
+                capturedPayload = JSON.parse(body);
+
+                // Strict validation matching OpenAI Responses API:
+                // Every function_call MUST have an exact function_call_output
+                const functionCalls = capturedPayload.input.filter(i => i.type === 'function_call');
+                const functionOutputs = capturedPayload.input.filter(i => i.type === 'function_call_output');
+
+                for (const fc of functionCalls) {
+                    const match = functionOutputs.find(fo => fo.call_id === fc.call_id);
+                    if (!match) {
+                        res.writeHead(400, { 'Content-Type': 'application/json' });
+                        res.end(JSON.stringify({
+                            error: {
+                                message: `No tool output found for function call ${fc.call_id}.`,
+                                type: 'invalid_request_error',
+                                param: 'input',
+                                code: null
+                            }
+                        }));
+                        return;
+                    }
+                }
+
+                res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+                res.write('event: response.output_text.delta\ndata: {"delta":"Tool execution verified"}\n\n');
+                res.write('event: response.completed\ndata: {"type":"response.completed"}\n\n');
+                res.end();
+            });
+        });
+
+        await new Promise(resolve => mockServer.listen(0, '127.0.0.1', resolve));
+        const port = mockServer.address().port;
+
+        const geminiContents = [
+            {
+                role: 'user',
+                parts: [{ text: 'Read the file' }]
+            },
+            {
+                role: 'model',
+                parts: [{
+                    functionCall: {
+                        name: 'view_file',
+                        args: { AbsolutePath: '/workspace/README.md' },
+                        id: 'call_77dmBdLVZtd0B6VabLNsPyKg'
+                    }
+                }]
+            },
+            {
+                role: 'user',
+                parts: [{
+                    function_response: {
+                        name: 'view_file',
+                        id: '5cf6b004-cad6-4d2c-b487-9720dcb29a41', // Step UUID
+                        response: { content: '# Antigravity' }
+                    }
+                }]
+            }
+        ];
+
+        // Transcode through geminiContentsToOpenAI
+        const messages = geminiContentsToOpenAI(geminiContents);
+
+        const events = [];
+        await callOpenAIResponsesStream({
+            endpoint: `http://127.0.0.1:${port}`,
+            apiKey: 'test-key',
+            model: 'gpt-6-astra',
+            messages,
+            onEvent: (ev) => events.push(ev)
+        });
+
+        assert.ok(capturedPayload);
+        const text = events.filter(e => e.type === 'text').map(e => e.text).join('');
+        assert.equal(text, 'Tool execution verified');
+
+        // Verify payload call_id matching
+        const calls = capturedPayload.input.filter(i => i.type === 'function_call');
+        const outputs = capturedPayload.input.filter(i => i.type === 'function_call_output');
+        assert.equal(calls.length, 1);
+        assert.equal(outputs.length, 1);
+        assert.equal(calls[0].call_id, 'call_77dmBdLVZtd0B6VabLNsPyKg');
+        assert.equal(outputs[0].call_id, 'call_77dmBdLVZtd0B6VabLNsPyKg');
+
+        mockServer.close();
+    });
+
+    await t.test('resolveToolCallId correctly handles direct matches, name matches, and queue fallbacks without desync', () => {
+        const pending = [
+            { id: 'call_1', name: 'tool_a' },
+            { id: 'call_2', name: 'tool_b' },
+            { id: 'call_3', name: 'tool_a' }
+        ];
+        const known = new Set(['call_1', 'call_2', 'call_3']);
+
+        // 1. Name match should take the earliest matching name
+        const idA = resolveToolCallId({ name: 'tool_a', id: 'some-step-uuid' }, pending, known, 'call');
+        assert.equal(idA, 'call_1');
+        assert.equal(pending.length, 2);
+
+        // 2. Direct match by ID
+        const idB = resolveToolCallId({ name: 'tool_b', id: 'call_2' }, pending, known, 'call');
+        assert.equal(idB, 'call_2');
+        assert.equal(pending.length, 1);
+
+        // 3. Fallback when name is unknown/omitted
+        const idC = resolveToolCallId({ name: '', id: 'other-uuid' }, pending, known, 'call');
+        assert.equal(idC, 'call_3');
+        assert.equal(pending.length, 0);
+
+        // 4. Default fallback when queue empty
+        const idD = resolveToolCallId({ name: 'tool_x', id: '' }, pending, known, 'toolu');
+        assert.equal(idD, 'toolu_unknown');
+    });
+
+    await t.test('geminiContentsToAnthropic parses stringified JSON args into objects', () => {
+        const contents = [
+            {
+                role: 'user',
+                parts: [{ text: 'Run command' }]
+            },
+            {
+                role: 'model',
+                parts: [{
+                    function_call: {
+                        name: 'run_command',
+                        arguments: '{"CommandLine":"echo 123"}'
+                    }
+                }]
+            }
+        ];
+
+        const { messages } = geminiContentsToAnthropic(contents);
+        assert.equal(messages.length, 2);
+        assert.equal(messages[0].role, 'user');
+        assert.equal(messages[1].role, 'assistant');
+        const toolBlock = messages[1].content[0];
+        assert.equal(toolBlock.type, 'tool_use');
+        assert.equal(typeof toolBlock.input, 'object');
+        assert.deepEqual(toolBlock.input, { CommandLine: 'echo 123' });
+    });
+
+    await t.test('chatMessagesToResponsesInput flushes orphaned outputs before subsequent user messages', () => {
+        const messages = [
+            { role: 'user', content: 'First prompt' },
+            {
+                role: 'assistant',
+                content: 'Thinking',
+                tool_calls: [{ id: 'call_orphan_1', function: { name: 'f1', arguments: '{}' } }]
+            },
+            // User speaks again without tool response
+            { role: 'user', content: 'Second prompt' }
+        ];
+
+        const input = chatMessagesToResponsesInput(messages);
+        // Desired ordering:
+        // [user: First prompt, assistant: Thinking, function_call: call_orphan_1, function_call_output: call_orphan_1, user: Second prompt]
+        assert.equal(input.length, 5);
+        assert.equal(input[0].role, 'user');
+        assert.equal(input[1].role, 'assistant');
+        assert.equal(input[2].type, 'function_call');
+        assert.equal(input[2].call_id, 'call_orphan_1');
+        assert.equal(input[3].type, 'function_call_output');
+        assert.equal(input[3].call_id, 'call_orphan_1');
+        assert.equal(input[3].output, '{}');
+        assert.equal(input[4].role, 'user');
+        assert.equal(input[4].content, 'Second prompt');
     });
 });

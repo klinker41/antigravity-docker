@@ -216,13 +216,30 @@ function isOpenAIResponsesModel(modelName, endpoint) {
 function chatMessagesToResponsesInput(messages) {
     if (!Array.isArray(messages)) return [];
     const input = [];
+    const pendingCallIds = [];
+    const registeredCallIds = new Set();
+
+    function flushOrphanedCalls() {
+        while (pendingCallIds.length > 0) {
+            const orphanedCallId = pendingCallIds.shift();
+            input.push({
+                type: 'function_call_output',
+                call_id: orphanedCallId,
+                output: '{}'
+            });
+        }
+    }
+
     for (const m of messages) {
         if (!m) continue;
         if (m.role === 'system') {
+            flushOrphanedCalls();
             if (m.content) input.push({ role: 'system', content: String(m.content) });
         } else if (m.role === 'user') {
+            flushOrphanedCalls();
             input.push({ role: 'user', content: m.content });
         } else if (m.role === 'assistant') {
+            flushOrphanedCalls();
             if (m.content) {
                 input.push({ role: 'assistant', content: String(m.content) });
             }
@@ -232,22 +249,39 @@ function chatMessagesToResponsesInput(messages) {
                     const fnArgs = typeof tc.function?.arguments === 'string'
                         ? tc.function.arguments
                         : JSON.stringify(tc.function?.arguments || {});
+                    const callId = tc.id || `call_${crypto.randomUUID().slice(0, 8)}`;
+                    pendingCallIds.push(callId);
+                    registeredCallIds.add(callId);
                     input.push({
                         type: 'function_call',
-                        call_id: tc.id || `call_${crypto.randomUUID().slice(0, 8)}`,
+                        call_id: callId,
                         name: fnName,
                         arguments: fnArgs
                     });
                 }
             }
         } else if (m.role === 'tool') {
+            let callId = m.tool_call_id;
+            if ((!callId || callId === 'call_unknown' || !registeredCallIds.has(callId)) && pendingCallIds.length > 0) {
+                callId = pendingCallIds.shift();
+            } else if (callId && registeredCallIds.has(callId)) {
+                const idx = pendingCallIds.indexOf(callId);
+                if (idx !== -1) pendingCallIds.splice(idx, 1);
+            }
+            if (!callId) {
+                callId = 'call_unknown';
+            }
             input.push({
                 type: 'function_call_output',
-                call_id: m.tool_call_id || 'call_unknown',
+                call_id: callId,
                 output: typeof m.content === 'string' ? m.content : JSON.stringify(m.content || {})
             });
         }
     }
+
+    // Safeguard: OpenAI Responses API strictly requires every function_call to have a matching function_call_output.
+    flushOrphanedCalls();
+
     return input;
 }
 
@@ -753,6 +787,64 @@ function coalesceAnthropicMessages(rawMessages) {
 }
 
 /**
+ * Helper to safely extract function call details from a Gemini part, supporting camelCase and snake_case keys.
+ */
+function getFunctionCall(part) {
+    if (!part || typeof part !== 'object') return null;
+    const call = part.functionCall || part.function_call;
+    if (!call || typeof call !== 'object') return null;
+    return {
+        name: call.name || '',
+        args: call.args || call.arguments || {},
+        id: call.id || null
+    };
+}
+
+/**
+ * Helper to safely extract function response details from a Gemini part, supporting camelCase, snake_case,
+ * and alternative toolResponse keys.
+ */
+function getFunctionResponse(part) {
+    if (!part || typeof part !== 'object') return null;
+    const resp = part.functionResponse || part.function_response || part.toolResponse || part.tool_response;
+    if (!resp || typeof resp !== 'object') return null;
+    return {
+        name: resp.name || '',
+        response: resp.response !== undefined ? resp.response : (resp.output !== undefined ? resp.output : resp.content),
+        id: resp.id || null
+    };
+}
+
+/**
+ * Resolves a tool response to its corresponding tool call ID from conversation history.
+ * Consolidates matching across known IDs, tool names, and FIFO pending queues to avoid desync.
+ */
+function resolveToolCallId(fnResp, pendingCalls, knownCallIds, fallbackPrefix) {
+    if (!fnResp) return `${fallbackPrefix}_unknown`;
+
+    let callId = null;
+    // 1. Direct match if response ID is already known
+    if (fnResp.id && knownCallIds.has(fnResp.id)) {
+        callId = fnResp.id;
+        const idx = pendingCalls.findIndex(c => c.id === callId);
+        if (idx !== -1) pendingCalls.splice(idx, 1);
+    } else if (fnResp.name) {
+        // 2. Match earliest pending call with the same function name
+        const idx = pendingCalls.findIndex(c => c.name === fnResp.name);
+        if (idx !== -1) {
+            callId = pendingCalls.splice(idx, 1)[0].id;
+        }
+    }
+
+    // 3. Fallback to earliest pending call across any name
+    if (!callId && pendingCalls.length > 0) {
+        callId = pendingCalls.shift().id;
+    }
+
+    return callId || fnResp.id || `${fallbackPrefix}_unknown`;
+}
+
+/**
  * Converts Gemini contents and systemInstruction into Anthropic Messages format.
  */
 function geminiContentsToAnthropic(contents, systemInstruction) {
@@ -766,7 +858,8 @@ function geminiContentsToAnthropic(contents, systemInstruction) {
     }
 
     const rawMessages = [];
-    const toolCallIdsByName = {};
+    const knownToolCallIds = new Set();
+    const pendingCalls = [];
 
     if (Array.isArray(contents)) {
         for (const item of contents) {
@@ -775,30 +868,41 @@ function geminiContentsToAnthropic(contents, systemInstruction) {
 
             if (Array.isArray(item.parts)) {
                 for (const part of item.parts) {
-                    if (part.text && !part.thought) {
+                    const fnCall = getFunctionCall(part);
+                    const fnResp = getFunctionResponse(part);
+
+                    if (part.text && !part.thought && !fnCall && !fnResp) {
                         blocks.push({ type: 'text', text: part.text });
                     }
-                    if (part.functionCall) {
-                        const callId = part.functionCall.id || `toolu_${crypto.randomUUID().slice(0, 8)}`;
-                        if (!toolCallIdsByName[part.functionCall.name]) {
-                            toolCallIdsByName[part.functionCall.name] = [];
+                    if (fnCall) {
+                        const callId = fnCall.id || `toolu_${crypto.randomUUID().slice(0, 8)}`;
+                        knownToolCallIds.add(callId);
+                        pendingCalls.push({ id: callId, name: fnCall.name });
+
+                        let toolInput = fnCall.args || {};
+                        if (typeof toolInput === 'string') {
+                            try {
+                                toolInput = JSON.parse(toolInput);
+                            } catch {
+                                toolInput = {};
+                            }
                         }
-                        toolCallIdsByName[part.functionCall.name].push(callId);
+
                         blocks.push({
                             type: 'tool_use',
                             id: callId,
-                            name: part.functionCall.name,
-                            input: part.functionCall.args || {}
+                            name: fnCall.name,
+                            input: toolInput
                         });
                     }
-                    if (part.functionResponse) {
-                        const queue = toolCallIdsByName[part.functionResponse.name];
-                        const callId = part.functionResponse.id || (queue && queue.length > 0 ? queue.shift() : null) || 'toolu_unknown';
+                    if (fnResp) {
+                        const callId = resolveToolCallId(fnResp, pendingCalls, knownToolCallIds, 'toolu');
+
                         let contentStr = '';
-                        if (typeof part.functionResponse.response === 'string') {
-                            contentStr = part.functionResponse.response;
+                        if (typeof fnResp.response === 'string') {
+                            contentStr = fnResp.response;
                         } else {
-                            contentStr = JSON.stringify(part.functionResponse.response || {});
+                            contentStr = JSON.stringify(fnResp.response !== undefined ? fnResp.response : {});
                         }
                         rawMessages.push({
                             role: 'user',
@@ -849,7 +953,8 @@ function geminiContentsToOpenAI(contents, systemInstruction) {
         }
     }
 
-    const toolCallIdsByName = {};
+    const knownToolCallIds = new Set();
+    const pendingCalls = [];
 
     if (Array.isArray(contents)) {
         for (const item of contents) {
@@ -859,21 +964,22 @@ function geminiContentsToOpenAI(contents, systemInstruction) {
 
                 if (Array.isArray(item.parts)) {
                     for (const part of item.parts) {
-                        if (part.text && !part.thought) {
+                        const fnCall = getFunctionCall(part);
+                        if (part.text && !part.thought && !fnCall) {
                             textParts.push(part.text);
                         }
-                        if (part.functionCall) {
-                            const callId = part.functionCall.id || `call_${crypto.randomUUID().slice(0, 8)}`;
-                            if (!toolCallIdsByName[part.functionCall.name]) {
-                                toolCallIdsByName[part.functionCall.name] = [];
-                            }
-                            toolCallIdsByName[part.functionCall.name].push(callId);
+                        if (fnCall) {
+                            const callId = fnCall.id || `call_${crypto.randomUUID().slice(0, 8)}`;
+                            knownToolCallIds.add(callId);
+                            pendingCalls.push({ id: callId, name: fnCall.name });
                             toolCalls.push({
                                 id: callId,
                                 type: 'function',
                                 function: {
-                                    name: part.functionCall.name,
-                                    arguments: JSON.stringify(part.functionCall.args || {})
+                                    name: fnCall.name,
+                                    arguments: typeof fnCall.args === 'string'
+                                        ? fnCall.args
+                                        : JSON.stringify(fnCall.args || {})
                                 }
                             });
                         }
@@ -889,15 +995,16 @@ function geminiContentsToOpenAI(contents, systemInstruction) {
             } else {
                 if (Array.isArray(item.parts)) {
                     for (const part of item.parts) {
-                        if (part.functionResponse) {
-                            const queue = toolCallIdsByName[part.functionResponse.name];
-                            const callId = part.functionResponse.id || (queue && queue.length > 0 ? queue.shift() : null) || 'call_unknown';
+                        const fnResp = getFunctionResponse(part);
+                        if (fnResp) {
+                            const callId = resolveToolCallId(fnResp, pendingCalls, knownToolCallIds, 'call');
+
                             messages.push({
                                 role: 'tool',
                                 tool_call_id: callId,
-                                content: typeof part.functionResponse.response === 'string'
-                                    ? part.functionResponse.response
-                                    : JSON.stringify(part.functionResponse.response || {})
+                                content: typeof fnResp.response === 'string'
+                                    ? fnResp.response
+                                    : JSON.stringify(fnResp.response !== undefined ? fnResp.response : {})
                             });
                         } else if (part.text) {
                             messages.push({ role: 'user', content: part.text });
@@ -940,5 +1047,8 @@ module.exports = {
     geminiToolsToOpenAI,
     coalesceAnthropicMessages,
     geminiContentsToAnthropic,
-    geminiContentsToOpenAI
+    geminiContentsToOpenAI,
+    getFunctionCall,
+    getFunctionResponse,
+    resolveToolCallId
 };
