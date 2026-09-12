@@ -13,6 +13,17 @@ const DEFAULT_CONFIG_PATH = path.join(GEMINI_CONFIG_DIR, 'custom_models.json');
 const PLACEHOLDER_START = 500;
 const PLACEHOLDER_COUNT = 150;
 
+const CUSTOM_PLACEHOLDER_REGEX = /^MODEL_PLACEHOLDER_M(5\d\d|6[0-4]\d)$/;
+const CUSTOM_PLACEHOLDER_REGEX_GLOBAL = /MODEL_PLACEHOLDER_M(5\d\d|6[0-4]\d)/g;
+
+/**
+ * Checks whether an enum string belongs to the custom placeholder range (MODEL_PLACEHOLDER_M500..M649).
+ */
+function isCustomPlaceholder(placeholderEnum) {
+    if (!placeholderEnum || typeof placeholderEnum !== 'string') return false;
+    return CUSTOM_PLACEHOLDER_REGEX.test(placeholderEnum);
+}
+
 /**
  * Masks an API key for safe UI display (e.g. sk-••••••••1234).
  */
@@ -220,16 +231,39 @@ class ModelsManager {
     }
 
     /**
-     * Looks up an enabled model definition by its assigned placeholder enum.
+     * Looks up an enabled model definition by its assigned placeholder enum,
+     * returning complete provider credentials for server-side translation.
      */
     getModelByPlaceholder(placeholderEnum) {
         if (!placeholderEnum || typeof placeholderEnum !== 'string') return null;
-        const injected = this.getInjectedModels();
-        return injected.find(m => m.modelOrAlias?.model === placeholderEnum) || null;
+        const config = this.getConfig();
+        const usedEnums = new Set();
+        for (const provider of config.providers) {
+            if (!provider.enabled) continue;
+            for (const model of provider.models) {
+                if (!model.enabled) continue;
+                const modelId = `custom-${provider.type}-${model.id}`;
+                const enumName = this.getPlaceholderEnum(modelId, usedEnums);
+                if (enumName === placeholderEnum) {
+                    return {
+                        label: String(model.label || '').trim() || String(model.id || '').trim(),
+                        modelId,
+                        placeholder: enumName,
+                        providerType: provider.type,
+                        endpoint: provider.endpoint,
+                        apiKey: provider.apiKey,
+                        rawModelId: model.id,
+                        supportsThinking: Boolean(model.supportsThinking)
+                    };
+                }
+            }
+        }
+        return null;
     }
 
     /**
      * Formats all enabled custom models into Antigravity clientModelConfigs entries.
+     * Note: Does NOT include API keys or internal credentials to prevent leakage to client browsers.
      */
     getInjectedModels(existingEnums = null) {
         const config = this.getConfig();
@@ -284,6 +318,13 @@ class ModelsManager {
             }
         }
         return results;
+    }
+
+    /**
+     * Checks whether an enum string belongs to the custom placeholder range (MODEL_PLACEHOLDER_M500..M649).
+     */
+    isCustomPlaceholder(placeholderEnum) {
+        return isCustomPlaceholder(placeholderEnum);
     }
 
     /**
@@ -396,5 +437,8 @@ const defaultManager = new ModelsManager();
 module.exports = {
     ModelsManager,
     defaultManager,
-    maskApiKey
+    maskApiKey,
+    isCustomPlaceholder,
+    CUSTOM_PLACEHOLDER_REGEX,
+    CUSTOM_PLACEHOLDER_REGEX_GLOBAL
 };

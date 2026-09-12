@@ -44,7 +44,8 @@ const {
     isSpaRoute,
     proxyWebRequest,
     handleWebSocketClientMessage,
-    handleWebSocketUpstreamMessage
+    handleWebSocketUpstreamMessage,
+    activeConversationModels
 } = require('./lib/proxy.js');
 const { defaultManager: modelsManager, maskApiKey } = require('./lib/models-manager.js');
 
@@ -71,6 +72,10 @@ try {
         console.error('[Proxy Gateway] Warning: sidecar-manager module could not be loaded:', err.message);
     }
 }
+
+const TRANSLATION_PORT = process.env.TRANSLATION_PORT
+    ? parseInt(process.env.TRANSLATION_PORT, 10)
+    : (LISTEN_PORT === 4400 ? 4405 : (LISTEN_PORT > 0 ? LISTEN_PORT + 5 : 4405));
 
 let TARGET_PORT = AGY_HUB_PORT;
 if (sidecarManager && TARGET_PORT) {
@@ -449,14 +454,17 @@ if (sidecarManager) {
 }
 
 let translationProxy = null;
-const TRANSLATION_PORT = process.env.TRANSLATION_PORT
-    ? parseInt(process.env.TRANSLATION_PORT, 10)
-    : (LISTEN_PORT === 4400 ? 4405 : (LISTEN_PORT > 0 ? LISTEN_PORT + 5 : 4405));
+const shouldStartTranslation = Boolean(
+    TranslationProxy &&
+    process.env.ENABLE_TRANSLATION_PROXY !== 'false' &&
+    (process.env.ENABLE_TRANSLATION_PROXY === 'true' || (modelsManager && typeof modelsManager.hasEnabledModels === 'function' && modelsManager.hasEnabledModels()))
+);
 
-if (TranslationProxy && process.env.ENABLE_TRANSLATION_PROXY !== 'false') {
+if (shouldStartTranslation) {
     translationProxy = new TranslationProxy({
         port: TRANSLATION_PORT,
-        modelsManager
+        modelsManager,
+        activeConversationModels
     });
     translationProxy.start().catch(err => {
         console.error('[Proxy Gateway] Warning: Translation Proxy failed to start:', err.message);
@@ -576,15 +584,16 @@ const server = Bun.serve({
             }
         },
         message(ws, message) {
+            let processedMessage = message;
             if (ws.data?.activeStreams) {
-                handleWebSocketClientMessage(ws, message);
+                processedMessage = handleWebSocketClientMessage(ws, message, modelsManager, activeConversationModels);
             }
 
             const upstreamWs = ws.data?.upstreamWs;
             if (upstreamWs && upstreamWs.readyState === WebSocket.OPEN) {
-                upstreamWs.send(message);
+                upstreamWs.send(processedMessage);
             } else if (ws.data?.pendingMessages) {
-                ws.data.pendingMessages.push(message);
+                ws.data.pendingMessages.push(processedMessage);
             }
         },
         close(ws) {

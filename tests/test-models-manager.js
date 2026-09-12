@@ -117,10 +117,23 @@ test('Models Manager - Configuration, CRUD & Provider Connectivity', async (t) =
         assert.match(llama.modelOrAlias.model, /^MODEL_PLACEHOLDER_M\d+$/);
         assert.notEqual(claude.modelOrAlias.model, llama.modelOrAlias.model);
 
-        // Verify inverse lookup
+        // Verify security: getInjectedModels MUST NOT contain credentials or sensitive server properties
+        for (const model of injected) {
+            assert.equal(model.apiKey, undefined, 'Client model config must NOT include apiKey');
+            assert.equal(model.endpoint, undefined, 'Client model config must NOT include endpoint');
+            assert.equal(model.providerType, undefined, 'Client model config must NOT include providerType');
+            assert.equal(model.rawModelId, undefined, 'Client model config must NOT include rawModelId');
+        }
+
+        // Verify inverse lookup for server-side proxying DOES include provider credentials
         const lookedUp = manager.getModelByPlaceholder(claude.modelOrAlias.model);
         assert.ok(lookedUp);
         assert.equal(lookedUp.modelId, claude.modelId);
+        assert.equal(lookedUp.apiKey, 'sk-ant-test-key-123456789');
+        assert.equal(lookedUp.endpoint, 'https://api.anthropic.com');
+        assert.equal(lookedUp.providerType, 'anthropic');
+        assert.equal(lookedUp.rawModelId, 'claude-3-7-sonnet-20250219');
+        assert.equal(lookedUp.supportsThinking, true);
 
         // Verify collision handling and capacity limit
         const used = new Set();

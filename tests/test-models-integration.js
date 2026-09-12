@@ -36,11 +36,14 @@ test('Multi-Model Integration - HTTP Proxy, Models API, & Upstream Interception'
     });
     await new Promise((resolve) => mockProviderServer.listen(MOCK_PROVIDER_PORT, '127.0.0.1', resolve));
 
+    let lastAgyReceivedWsText = null;
+    let lastAgyReceivedHttpBody = null;
+
     // 2. Setup Mock Agy Upstream Server (supporting both HTTP and WebSocket)
     const mockAgyServer = Bun.serve({
         port: MOCK_AGY_PORT,
         hostname: '127.0.0.1',
-        fetch(req, server) {
+        async fetch(req, server) {
             if (req.headers.get('upgrade')?.toLowerCase() === 'websocket') {
                 const success = server.upgrade(req);
                 if (success) return;
@@ -48,6 +51,11 @@ test('Multi-Model Integration - HTTP Proxy, Models API, & Upstream Interception'
             }
 
             const parsed = new URL(req.url);
+
+            if (parsed.pathname.endsWith('/SendUserCascadeMessage')) {
+                lastAgyReceivedHttpBody = await req.text();
+                return Response.json({ success: true });
+            }
 
             // Root HTML with sidebar markup
             if (parsed.pathname === '/') {
@@ -145,6 +153,7 @@ test('Multi-Model Integration - HTTP Proxy, Models API, & Upstream Interception'
         websocket: {
             message(ws, message) {
                 const text = typeof message === 'string' ? message : Buffer.from(message).toString('utf8');
+                lastAgyReceivedWsText = text;
                 try {
                     const parsed = JSON.parse(text);
                     if (parsed.type === 'start' && parsed.procedure?.endsWith('/GetUserStatus')) {
@@ -176,6 +185,17 @@ test('Multi-Model Integration - HTTP Proxy, Models API, & Upstream Interception'
                                     }
                                 }
                             }
+                        }));
+                        ws.send(JSON.stringify({
+                            streamId: parsed.streamId,
+                            type: 'end',
+                            statusCode: 0
+                        }));
+                    } else if (parsed.type === 'start' && parsed.procedure?.endsWith('/SendUserCascadeMessage')) {
+                        ws.send(JSON.stringify({
+                            streamId: parsed.streamId,
+                            type: 'data',
+                            payload: { received: true }
                         }));
                         ws.send(JSON.stringify({
                             streamId: parsed.streamId,
@@ -498,14 +518,79 @@ test('Multi-Model Integration - HTTP Proxy, Models API, & Upstream Interception'
             assert.ok(sorts.includes('Claude 3.7 Sonnet'), 'Custom model label must be in sort group');
         });
 
-        await t.test('safely passes through upstream non-ok responses without stream lock errors', async () => {
-            const errRes = await makeRequest('/exa.language_server_pb.LanguageServerService/GetCascadeModelConfigDataError', {
+        await t.test('rewrites custom model placeholder to MODEL_PLACEHOLDER_M318 over WebSocket', async () => {
+            const ws = new WebSocket(`ws://127.0.0.1:${TEST_PORT}/connect-websocket`, {
+                headers: {
+                    Cookie: authCookie,
+                    Origin: `http://127.0.0.1:${TEST_PORT}`
+                }
+            });
+
+            const customPlaceholder = 'MODEL_PLACEHOLDER_M555';
+
+            await new Promise((resolve, reject) => {
+                const timeout = setTimeout(() => {
+                    ws.close();
+                    reject(new Error('WebSocket send timed out'));
+                }, 4000);
+
+                ws.onopen = () => {
+                    ws.send(JSON.stringify({
+                        streamId: 'test-ws-stream-send',
+                        type: 'start',
+                        procedure: '/exa.language_server_pb.LanguageServerService/SendUserCascadeMessage',
+                        stream: true,
+                        payload: {
+                            cascadeId: 'cascade-test-ws',
+                            cascadeConfig: {
+                                plannerConfig: {
+                                    planModel: customPlaceholder
+                                }
+                            }
+                        }
+                    }));
+                };
+
+                ws.onmessage = (event) => {
+                    const text = typeof event.data === 'string' ? event.data : Buffer.from(event.data).toString('utf8');
+                    try {
+                        const data = JSON.parse(text);
+                        if (data.type === 'end') {
+                            clearTimeout(timeout);
+                            ws.close();
+                            resolve();
+                        }
+                    } catch (e) {}
+                };
+
+                ws.onerror = (err) => {
+                    clearTimeout(timeout);
+                    reject(err);
+                };
+            });
+
+            assert.ok(lastAgyReceivedWsText, 'Upstream agy must receive message');
+            assert.ok(lastAgyReceivedWsText.includes('MODEL_PLACEHOLDER_M318'), 'Must rewrite custom placeholder to M318');
+            assert.ok(!lastAgyReceivedWsText.includes(customPlaceholder), 'Must NOT contain custom placeholder');
+        });
+
+        await t.test('rewrites custom model placeholder to MODEL_PLACEHOLDER_M318 over HTTP POST', async () => {
+            const customPlaceholder = 'MODEL_PLACEHOLDER_M567';
+            const reqBody = JSON.stringify({
+                cascadeId: 'cascade-test-http',
+                model: customPlaceholder
+            });
+
+            const res = await makeRequest('/exa.language_server_pb.LanguageServerService/SendUserCascadeMessage', {
                 method: 'POST',
                 headers: { Cookie: authCookie, 'Content-Type': 'application/json' },
-                body: '{}'
+                body: reqBody
             });
-            assert.equal(errRes.status, 500);
-            assert.ok(errRes.body.includes('Internal Server Error from upstream'));
+
+            assert.equal(res.status, 200);
+            assert.ok(lastAgyReceivedHttpBody, 'Upstream agy must receive HTTP POST body');
+            assert.ok(lastAgyReceivedHttpBody.includes('MODEL_PLACEHOLDER_M318'), 'Must rewrite custom placeholder to M318 in HTTP body');
+            assert.ok(!lastAgyReceivedHttpBody.includes(customPlaceholder), 'Must NOT contain custom placeholder');
         });
 
         await t.test('deletes provider via DELETE /api/models/:id', async () => {
@@ -526,6 +611,75 @@ test('Multi-Model Integration - HTTP Proxy, Models API, & Upstream Interception'
                 headers: { Cookie: authCookie }
             });
             assert.deepEqual(JSON.parse(postDelRes.body), []);
+        });
+
+        await t.test('entrypoint helper accurately detects presence and absence of enabled custom models', () => {
+            const checkFn = (cfg) => {
+                return Boolean(cfg && cfg.enabled && Array.isArray(cfg.providers) && cfg.providers.some(p => p.enabled && Array.isArray(p.models) && p.models.some(m => m.enabled)));
+            };
+
+            assert.equal(checkFn({ enabled: false, providers: [] }), false);
+            assert.equal(checkFn({ enabled: true, providers: [] }), false);
+            assert.equal(checkFn({ enabled: true, providers: [{ enabled: false, models: [{ enabled: true }] }] }), false);
+            assert.equal(checkFn({ enabled: true, providers: [{ enabled: true, models: [{ enabled: false }] }] }), false);
+            assert.equal(checkFn({ enabled: true, providers: [{ enabled: true, models: [{ enabled: true }] }] }), true);
+        });
+
+        await t.test('handleWebSocketClientMessage retains active model mapping on non-model messages', () => {
+            const { handleWebSocketClientMessage } = require('../proxy/lib/proxy');
+            const testMap = new Map();
+            const fakeWs = { data: { activeStreams: new Map() } };
+            const mockManager = {
+                getModelByPlaceholder: (ph) => ({ modelId: 'custom-anthropic-claude', placeholder: ph })
+            };
+
+            // 1. Initial message with custom placeholder
+            const msg1 = JSON.stringify({
+                streamId: 's1',
+                type: 'start',
+                procedure: '/SendUserCascadeMessage',
+                payload: {
+                    cascadeId: 'casc-1',
+                    conversationId: 'conv-1',
+                    cascadeConfig: { plannerConfig: { planModel: 'MODEL_PLACEHOLDER_M505' } }
+                }
+            });
+            handleWebSocketClientMessage(fakeWs, msg1, mockManager, testMap);
+            assert.ok(testMap.has('casc-1'));
+            assert.ok(testMap.has('conv-1'));
+            assert.ok(testMap.has('latest'));
+
+            // 2. Follow-up non-model message (e.g., tool approval or user prompt without model selector change)
+            const msg2 = JSON.stringify({
+                streamId: 's2',
+                type: 'start',
+                procedure: '/SendUserCascadeMessage',
+                payload: {
+                    cascadeId: 'casc-1',
+                    conversationId: 'conv-1',
+                    text: 'Proceed with tool execution'
+                }
+            });
+            handleWebSocketClientMessage(fakeWs, msg2, mockManager, testMap);
+            assert.ok(testMap.has('casc-1'), 'Active model mapping must be preserved on non-model messages');
+            assert.ok(testMap.has('conv-1'), 'Active model mapping must be preserved on non-model messages');
+            assert.ok(testMap.has('latest'), 'Latest model mapping must be preserved on non-model messages');
+
+            // 3. Explicit switch to standard model
+            const msg3 = JSON.stringify({
+                streamId: 's3',
+                type: 'start',
+                procedure: '/SendUserCascadeMessage',
+                payload: {
+                    cascadeId: 'casc-1',
+                    conversationId: 'conv-1',
+                    cascadeConfig: { plannerConfig: { planModel: 'gemini-2.5-pro' } }
+                }
+            });
+            handleWebSocketClientMessage(fakeWs, msg3, mockManager, testMap);
+            assert.equal(testMap.has('casc-1'), false, 'Standard model selection must clear active model mapping');
+            assert.equal(testMap.has('conv-1'), false, 'Standard model selection must clear active model mapping');
+            assert.equal(testMap.has('latest'), false, 'Standard model selection must clear latest mapping');
         });
 
     } finally {

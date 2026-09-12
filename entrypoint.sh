@@ -357,6 +357,35 @@ case "$1" in
 
         export AGY_PORT="${TARGET_PORT}"
         export AGY_HUB_PORT="${AGY_HUB_PORT}"
+        export TRANSLATION_PORT="${TRANSLATION_PORT:-4405}"
+
+        # Conditionally enable translation proxy ONLY if custom models are configured
+        HAS_CUSTOM_MODELS="false"
+        if [ -f "$GEMINI_DIR/config/custom_models.json" ]; then
+            HAS_CUSTOM_MODELS="$(bun -e '
+                const fs = require("fs");
+                try {
+                    const cfg = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+                    const has = Boolean(cfg.enabled && Array.isArray(cfg.providers) && cfg.providers.some(p => p.enabled && Array.isArray(p.models) && p.models.some(m => m.enabled)));
+                    console.log(has ? "true" : "false");
+                } catch (e) {
+                    console.log("false");
+                }
+            ' "$GEMINI_DIR/config/custom_models.json" 2>/dev/null || echo "false")"
+        fi
+
+        if [ "$HAS_CUSTOM_MODELS" = "true" ] || [ "${ENABLE_TRANSLATION_PROXY:-false}" = "true" ]; then
+            echo " 🧠 Custom Models detected: routing inference via translation proxy on port ${TRANSLATION_PORT}"
+            export CLOUD_CODE_URL="${CLOUD_CODE_URL:-http://127.0.0.1:${TRANSLATION_PORT}}"
+            export ENABLE_TRANSLATION_PROXY="true"
+        elif [ -n "${CLOUD_CODE_URL:-}" ]; then
+            echo " 🧠 Custom CLOUD_CODE_URL specified: ${CLOUD_CODE_URL}"
+            export ENABLE_TRANSLATION_PROXY="true"
+        else
+            echo " ⚪ Custom Models disabled or not configured: standard Google CloudCode active"
+            unset CLOUD_CODE_URL
+            export ENABLE_TRANSLATION_PROXY="false"
+        fi
         export AUTH_PASSWORD="${AUTH_PASSWORD:-}"
         export BLOCK_TELEMETRY="${BLOCK_TELEMETRY}"
         export ENABLE_IDE="${ENABLE_IDE}"
