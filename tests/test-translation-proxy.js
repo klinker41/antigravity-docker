@@ -717,4 +717,87 @@ test('Translation Proxy - generateContent Unary Interception & Search Web Suppor
     });
 });
 
+test('Translation Proxy - resolveCustomModel does not misroute built-in placeholder to custom model', () => {
+    const mockModelsManager = {
+        getModelByPlaceholder(placeholder) {
+            // Only M592 is a registered custom model
+            if (placeholder === 'MODEL_PLACEHOLDER_M592') {
+                return {
+                    label: 'Custom Claude',
+                    providerType: 'anthropic',
+                    endpoint: 'https://api.anthropic.com',
+                    apiKey: 'key',
+                    rawModelId: 'claude-custom',
+                    supportsThinking: false
+                };
+            }
+            return null;
+        }
+    };
 
+    const proxy = new TranslationProxy({
+        port: 19999,
+        upstreamUrl: 'http://127.0.0.1:19998',
+        modelsManager: mockModelsManager
+    });
+
+    // Populate latest with a custom model — simulates an active custom model session
+    proxy.activeConversationModels.set('latest', {
+        providerType: 'openai',
+        endpoint: 'http://127.0.0.1:12345',
+        apiKey: 'key',
+        rawModelId: 'gpt-6'
+    });
+
+    // Built-in placeholder M599 in custom range must NOT resolve to the custom model
+    const builtInResult = proxy.resolveCustomModel({
+        request: { model: 'MODEL_PLACEHOLDER_M599' }
+    });
+    assert.equal(builtInResult, null, 'Built-in M599 must pass through to Google, not custom model');
+
+    // Built-in placeholder M605 must also pass through
+    const builtInResult2 = proxy.resolveCustomModel({
+        request: { model: 'MODEL_PLACEHOLDER_M605' }
+    });
+    assert.equal(builtInResult2, null, 'Built-in M605 must pass through to Google, not custom model');
+
+    // Registered custom placeholder M592 MUST still resolve to the custom model
+    const customResult = proxy.resolveCustomModel({
+        request: { model: 'MODEL_PLACEHOLDER_M592' }
+    });
+    assert.ok(customResult, 'Registered custom M592 must resolve to custom model');
+    assert.equal(customResult.rawModelId, 'claude-custom');
+
+    proxy.activeConversationModels.clear();
+});
+
+test('Transcoder - sanitizeToolCallArgs defaults Overwrite for write_to_file on non-artifact paths', () => {
+    const { sanitizeToolCallArgs } = require('../proxy/lib/transcoder.js');
+
+    // Non-artifact path without Overwrite -> should default to true
+    const result1 = sanitizeToolCallArgs('write_to_file', {
+        TargetFile: '/workspace/my-project/src/index.js',
+        CodeContent: 'console.log("hello");',
+        Description: 'Update index'
+    });
+    assert.equal(result1.Overwrite, true, 'Overwrite must default to true for non-artifact paths');
+    assert.equal(result1.ArtifactMetadata, undefined, 'ArtifactMetadata must be stripped for non-artifact paths');
+
+    // Non-artifact path with explicit Overwrite: false -> must be preserved
+    const result2 = sanitizeToolCallArgs('write_to_file', {
+        TargetFile: '/workspace/new-file.txt',
+        CodeContent: 'content',
+        Overwrite: false
+    });
+    assert.equal(result2.Overwrite, false, 'Explicit Overwrite: false must be preserved');
+
+    // Artifact path -> Overwrite must NOT be injected
+    const result3 = sanitizeToolCallArgs('write_to_file', {
+        TargetFile: '/home/developer/.gemini/antigravity-cli/brain/abc/my-doc.md',
+        CodeContent: '# Hello',
+        Description: 'My doc'
+    });
+    assert.equal(result3.Overwrite, undefined, 'Overwrite must not be injected for artifact paths');
+    assert.ok(result3.ArtifactMetadata, 'ArtifactMetadata must be synthesized for artifact paths');
+    assert.equal(result3.ArtifactMetadata.UserFacing, false, 'Synthesized ArtifactMetadata must default UserFacing to false');
+});

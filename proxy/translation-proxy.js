@@ -208,6 +208,9 @@ class TranslationProxy {
         if (modelStr && this.modelsManager && typeof this.modelsManager.getModelByPlaceholder === 'function') {
             const custom = this.modelsManager.getModelByPlaceholder(modelStr);
             if (custom) return custom;
+            // Placeholder is in the custom range but not registered as a custom model.
+            // This is a built-in Antigravity model — pass through to Google upstream.
+            if (CUSTOM_PLACEHOLDER_REGEX.test(modelStr)) return null;
         }
 
         // 2. Explicit standard model guard: if an explicit non-custom model is requested, pass through directly

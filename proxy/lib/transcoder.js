@@ -74,6 +74,11 @@ function sanitizeToolCallArgs(name, args) {
             delete cleanArgs.ArtifactMetadata;
             delete cleanArgs.artifactMetadata;
             delete cleanArgs.artifact_metadata;
+            // Default Overwrite to true for non-artifact paths when not specified,
+            // so custom models don't fail with "file already exists" on repeat writes.
+            if (cleanArgs.Overwrite === undefined && cleanArgs.overwrite === undefined) {
+                cleanArgs.Overwrite = true;
+            }
         } else {
             let meta = cleanArgs.ArtifactMetadata || cleanArgs.artifactMetadata || cleanArgs.artifact_metadata;
             if (typeof meta === 'string') {
@@ -82,7 +87,7 @@ function sanitizeToolCallArgs(name, args) {
             cleanArgs.ArtifactMetadata = (meta && typeof meta === 'object') ? meta : {
                 RequestFeedback: false,
                 Summary: cleanArgs.Description || 'Artifact document',
-                UserFacing: true
+                UserFacing: false
             };
         }
     }
