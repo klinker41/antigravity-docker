@@ -22,6 +22,74 @@ function isAdaptiveThinkingModel(modelName) {
     return false;
 }
 
+const INTEGER_TOOL_KEYS = new Set([
+    'StartLine', 'EndLine', 'ContentOffset', 'DurationSeconds',
+    'MaxIterations', 'WaitMsBeforeAsync', 'MaxDepth'
+]);
+
+function isArtifactPath(target) {
+    if (typeof target !== 'string') return false;
+    return target.includes('/.gemini/antigravity-cli/brain/') ||
+           target.includes('/antigravity-cli/brain/');
+}
+
+/**
+ * Sanitizes and normalizes tool call arguments to guarantee compatibility with Antigravity (agy).
+ * Specifically:
+ * - write_to_file: agy strictly validates artifact paths and rejects calls with:
+ *   "ArtifactMetadata was provided but %s is not a valid artifact path; artifacts must be in %s/"
+ *   If TargetFile is outside the brain/artifacts directory, ArtifactMetadata MUST NOT be provided.
+ *   Conversely, if TargetFile is in the artifact directory, ArtifactMetadata MUST be provided.
+ * - Coerces string booleans ("true"/"false") and string numbers ("10") to native JSON booleans and numbers.
+ */
+function sanitizeToolCallArgs(name, args) {
+    if (!args || typeof args !== 'object' || Array.isArray(args)) return args;
+    const cleanArgs = { ...args };
+
+    for (const [key, val] of Object.entries(cleanArgs)) {
+        if (typeof val === 'string') {
+            if (val.length <= 5) {
+                const lower = val.trim().toLowerCase();
+                if (lower === 'true') {
+                    cleanArgs[key] = true;
+                    continue;
+                }
+                if (lower === 'false') {
+                    cleanArgs[key] = false;
+                    continue;
+                }
+            }
+            if (INTEGER_TOOL_KEYS.has(key)) {
+                const trimmed = val.trim();
+                if (/^-?\d+$/.test(trimmed)) {
+                    cleanArgs[key] = parseInt(trimmed, 10);
+                }
+            }
+        }
+    }
+
+    if (name === 'write_to_file') {
+        const target = cleanArgs.TargetFile || cleanArgs.targetFile || cleanArgs.target_file;
+        if (!isArtifactPath(target)) {
+            delete cleanArgs.ArtifactMetadata;
+            delete cleanArgs.artifactMetadata;
+            delete cleanArgs.artifact_metadata;
+        } else {
+            let meta = cleanArgs.ArtifactMetadata || cleanArgs.artifactMetadata || cleanArgs.artifact_metadata;
+            if (typeof meta === 'string') {
+                try { meta = JSON.parse(meta); } catch {}
+            }
+            cleanArgs.ArtifactMetadata = (meta && typeof meta === 'object') ? meta : {
+                RequestFeedback: false,
+                Summary: cleanArgs.Description || 'Artifact document',
+                UserFacing: true
+            };
+        }
+    }
+
+    return cleanArgs;
+}
+
 /**
  * Streams chat completion from an Anthropic Messages endpoint and normalizes events.
  */
@@ -920,8 +988,12 @@ function extractResponseValue(resp, part) {
     }
 
     // 3. Extract errors from resp or part if present
-    const err = resp?.error || resp?.error_details || resp?.errorDetails ||
-                part?.error || part?.error_details || part?.errorDetails;
+    const errorKeys = ['error', 'error_details', 'errorDetails', 'errorMessage', 'error_message'];
+    let err = null;
+    for (const k of errorKeys) {
+        if (resp?.[k]) { err = resp[k]; break; }
+        if (part?.[k]) { err = part[k]; break; }
+    }
     const isNonEmptyErr = err && (typeof err === 'object' ? Object.keys(err).length > 0 : Boolean(err));
     if (isNonEmptyErr) {
         const errStr = typeof err === 'string' ? err : JSON.stringify(err);
@@ -1218,5 +1290,6 @@ module.exports = {
     getFunctionCall,
     getFunctionResponse,
     extractResponseValue,
-    resolveToolCallId
+    resolveToolCallId,
+    sanitizeToolCallArgs
 };

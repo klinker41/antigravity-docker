@@ -9,7 +9,8 @@ const {
     geminiContentsToAnthropic,
     geminiToolsToAnthropic,
     geminiContentsToOpenAI,
-    geminiToolsToOpenAI
+    geminiToolsToOpenAI,
+    sanitizeToolCallArgs
 } = require('./lib/transcoder.js');
 const { CUSTOM_PLACEHOLDER_REGEX, THINKING_BUDGETS } = require('./lib/models-manager.js');
 
@@ -343,7 +344,7 @@ class TranslationProxy {
                 } catch (e) {
                     argsObj = { raw: ev.arguments };
                 }
-                const fnCall = { name: ev.name, args: argsObj };
+                const fnCall = { name: ev.name, args: sanitizeToolCallArgs(ev.name, argsObj) };
                 if (ev.id) fnCall.id = ev.id;
                 const chunk = {
                     response: {
@@ -521,7 +522,7 @@ class TranslationProxy {
                 } catch (e) {
                     argsObj = { raw: ev.arguments };
                 }
-                const fnCall = { name: ev.name, args: argsObj };
+                const fnCall = { name: ev.name, args: sanitizeToolCallArgs(ev.name, argsObj) };
                 if (ev.id) fnCall.id = ev.id;
                 toolCalls.push(fnCall);
             } else if (ev.type === 'done') {

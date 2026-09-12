@@ -18,7 +18,8 @@ const {
     getFunctionCall,
     getFunctionResponse,
     extractResponseValue,
-    resolveToolCallId
+    resolveToolCallId,
+    sanitizeToolCallArgs
 } = require('../proxy/lib/transcoder');
 
 test('Stream Transcoder - Anthropic & OpenAI Event Normalization', async (t) => {
@@ -1388,6 +1389,91 @@ test('Stream Transcoder - Anthropic & OpenAI Event Normalization', async (t) => 
         assert.ok(anthropicTools);
         assert.equal(anthropicTools.length, 1);
         assert.equal(anthropicTools[0].name, 'custom_search');
+    });
+
+    await t.test('sanitizeToolCallArgs strips ArtifactMetadata for project files and coerces types', () => {
+        // 1. write_to_file outside artifact dir (e.g. project workspace)
+        const projectWrite = sanitizeToolCallArgs('write_to_file', {
+            TargetFile: '/workspace/llm-plays-pokemon/write-access-test.txt',
+            CodeContent: 'File write test successful.\n',
+            Description: 'Create a small test file to verify project write access.',
+            Overwrite: 'false',
+            ArtifactMetadata: {
+                RequestFeedback: false,
+                Summary: 'Temporary file write verification.',
+                UserFacing: false
+            },
+            toolAction: 'Testing file write',
+            toolSummary: 'Project write verification'
+        });
+
+        assert.equal(projectWrite.TargetFile, '/workspace/llm-plays-pokemon/write-access-test.txt');
+        assert.equal(projectWrite.Overwrite, false);
+        assert.equal(projectWrite.ArtifactMetadata, undefined);
+        assert.equal(projectWrite.CodeContent, 'File write test successful.\n');
+
+        // 2. write_to_file inside artifact dir
+        const artifactWrite = sanitizeToolCallArgs('write_to_file', {
+            TargetFile: '/home/developer/.gemini/antigravity-cli/brain/c8b0596a/walkthrough.md',
+            CodeContent: '# Walkthrough',
+            Description: 'Summary walkthrough',
+            Overwrite: 'true'
+        });
+
+        assert.equal(artifactWrite.Overwrite, true);
+        assert.ok(artifactWrite.ArtifactMetadata);
+        assert.equal(artifactWrite.ArtifactMetadata.Summary, 'Summary walkthrough');
+        assert.equal(artifactWrite.ArtifactMetadata.UserFacing, true);
+
+        // 3. view_file string numbers coercion
+        const viewCall = sanitizeToolCallArgs('view_file', {
+            AbsolutePath: '/workspace/test.txt',
+            StartLine: '1',
+            EndLine: '25',
+            ContentOffset: '0'
+        });
+        assert.equal(viewCall.StartLine, 1);
+        assert.equal(viewCall.EndLine, 25);
+        assert.equal(viewCall.ContentOffset, 0);
+
+        // 4. run_command string boolean & number coercion (case-insensitive "False", "True")
+        const cmdCall = sanitizeToolCallArgs('run_command', {
+            CommandLine: 'ls -la',
+            WaitMsBeforeAsync: '1000',
+            IsDaemon: 'False',
+            RunPersistent: 'True'
+        });
+        assert.equal(cmdCall.WaitMsBeforeAsync, 1000);
+        assert.equal(cmdCall.IsDaemon, false);
+        assert.equal(cmdCall.RunPersistent, true);
+
+        // 5. Repository path containing /brain/ in project workspace (must NOT be treated as artifact)
+        const repoBrainCall = sanitizeToolCallArgs('write_to_file', {
+            TargetFile: '/workspace/robotics/brain/planner.ts',
+            CodeContent: 'export const plan = true;',
+            ArtifactMetadata: { Summary: 'bad' }
+        });
+        assert.equal(repoBrainCall.TargetFile, '/workspace/robotics/brain/planner.ts');
+        assert.equal(repoBrainCall.ArtifactMetadata, undefined);
+
+        // 6. JSON-stringified ArtifactMetadata on real artifact path is parsed cleanly
+        const stringMetaCall = sanitizeToolCallArgs('write_to_file', {
+            TargetFile: '/home/developer/.gemini/antigravity-cli/brain/convo-123/notes.md',
+            ArtifactMetadata: JSON.stringify({ Summary: 'Parsed summary', UserFacing: true, RequestFeedback: false })
+        });
+        assert.deepEqual(stringMetaCall.ArtifactMetadata, {
+            Summary: 'Parsed summary',
+            UserFacing: true,
+            RequestFeedback: false
+        });
+    });
+
+    await t.test('extractResponseValue extracts error and errorMessage from responses', () => {
+        const respWithError = { error: 'invalid tool call error: permission denied' };
+        assert.equal(extractResponseValue(respWithError, respWithError), 'Error: invalid tool call error: permission denied');
+
+        const partWithMsg = { errorMessage: 'failed to read file: no such file or directory' };
+        assert.equal(extractResponseValue({}, partWithMsg), 'Error: failed to read file: no such file or directory');
     });
 });
 
