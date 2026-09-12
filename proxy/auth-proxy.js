@@ -9,8 +9,22 @@ const { LISTEN_PORT, AGY_HUB_PORT, AUTH_PASSWORD, PORT_FILE, ENABLE_TERMINAL, EN
 const { isAuthenticated, activeSessions, loginRateLimiter, parseCookies, getClientIp, checkRateLimit, recordFailedAttempt, SESSION_TTL_MS } = require('./lib/session');
 const { safeCompare, applySecurityHeaders, readRequestBody, readJsonBody } = require('./lib/security');
 const { isFaviconRequest, handleFaviconRequest } = require('./lib/favicon');
-const { renderLoginPage, renderStatusPage, renderStartingPage, renderSidecarsPage, checkUpstreamHealth } = require('./lib/pages');
+const { renderLoginPage, renderStatusPage, renderStartingPage, renderSidecarsPage, renderModelsPage, checkUpstreamHealth } = require('./lib/pages');
 const { proxyToTerminal, proxyToIde, isSpaRoute, proxyToUpstream, handleWebSocketUpgrade } = require('./lib/proxy');
+const { defaultManager: modelsManager, maskApiKey } = require('./lib/models-manager');
+
+let TranslationProxy;
+try {
+    const tp = require('./translation-proxy.js');
+    TranslationProxy = tp.TranslationProxy;
+} catch (e) {
+    try {
+        const tp = require('/usr/local/bin/translation-proxy.js');
+        TranslationProxy = tp.TranslationProxy;
+    } catch (err) {
+        console.error('[Proxy Gateway] Warning: translation-proxy module could not be loaded:', err.message);
+    }
+}
 
 let sidecarManager;
 try {
@@ -176,6 +190,16 @@ const server = http.createServer(async (req, res) => {
             return;
         }
 
+        // 5b. Handle /models UI route (AUTHENTICATED)
+        if (parsedUrl.pathname === '/models' || parsedUrl.pathname === '/models/') {
+            res.writeHead(200, {
+                'Content-Type': 'text/html; charset=utf-8',
+                'Cache-Control': 'no-cache, no-store, must-revalidate'
+            });
+            res.end(renderModelsPage());
+            return;
+        }
+
         // 6. Handle /api/projects REST endpoint (AUTHENTICATED)
         if (parsedUrl.pathname === '/api/projects' && req.method === 'GET') {
             const projects = sidecarManager ? sidecarManager.listProjects() : [];
@@ -282,6 +306,95 @@ const server = http.createServer(async (req, res) => {
             }
         }
 
+        // 7b. Handle /api/models* REST endpoints (AUTHENTICATED)
+        if (parsedUrl.pathname === '/api/models' || parsedUrl.pathname.startsWith('/api/models/')) {
+            if (!modelsManager) {
+                res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+                res.end(JSON.stringify({ error: 'Models manager subsystem not available.' }));
+                return;
+            }
+
+            // GET /api/models -> List all
+            if (parsedUrl.pathname === '/api/models' && req.method === 'GET') {
+                const providers = modelsManager.listProviders();
+                res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+                res.end(JSON.stringify(providers));
+                return;
+            }
+
+            // POST /api/models/test -> Test connectivity
+            if (parsedUrl.pathname === '/api/models/test' && req.method === 'POST') {
+                try {
+                    const body = await readJsonBody(req);
+                    const result = await modelsManager.testProvider(body);
+                    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+                    res.end(JSON.stringify(result));
+                } catch (e) {
+                    res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+                    res.end(JSON.stringify({ error: e.message }));
+                }
+                return;
+            }
+
+            // POST /api/models -> Save/create
+            if (parsedUrl.pathname === '/api/models' && req.method === 'POST') {
+                try {
+                    const body = await readJsonBody(req);
+                    const saved = modelsManager.saveProvider(body);
+                    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+                    res.end(JSON.stringify({
+                        ...saved,
+                        apiKey: maskApiKey(saved.apiKey),
+                        hasKey: Boolean(saved.apiKey && saved.apiKey.trim().length > 0)
+                    }));
+                } catch (e) {
+                    res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+                    res.end(JSON.stringify({ error: e.message }));
+                }
+                return;
+            }
+
+            // Route matching: /api/models/:id
+            const subPath = parsedUrl.pathname.replace(/^\/api\/models\/?/, '');
+            const parts = subPath.split('/');
+            const providerId = decodeURIComponent(parts[0]);
+
+            // DELETE /api/models/:id
+            if (req.method === 'DELETE') {
+                try {
+                    const deleted = modelsManager.deleteProvider(providerId);
+                    if (deleted) {
+                        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+                        res.end(JSON.stringify({ success: true }));
+                    } else {
+                        res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
+                        res.end(JSON.stringify({ error: 'Provider not found' }));
+                    }
+                } catch (e) {
+                    res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+                    res.end(JSON.stringify({ error: e.message }));
+                }
+                return;
+            }
+
+            // GET /api/models/:id
+            if (req.method === 'GET') {
+                const p = modelsManager.getProvider(providerId);
+                if (!p) {
+                    res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
+                    res.end(JSON.stringify({ error: 'Provider not found' }));
+                } else {
+                    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+                    res.end(JSON.stringify({
+                        ...p,
+                        apiKey: maskApiKey(p.apiKey),
+                        hasKey: Boolean(p.apiKey && p.apiKey.trim().length > 0)
+                    }));
+                }
+                return;
+            }
+        }
+
         // 8. Handle /terminal and /terminal/* routes
         if (parsedUrl.pathname === '/terminal' || parsedUrl.pathname.startsWith('/terminal/')) {
             if (!ENABLE_TERMINAL) {
@@ -335,7 +448,7 @@ const server = http.createServer(async (req, res) => {
         }
 
         // 12. Proxy HTTP Request to Antigravity agy with DOM injection on HTML responses
-        proxyToUpstream(req, res, TARGET_PORT, sidecarManager);
+        proxyToUpstream(req, res, TARGET_PORT, sidecarManager, modelsManager);
     } catch (err) {
         console.error('[HTTP Gateway Error]', err);
         if (!res.headersSent) {
@@ -364,6 +477,22 @@ checkPortFile();
 if (sidecarManager) {
     sidecarManager.init().catch(err => {
         console.error('[Proxy Gateway] Failed to initialize Sidecar Manager:', err);
+    });
+}
+
+// Initialize Translation Proxy (Port 4405 or offset)
+let translationProxy = null;
+const TRANSLATION_PORT = process.env.TRANSLATION_PORT
+    ? parseInt(process.env.TRANSLATION_PORT, 10)
+    : (LISTEN_PORT === 4400 ? 4405 : (LISTEN_PORT > 0 ? LISTEN_PORT + 5 : 4405));
+
+if (TranslationProxy && process.env.ENABLE_TRANSLATION_PROXY !== 'false') {
+    translationProxy = new TranslationProxy({
+        port: TRANSLATION_PORT,
+        modelsManager
+    });
+    translationProxy.start().catch(err => {
+        console.error('[Proxy Gateway] Warning: Translation Proxy failed to start:', err.message);
     });
 }
 

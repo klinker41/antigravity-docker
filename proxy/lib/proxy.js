@@ -206,7 +206,7 @@ function isSpaRoute(pathname) {
 }
 
 // Proxy HTTP request to the main Antigravity upstream (agy), injecting tools UI on HTML responses
-function proxyToUpstream(req, res, targetPort, sidecarManager) {
+function proxyToUpstream(req, res, targetPort, sidecarManager, modelsManager) {
     if (req.socket) req.socket.setNoDelay(true);
     if (res.socket) res.socket.setNoDelay(true);
 
@@ -219,8 +219,15 @@ function proxyToUpstream(req, res, targetPort, sidecarManager) {
         proxyHeaders['referer'] = req.headers['referer'].replace(/^https?:\/\/[^/]+/, `http://localhost:${targetPort}`);
     }
 
-    // Request uncompressed body only for SPA document routes and HTML requests to preserve compression
-    if (isSpaRoute(parsedUrl.pathname) || (req.headers.accept || '').includes('text/html')) {
+    const shouldInterceptModels = Boolean(
+        modelsManager &&
+        modelsManager.hasEnabledModels &&
+        modelsManager.hasEnabledModels() &&
+        parsedUrl.pathname.endsWith('/GetCascadeModelConfigData')
+    );
+
+    // Request uncompressed body only for SPA document routes, HTML requests, and intercepted model configs
+    if (isSpaRoute(parsedUrl.pathname) || (req.headers.accept || '').includes('text/html') || shouldInterceptModels) {
         proxyHeaders['accept-encoding'] = 'identity';
     }
 
@@ -276,6 +283,45 @@ function proxyToUpstream(req, res, targetPort, sidecarManager) {
                     }
                 }
                 return html;
+            });
+            return;
+        }
+
+        // INTERCEPT MODEL CONFIG DATA ONLY IF CUSTOM MODELS ARE CONFIGURED & ENABLED
+        if (shouldInterceptModels) {
+            const chunks = [];
+            proxyRes.on('data', chunk => chunks.push(chunk));
+            proxyRes.on('end', () => {
+                try {
+                    let json = Buffer.concat(chunks).toString('utf8');
+                    const data = JSON.parse(json);
+                    const injected = modelsManager.getInjectedModels();
+                    if (injected && injected.length > 0) {
+                        data.clientModelConfigs = data.clientModelConfigs || [];
+                        data.clientModelConfigs.push(...injected);
+
+                        if (Array.isArray(data.clientModelSorts) && data.clientModelSorts.length > 0) {
+                            const group = data.clientModelSorts[0].groups?.[0];
+                            if (group && Array.isArray(group.modelLabels)) {
+                                for (const m of injected) {
+                                    if (!group.modelLabels.includes(m.label)) {
+                                        group.modelLabels.push(m.label);
+                                    }
+                                }
+                            }
+                        }
+                        json = JSON.stringify(data);
+                    }
+                    resHeaders['content-length'] = Buffer.byteLength(json, 'utf8');
+                    delete resHeaders['content-encoding'];
+                    res.writeHead(proxyRes.statusCode, resHeaders);
+                    res.end(json);
+                } catch (e) {
+                    const raw = Buffer.concat(chunks);
+                    resHeaders['content-length'] = raw.length;
+                    res.writeHead(proxyRes.statusCode, resHeaders);
+                    res.end(raw);
+                }
             });
             return;
         }

@@ -4,8 +4,9 @@ Run Google Antigravity in **headless Remote Control mode** on your server.
 Connect to your agent from any browser via your reverse proxy or local network
 with built-in password protection, an integrated **Sidecar Manager** for
 scheduled agent prompts and autonomous workers, a **VS Code Web IDE** for
-inspecting project files, and a **Host Web Terminal** for running commands on
-the host machine.
+inspecting project files, a **Host Web Terminal** for running commands on
+the host machine, and **External Model Providers** for using Claude 3.5/3.7,
+OpenAI GPT-4o, or local Ollama directly in Antigravity.
 
 ---
 
@@ -145,11 +146,44 @@ Once logged in, all services are accessible:
 
 | Service | Path | Description | Authentication |
 | :--- | :--- | :--- | :--- |
-| **Google Antigravity UI** | `/` | Main chat and conversation interface. Injected with **Sidecar Manager**, **Web IDE**, and **Host Terminal** buttons in the left navigation sidebar. | Protected 🔒 |
+| **Google Antigravity UI** | `/` | Main chat interface. Injected with **Custom Models**, **Sidecar Manager**, **Web IDE**, and **Host Terminal** sidebar buttons. | Protected 🔒 |
+| **Custom Models** | `/models` | Web UI for configuring Anthropic, OpenAI, or local Ollama endpoints in Antigravity's model selector. | Protected 🔒 |
 | **Sidecar Manager** | `/sidecars` | Web UI for defining, scheduling, and monitoring background sidecars and recurring agent prompts. | Protected 🔒 |
 | **VS Code Web IDE** | `/ide/` | Full-featured VS Code in the browser for viewing and editing raw project files in `/workspace`. | Protected 🔒 |
 | **Host Web Terminal** | `/terminal/` | Web terminal running interactive SSH sessions directly on the host machine (manage Docker, run system commands, git, etc.). | Protected 🔒 |
 | **Health & Service Status** | `/status` | Real-time health check endpoint for monitoring service uptime. | **Public / Unauthenticated** 🟢 |
+
+---
+
+## 🧠 External Model Providers (Anthropic, OpenAI, Ollama)
+
+`antigravity-docker` includes native support for integrating external model
+providers directly into Antigravity's primary agent harness (terminal sandbox,
+file diff engine, live artifacts, and subagents).
+
+Access the configuration page by clicking **Custom Models** in the left
+navigation pane of the Antigravity UI or navigating directly to `/models`.
+
+### Supported Providers & Protocols:
+- **Anthropic Messages API**: Connect Claude 3.7 Sonnet, Claude 3.5 Sonnet,
+  and Claude 3.5 Haiku via your Anthropic API key (`sk-ant-...`). Thinking
+  blocks stream directly into Antigravity's collapsible Thoughts drawer.
+- **OpenAI & OpenAI-Compatible Endpoints**: Connect official OpenAI models
+  (GPT-4o, o3-mini) or compatible self-hosted endpoints such as local Ollama,
+  vLLM, or DeepSeek.
+
+### Key Features:
+- **Dynamic Dropdown Injection**: Enabled external models are automatically
+  injected into Antigravity's model selector without DOM scraping or browser
+  extensions.
+- **Transparent Reverse Proxy**: Standard Gemini models pass directly through
+  to Google CloudCode with zero translation overhead or latency penalty.
+- **Instant Fallback**: If an external provider key expires or rate limits,
+  switch to any standard Gemini model in the dropdown for immediate,
+  zero-downtime execution.
+- **Encrypted Local Persistence**: External endpoints and credentials are
+  persisted in `~/.gemini/config/custom_models.json` on the mounted volume.
+  API keys are securely masked in the web UI.
 
 ---
 

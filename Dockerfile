@@ -119,7 +119,7 @@ RUN if [ -d /usr/lib/code-server/src/browser/media ]; then \
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY proxy/ /usr/local/bin/
 COPY scripts/host-terminal.sh /usr/local/bin/host-terminal.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/auth-proxy.js /usr/local/bin/sidecar-manager.js /usr/local/bin/host-terminal.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/auth-proxy.js /usr/local/bin/sidecar-manager.js /usr/local/bin/translation-proxy.js /usr/local/bin/host-terminal.sh
 
 WORKDIR /workspace
 

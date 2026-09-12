@@ -83,6 +83,16 @@ if [ ! -f "$GEMINI_DIR/config/config.json" ]; then
 EOF
 fi
 
+# Initialize custom_models.json if not present
+if [ ! -f "$GEMINI_DIR/config/custom_models.json" ]; then
+    cat <<EOF > "$GEMINI_DIR/config/custom_models.json"
+{
+  "enabled": false,
+  "providers": []
+}
+EOF
+fi
+
 # Scan /workspace and register each folder as a separate project in ~/.gemini/config/projects/<UUID>.json
 # only if the projects folder is empty
 if [ -z "$(ls -A "$GEMINI_DIR/config/projects" 2>/dev/null)" ]; then

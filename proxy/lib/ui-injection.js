@@ -4,6 +4,7 @@ const { ENABLE_IDE, ENABLE_TERMINAL } = require('./config');
 
 // SVG icons used in the injected sidebar buttons
 const SIDECAR_ICON_SVG = `<svg class="agy-injected-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>`;
+const MODELS_ICON_SVG = `<svg class="agy-injected-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a4 4 0 0 1 4 4v2a4 4 0 0 1-4 4 4 4 0 0 1-4-4V6a4 4 0 0 1 4-4z"></path><path d="M18 14v1a6 6 0 0 1-12 0v-1"></path><path d="M12 18v4"></path><path d="M8 22h8"></path></svg>`;
 const IDE_ICON_SVG = `<svg class="agy-injected-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg>`;
 const TERMINAL_ICON_SVG = `<svg class="agy-injected-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>`;
 const EXTERNAL_ICON_SVG = `<svg class="agy-injected-external-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>`;
@@ -77,6 +78,14 @@ const INJECTED_UI_STYLES = `
     color: #c4b5fd;
 }
 
+.agy-injected-btn-models .agy-injected-btn-icon {
+    color: #f59e0b;
+}
+
+.agy-injected-btn-models:hover .agy-injected-btn-icon {
+    color: #fbbf24;
+}
+
 .agy-injected-btn-terminal .agy-injected-btn-icon {
     color: #4ade80;
 }
@@ -121,6 +130,13 @@ function buildInjectedScript() {
                 \${EXTERNAL_ICON_SVG}
             </a>`;
 
+    const modelsButtonHtml = `
+            <a href="/models" target="_blank" rel="noopener noreferrer" class="agy-injected-btn agy-injected-btn-models" title="Configure Custom Models">
+                \${MODELS_ICON_SVG}
+                <span class="agy-injected-btn-text">Custom Models</span>
+                \${EXTERNAL_ICON_SVG}
+            </a>`;
+
     const ideButtonHtml = ENABLE_IDE ? `
             <a href="/ide/" target="_blank" rel="noopener noreferrer" class="agy-injected-btn agy-injected-btn-ide" title="Open VS Code Web IDE in a new tab">
                 \${IDE_ICON_SVG}
@@ -138,6 +154,7 @@ function buildInjectedScript() {
     return `
 (function initAntigravityCustomTools() {
     const SIDECAR_ICON_SVG = '<svg class="agy-injected-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>';
+    const MODELS_ICON_SVG = '<svg class="agy-injected-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a4 4 0 0 1 4 4v2a4 4 0 0 1-4 4 4 4 0 0 1-4-4V6a4 4 0 0 1 4-4z"></path><path d="M18 14v1a6 6 0 0 1-12 0v-1"></path><path d="M12 18v4"></path><path d="M8 22h8"></path></svg>';
     const IDE_ICON_SVG = '<svg class="agy-injected-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg>';
     const TERMINAL_ICON_SVG = '<svg class="agy-injected-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>';
     const EXTERNAL_ICON_SVG = '<svg class="agy-injected-external-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>';
@@ -146,7 +163,7 @@ function buildInjectedScript() {
         const container = document.createElement('div');
         container.id = 'agy-injected-tools-group';
         container.className = 'agy-injected-tools-group';
-        container.innerHTML = \`<div class="agy-injected-tools-label">Workspace Tools</div>${sidecarButtonHtml}${ideButtonHtml}${termButtonHtml}\`;
+        container.innerHTML = \`<div class="agy-injected-tools-label">Workspace Tools</div>${sidecarButtonHtml}${modelsButtonHtml}${ideButtonHtml}${termButtonHtml}\`;
         return container;
     }
 

@@ -1999,6 +1999,406 @@ function renderSidecarsPage() {
     });
 }
 
+// Render Custom Models Management Dashboard Page
+function renderModelsPage() {
+    const statusPill = renderStatusPill('ready', 'Model Provider Gateway');
+
+    const bodyHtml = `
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+            <div>
+                <h2 style="font-size: 18px; font-weight: 600; color: var(--text-primary);">External Providers & Models</h2>
+                <p style="font-size: 13px; color: var(--text-secondary); margin-top: 4px;">
+                    Configure Anthropic, OpenAI, or local Ollama endpoints to appear in Antigravity's model selector.
+                </p>
+            </div>
+            <button type="button" class="btn-primary" id="addProviderBtn" style="white-space: nowrap;">
+                + Add Provider
+            </button>
+        </div>
+
+        <div id="models-list-container" class="sidecars-grid">
+            <div class="empty-state">Loading model providers...</div>
+        </div>
+
+        <!-- Add / Edit Provider Modal -->
+        <div id="providerModal" class="modal-overlay">
+            <div class="modal-box" style="max-width: 620px;">
+                <div class="modal-header">
+                    <h2 id="modalTitle">Add Model Provider</h2>
+                    <button type="button" class="modal-close" id="closeModalBtn">&times;</button>
+                </div>
+                <form id="providerForm">
+                    <input type="hidden" id="providerId" value="">
+
+                    <div class="form-group">
+                        <label for="providerName">Provider Name</label>
+                        <input type="text" id="providerName" class="input-field" placeholder="e.g. Anthropic Claude, OpenAI, Local Ollama" required>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="providerType">Provider Type / Protocol</label>
+                        <select id="providerType" class="input-field">
+                            <option value="anthropic">Anthropic (Messages API with Thinking Stream)</option>
+                            <option value="openai">OpenAI Compatible (ChatGPT, Ollama, vLLM, DeepSeek)</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="providerEndpoint">API Endpoint Base URL</label>
+                        <input type="url" id="providerEndpoint" class="input-field" placeholder="https://api.anthropic.com" required>
+                        <p class="field-hint" id="endpointHint">Default for Anthropic: https://api.anthropic.com</p>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="providerApiKey">API Key / Secret Token</label>
+                        <input type="password" id="providerApiKey" class="input-field" placeholder="sk-ant-...">
+                        <p class="field-hint">Leave blank for local Ollama or to retain your existing saved key.</p>
+                    </div>
+
+                    <div style="margin: 16px 0;">
+                        <button type="button" class="btn-secondary btn-small" id="testConnBtn">
+                            ⚡ Test Connection & Fetch Models
+                        </button>
+                        <span id="testStatus" style="font-size: 12px; margin-left: 10px; color: var(--text-secondary);"></span>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Configured Models</label>
+                        <div id="modelsContainer" style="display: flex; flex-direction: column; gap: 8px; max-height: 200px; overflow-y: auto; padding: 8px; background: var(--input-bg); border: 1px solid var(--input-border); border-radius: 8px;">
+                            <p style="font-size: 12px; color: var(--text-muted);">Click 'Test Connection & Fetch Models' or enter a model ID below.</p>
+                        </div>
+                    </div>
+
+                    <div style="display: flex; gap: 8px; margin-top: 8px;">
+                        <input type="text" id="customModelId" class="input-field" placeholder="Model ID (e.g. claude-3-7-sonnet-20250219)" style="flex: 2;">
+                        <input type="text" id="customModelLabel" class="input-field" placeholder="Display Name" style="flex: 2;">
+                        <button type="button" class="btn-secondary btn-small" id="addCustomModelBtn" style="flex: 1;">+ Add</button>
+                    </div>
+
+                    <div class="modal-footer" style="margin-top: 24px; display: flex; justify-content: space-between; align-items: center;">
+                        <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px;">
+                            <input type="checkbox" id="providerEnabled" checked>
+                            <span>Enable this provider in model selector</span>
+                        </label>
+                        <div style="display: flex; gap: 10px;">
+                            <button type="button" class="btn-secondary" id="cancelModalBtn">Cancel</button>
+                            <button type="submit" class="btn-primary" id="saveProviderBtn">Save Provider</button>
+                        </div>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <div id="toast" class="toast">
+            <span id="toastMessage">Success</span>
+        </div>
+    `;
+
+    const scriptExtra = `
+        let providersData = [];
+        let stagedModels = [];
+
+        const listContainer = document.getElementById('models-list-container');
+        const modal = document.getElementById('providerModal');
+        const form = document.getElementById('providerForm');
+        const providerType = document.getElementById('providerType');
+        const providerEndpoint = document.getElementById('providerEndpoint');
+        const endpointHint = document.getElementById('endpointHint');
+        const modelsContainer = document.getElementById('modelsContainer');
+        const testConnBtn = document.getElementById('testConnBtn');
+        const testStatus = document.getElementById('testStatus');
+
+        function escapeHtml(str) {
+            if (str === null || str === undefined) return '';
+            return String(str)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
+        function showToast(msg) {
+            const toast = document.getElementById('toast');
+            const toastMsg = document.getElementById('toastMessage');
+            if (!toast || !toastMsg) return;
+            toastMsg.textContent = msg;
+            toast.classList.add('show');
+            setTimeout(() => toast.classList.remove('show'), 3500);
+        }
+
+        providerType.addEventListener('change', () => {
+            if (providerType.value === 'anthropic') {
+                if (!providerEndpoint.value || providerEndpoint.value.includes('openai') || providerEndpoint.value.includes('11434')) {
+                    providerEndpoint.value = 'https://api.anthropic.com';
+                }
+                endpointHint.textContent = 'Default for Anthropic: https://api.anthropic.com';
+            } else {
+                if (!providerEndpoint.value || providerEndpoint.value.includes('anthropic')) {
+                    providerEndpoint.value = 'https://api.openai.com/v1';
+                }
+                endpointHint.textContent = 'OpenAI: https://api.openai.com/v1 | Local Ollama: http://host.docker.internal:11434/v1';
+            }
+        });
+
+        async function fetchProviders() {
+            try {
+                const res = await fetch('/api/models');
+                if (!res.ok) throw new Error('Failed to load providers');
+                providersData = await res.json();
+                renderList();
+            } catch (e) {
+                listContainer.innerHTML = '<div class="empty-state" style="color: var(--error-text);">Failed to load providers: ' + escapeHtml(e.message) + '</div>';
+            }
+        }
+
+        function renderList() {
+            if (!providersData || providersData.length === 0) {
+                listContainer.innerHTML = \`
+                    <div class="empty-state">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="width: 48px; height: 48px; opacity: 0.3; margin-bottom: 12px;">
+                            <path d="M12 2a4 4 0 0 1 4 4v2a4 4 0 0 1-4 4 4 4 0 0 1-4-4V6a4 4 0 0 1 4-4z"></path>
+                            <path d="M18 14v1a6 6 0 0 1-12 0v-1"></path>
+                            <path d="M12 18v4"></path><path d="M8 22h8"></path>
+                        </svg>
+                        <p style="font-size: 14px; font-weight: 500; color: var(--text-secondary); margin-bottom: 4px;">No external model providers configured</p>
+                        <p style="font-size: 12px; color: var(--text-muted);">Add Anthropic (Claude 3.5/3.7) or an OpenAI/Ollama endpoint to show them in Antigravity.</p>
+                    </div>
+                \`;
+                return;
+            }
+
+            let html = '';
+            for (const p of providersData) {
+                const badgeColor = p.type === 'anthropic' ? 'var(--accent-purple)' : 'var(--accent-cyan)';
+                const badgeBg = p.type === 'anthropic' ? 'rgba(167, 139, 250, 0.12)' : 'rgba(56, 189, 248, 0.12)';
+                const enabledBadge = p.enabled 
+                    ? '<span class="status-pill status-pill-success" style="margin: 0; padding: 2px 8px; font-size: 10px;"><span class="status-dot status-dot-success"></span>Active</span>'
+                    : '<span class="status-pill status-pill-error" style="margin: 0; padding: 2px 8px; font-size: 10px;"><span class="status-dot status-dot-error"></span>Disabled</span>';
+
+                const modelsList = (p.models || []).map(m => \`
+                    <span style="display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 6px; font-size: 11px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.08); color: \${m.enabled ? 'var(--text-primary)' : 'var(--text-muted)'};">
+                        \${m.enabled ? '🟢' : '⚪'} \${escapeHtml(m.label || m.id)}
+                    </span>
+                \`).join('') || '<span style="font-size: 12px; color: var(--text-muted);">No models configured</span>';
+
+                html += \`
+                    <div class="sidecar-card" style="padding: 18px;">
+                        <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px;">
+                            <div>
+                                <div style="display: flex; align-items: center; gap: 8px;">
+                                    <h3 style="font-size: 15px; font-weight: 600; color: var(--text-primary);">\${escapeHtml(p.name)}</h3>
+                                    <span style="font-size: 10px; font-weight: 600; text-transform: uppercase; padding: 2px 6px; border-radius: 4px; color: \${badgeColor}; background: \${badgeBg}; border: 1px solid \${badgeColor}40;">
+                                        \${escapeHtml(p.type)}
+                                    </span>
+                                    \${enabledBadge}
+                                </div>
+                                <p style="font-size: 12px; color: var(--text-muted); font-family: 'Google Sans Code', monospace; margin-top: 4px;">
+                                    \${escapeHtml(p.endpoint)} \${p.hasKey ? '• Key: ' + escapeHtml(p.apiKey) : '• (No key)'}
+                                </p>
+                            </div>
+                            <div style="display: flex; gap: 6px;">
+                                <button type="button" class="btn-secondary btn-small" onclick="editProvider('\${escapeHtml(p.id)}')">Edit</button>
+                                <button type="button" class="btn-danger btn-small" onclick="deleteProvider('\${escapeHtml(p.id)}')">Delete</button>
+                            </div>
+                        </div>
+
+                        <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--card-border);">
+                            <p style="font-size: 11px; font-weight: 600; text-transform: uppercase; color: var(--text-secondary); margin-bottom: 8px;">Available in Dropdown:</p>
+                            <div style="display: flex; flex-wrap: wrap; gap: 6px;">
+                                \${modelsList}
+                            </div>
+                        </div>
+                    </div>
+                \`;
+            }
+            listContainer.innerHTML = html;
+        }
+
+        function renderStagedModels() {
+            if (stagedModels.length === 0) {
+                modelsContainer.innerHTML = '<p style="font-size: 12px; color: var(--text-muted); padding: 4px;">No models added yet.</p>';
+                return;
+            }
+            modelsContainer.innerHTML = stagedModels.map((m, idx) => \`
+                <div style="display: flex; align-items: center; justify-content: space-between; padding: 4px 8px; background: rgba(255,255,255,0.03); border-radius: 6px;">
+                    <label style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-primary); cursor: pointer;">
+                        <input type="checkbox" \${m.enabled ? 'checked' : ''} onchange="toggleModelEnabled(\${idx})">
+                        <span><strong>\${escapeHtml(m.label)}</strong> <code style="font-size: 11px; opacity: 0.7;">(\${escapeHtml(m.id)})</code></span>
+                    </label>
+                    <button type="button" onclick="removeModel(\${idx})" style="background: none; border: none; color: var(--error-text); cursor: pointer; font-size: 14px;">&times;</button>
+                </div>
+            \`).join('');
+        }
+
+        window.toggleModelEnabled = function(idx) {
+            if (stagedModels[idx]) {
+                stagedModels[idx].enabled = !stagedModels[idx].enabled;
+                renderStagedModels();
+            }
+        };
+
+        window.removeModel = function(idx) {
+            stagedModels.splice(idx, 1);
+            renderStagedModels();
+        };
+
+        document.getElementById('addCustomModelBtn').addEventListener('click', () => {
+            const idInput = document.getElementById('customModelId');
+            const labelInput = document.getElementById('customModelLabel');
+            const id = (idInput.value || '').trim();
+            const label = (labelInput.value || id).trim();
+
+            if (!id) return;
+            if (!stagedModels.some(m => m.id === id)) {
+                stagedModels.push({ id, label, enabled: true, supportsThinking: true });
+                renderStagedModels();
+            }
+            idInput.value = '';
+            labelInput.value = '';
+        });
+
+        testConnBtn.addEventListener('click', async () => {
+            const type = providerType.value;
+            const endpoint = providerEndpoint.value.trim();
+            const apiKey = document.getElementById('providerApiKey').value.trim();
+
+            if (!endpoint) {
+                testStatus.textContent = 'Please enter an endpoint URL first.';
+                testStatus.style.color = 'var(--error-text)';
+                return;
+            }
+
+            testStatus.textContent = 'Testing connection...';
+            testStatus.style.color = 'var(--text-secondary)';
+
+            try {
+                const res = await fetch('/api/models/test', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ type, endpoint, apiKey })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    testStatus.textContent = \`Connected! Found \${data.models.length} models.\`;
+                    testStatus.style.color = 'var(--success-text)';
+
+                    for (const m of data.models) {
+                        if (!stagedModels.some(existing => existing.id === m.id)) {
+                            stagedModels.push({
+                                id: m.id,
+                                label: m.label || m.id,
+                                enabled: true,
+                                supportsThinking: m.id.includes('claude') || m.id.includes('r1')
+                            });
+                        }
+                    }
+                    renderStagedModels();
+                } else {
+                    testStatus.textContent = 'Connection failed: ' + (data.error || 'Check endpoint & key');
+                    testStatus.style.color = 'var(--error-text)';
+                }
+            } catch (e) {
+                testStatus.textContent = 'Test failed: ' + e.message;
+                testStatus.style.color = 'var(--error-text)';
+            }
+        });
+
+        document.getElementById('addProviderBtn').addEventListener('click', () => {
+            document.getElementById('modalTitle').textContent = 'Add Model Provider';
+            document.getElementById('providerId').value = '';
+            form.reset();
+            providerType.value = 'anthropic';
+            providerEndpoint.value = 'https://api.anthropic.com';
+            endpointHint.textContent = 'Default for Anthropic: https://api.anthropic.com';
+            stagedModels = [];
+            renderStagedModels();
+            testStatus.textContent = '';
+            modal.classList.add('show');
+        });
+
+        window.editProvider = function(id) {
+            const p = providersData.find(item => item.id === id);
+            if (!p) return;
+
+            document.getElementById('modalTitle').textContent = 'Edit Model Provider';
+            document.getElementById('providerId').value = p.id;
+            document.getElementById('providerName').value = p.name;
+            providerType.value = p.type;
+            providerEndpoint.value = p.endpoint;
+            document.getElementById('providerApiKey').value = '';
+            document.getElementById('providerApiKey').placeholder = p.hasKey ? '(Key preserved, enter new key to change)' : '';
+            document.getElementById('providerEnabled').checked = p.enabled !== false;
+            stagedModels = (p.models || []).map(m => ({ ...m }));
+            renderStagedModels();
+            testStatus.textContent = '';
+            modal.classList.add('show');
+        };
+
+        window.deleteProvider = async function(id) {
+            if (!confirm('Are you sure you want to delete this provider?')) return;
+            try {
+                const res = await fetch('/api/models/' + encodeURIComponent(id), { method: 'DELETE' });
+                if (res.ok) {
+                    showToast('Provider deleted');
+                    fetchProviders();
+                }
+            } catch (e) {
+                alert('Failed to delete: ' + e.message);
+            }
+        };
+
+        function closeModal() {
+            modal.classList.remove('show');
+        }
+
+        document.getElementById('closeModalBtn').addEventListener('click', closeModal);
+        document.getElementById('cancelModalBtn').addEventListener('click', closeModal);
+
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const id = document.getElementById('providerId').value;
+            const payload = {
+                id: id || undefined,
+                name: document.getElementById('providerName').value.trim(),
+                type: providerType.value,
+                endpoint: providerEndpoint.value.trim(),
+                apiKey: document.getElementById('providerApiKey').value.trim(),
+                enabled: document.getElementById('providerEnabled').checked,
+                models: stagedModels
+            };
+
+            try {
+                const res = await fetch('/api/models', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                if (!res.ok) {
+                    const err = await res.json();
+                    throw new Error(err.error || 'Failed to save provider');
+                }
+                closeModal();
+                showToast('Provider saved successfully');
+                fetchProviders();
+            } catch (err) {
+                alert(err.message);
+            }
+        });
+
+        fetchProviders();
+    `;
+
+    return renderPageLayout({
+        title: 'Google Antigravity - Custom Model Providers',
+        subtitle: 'Configure external LLM providers (Anthropic, OpenAI, Ollama) to use in Antigravity',
+        statusPill,
+        bodyHtml,
+        scriptExtra,
+        cardMaxWidth: 920
+    });
+}
+
 module.exports = {
     renderPageLayout,
     renderStatusPill,
@@ -2007,5 +2407,6 @@ module.exports = {
     renderStartingPage,
     renderServiceStartingPage,
     renderSidecarsPage,
+    renderModelsPage,
     checkUpstreamHealth,
 };
