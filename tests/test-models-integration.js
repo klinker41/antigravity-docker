@@ -72,6 +72,70 @@ test('Multi-Model Integration - HTTP Proxy, Models API, & Upstream Interception'
             return;
         }
 
+        // Connect-RPC GetUserStatus endpoint (used by Antigravity web UI)
+        if (parsed.pathname.endsWith('/GetUserStatus')) {
+            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({
+                userStatus: {
+                    name: 'Test Developer',
+                    cascadeModelConfigData: {
+                        clientModelConfigs: [
+                            {
+                                label: 'Gemini 3.8 Flash',
+                                modelOrAlias: { model: 'gemini-3.8-flash' },
+                                isRecommended: true
+                            }
+                        ],
+                        clientModelSorts: [
+                            {
+                                groups: [
+                                    {
+                                        groupName: 'Standard',
+                                        modelLabels: ['Gemini 3.8 Flash']
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                }
+            }));
+            return;
+        }
+
+        // Connect-RPC GetCascadeModelConfigs endpoint (alternative model endpoint)
+        if (parsed.pathname.endsWith('/GetCascadeModelConfigs')) {
+            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({
+                cascadeModelConfigData: {
+                    clientModelConfigs: [
+                        {
+                            label: 'Gemini 3.8 Flash',
+                            modelOrAlias: { model: 'gemini-3.8-flash' },
+                            isRecommended: true
+                        }
+                    ],
+                    clientModelSorts: [
+                        {
+                            groups: [
+                                {
+                                    groupName: 'Standard',
+                                    modelLabels: ['Gemini 3.8 Flash']
+                                }
+                            ]
+                        }
+                    ]
+                }
+            }));
+            return;
+        }
+
+        // Upstream error endpoint to verify non-200 / non-JSON responses don't throw stream lock errors
+        if (parsed.pathname.endsWith('/GetCascadeModelConfigDataError')) {
+            res.writeHead(500, { 'Content-Type': 'text/plain' });
+            res.end('Internal Server Error from upstream');
+            return;
+        }
+
         res.writeHead(200, { 'Content-Type': 'text/plain' });
         res.end('Mock Agy OK');
     });
@@ -279,6 +343,63 @@ test('Multi-Model Integration - HTTP Proxy, Models API, & Upstream Interception'
             const group = rpcData.clientModelSorts[0].groups[0];
             assert.ok(group.modelLabels.includes('Gemini 3.8 Flash'));
             assert.ok(group.modelLabels.includes('Claude 3.7 Sonnet (Anthropic)'));
+        });
+
+        await t.test('intercepts GetUserStatus and injects external models into userStatus.cascadeModelConfigData', async () => {
+            const rpcRes = await makeRequest('/exa.language_server_pb.LanguageServerService/GetUserStatus', {
+                method: 'POST',
+                headers: { Cookie: authCookie, 'Content-Type': 'application/json' },
+                body: '{}'
+            });
+            assert.equal(rpcRes.status, 200);
+            const rpcData = JSON.parse(rpcRes.body);
+
+            assert.ok(rpcData.userStatus, 'userStatus must be present');
+            assert.ok(rpcData.userStatus.cascadeModelConfigData, 'cascadeModelConfigData must be present');
+            const configData = rpcData.userStatus.cascadeModelConfigData;
+
+            // Original Gemini model is preserved
+            assert.ok(configData.clientModelConfigs.some(m => m.label === 'Gemini 3.8 Flash'));
+
+            // Injected Claude 3.7 model is added
+            const injectedModel = configData.clientModelConfigs.find(m => m.modelId === 'custom-anthropic-claude-3-7-sonnet');
+            assert.ok(injectedModel, 'Custom model should be present in clientModelConfigs');
+            assert.equal(injectedModel.label, 'Claude 3.7 Sonnet (Anthropic)');
+
+            // Injected into model sorting labels
+            const group = configData.clientModelSorts[0].groups[0];
+            assert.ok(group.modelLabels.includes('Claude 3.7 Sonnet (Anthropic)'));
+        });
+
+        await t.test('intercepts GetCascadeModelConfigs and injects models into cascadeModelConfigData', async () => {
+            const rpcRes = await makeRequest('/exa.language_server_pb.LanguageServerService/GetCascadeModelConfigs', {
+                method: 'POST',
+                headers: { Cookie: authCookie, 'Content-Type': 'application/json' },
+                body: '{}'
+            });
+            assert.equal(rpcRes.status, 200);
+            const rpcData = JSON.parse(rpcRes.body);
+
+            assert.ok(rpcData.cascadeModelConfigData, 'cascadeModelConfigData must be present');
+            const configData = rpcData.cascadeModelConfigData;
+
+            // Original model preserved
+            assert.ok(configData.clientModelConfigs.some(m => m.label === 'Gemini 3.8 Flash'));
+
+            // Injected model added
+            const injectedModel = configData.clientModelConfigs.find(m => m.modelId === 'custom-anthropic-claude-3-7-sonnet');
+            assert.ok(injectedModel, 'Custom model should be present');
+            assert.equal(injectedModel.label, 'Claude 3.7 Sonnet (Anthropic)');
+        });
+
+        await t.test('safely passes through upstream non-ok responses without stream lock errors', async () => {
+            const errRes = await makeRequest('/exa.language_server_pb.LanguageServerService/GetCascadeModelConfigDataError', {
+                method: 'POST',
+                headers: { Cookie: authCookie, 'Content-Type': 'application/json' },
+                body: '{}'
+            });
+            assert.equal(errRes.status, 500);
+            assert.ok(errRes.body.includes('Internal Server Error from upstream'));
         });
 
         await t.test('deletes provider via DELETE /api/models/:id', async () => {

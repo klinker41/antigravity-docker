@@ -64,12 +64,15 @@ async function proxyWebRequest(c, targetPort, targetPath, options = {}) {
     }
 
     const parsedUrl = new URL(c.req.raw.url);
+    const isModelEndpoint = parsedUrl.pathname.endsWith('/GetCascadeModelConfigData') ||
+                            parsedUrl.pathname.endsWith('/GetUserStatus') ||
+                            parsedUrl.pathname.endsWith('/GetCascadeModelConfigs');
     const shouldInterceptModels = Boolean(
         isUpstream &&
         modelsManager &&
         typeof modelsManager.hasEnabledModels === 'function' &&
         modelsManager.hasEnabledModels() &&
-        parsedUrl.pathname.endsWith('/GetCascadeModelConfigData')
+        isModelEndpoint
     );
 
     const wantsHtml = (c.req.header('accept') || '').includes('text/html') ||
@@ -157,29 +160,60 @@ async function proxyWebRequest(c, targetPort, targetPath, options = {}) {
             });
         }
 
-        if (shouldInterceptModels) {
+        if (shouldInterceptModels && upstreamRes.ok) {
+            let rawText;
             try {
-                const data = await upstreamRes.json();
-                const injected = modelsManager.getInjectedModels();
-                if (injected && injected.length > 0) {
-                    data.clientModelConfigs = data.clientModelConfigs || [];
-                    data.clientModelConfigs.push(...injected);
+                rawText = await upstreamRes.text();
+            } catch (readErr) {
+                throw readErr;
+            }
 
-                    if (Array.isArray(data.clientModelSorts) && data.clientModelSorts.length > 0) {
-                        const group = data.clientModelSorts[0].groups?.[0];
-                        if (group && Array.isArray(group.modelLabels)) {
-                            for (const m of injected) {
-                                if (!group.modelLabels.includes(m.label)) {
-                                    group.modelLabels.push(m.label);
+            try {
+                const data = JSON.parse(rawText);
+                if (data && typeof data === 'object') {
+                    const injected = modelsManager.getInjectedModels();
+                    if (injected && injected.length > 0) {
+                        let targetConfigData = data;
+                        if (data.userStatus) {
+                            data.userStatus.cascadeModelConfigData = data.userStatus.cascadeModelConfigData || {};
+                            targetConfigData = data.userStatus.cascadeModelConfigData;
+                        } else if (data.cascadeModelConfigData) {
+                            targetConfigData = data.cascadeModelConfigData;
+                        }
+
+                        targetConfigData.clientModelConfigs = targetConfigData.clientModelConfigs || [];
+                        for (const m of injected) {
+                            const alreadyExists = targetConfigData.clientModelConfigs.some(existing =>
+                                (existing.modelId && existing.modelId === m.modelId) ||
+                                (existing.modelOrAlias?.model && existing.modelOrAlias.model === m.modelOrAlias?.model)
+                            );
+                            if (!alreadyExists) {
+                                targetConfigData.clientModelConfigs.push(m);
+                            }
+                        }
+
+                        if (Array.isArray(targetConfigData.clientModelSorts) && targetConfigData.clientModelSorts.length > 0) {
+                            const group = targetConfigData.clientModelSorts[0].groups?.[0];
+                            if (group && Array.isArray(group.modelLabels)) {
+                                for (const m of injected) {
+                                    if (!group.modelLabels.includes(m.label)) {
+                                        group.modelLabels.push(m.label);
+                                    }
                                 }
                             }
                         }
                     }
+                    resHeaders.delete('content-length');
+                    return c.json(data, upstreamRes.status, Object.fromEntries(resHeaders.entries()));
                 }
-                return c.json(data, upstreamRes.status, Object.fromEntries(resHeaders.entries()));
-            } catch (e) {
-                // fallback to raw response
+            } catch (parseErr) {
+                // Fallback to returning original raw text without touching upstreamRes.body
             }
+
+            return new Response(rawText, {
+                status: upstreamRes.status,
+                headers: resHeaders
+            });
         }
 
         return new Response(upstreamRes.body, {

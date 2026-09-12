@@ -364,8 +364,17 @@ case "$1" in
         export HOST_SSH_USER="${HOST_SSH_USER:-}"
         export HOST_SSH_HOST="${HOST_SSH_HOST:-host.docker.internal}"
         export HOST_SSH_PORT="${HOST_SSH_PORT:-22}"
-        export HOST_SSH_DIR="${HOST_SSH_DIR:-}"
-        gosu "$DEVELOPER_USER" bun /usr/local/bin/auth-proxy.js &
+        PROXY_SCRIPT="/usr/local/bin/auth-proxy.js"
+        if [ "${DEV_MODE:-false}" = "true" ] || [ "${AGY_DEV_PROXY:-false}" = "true" ] || [ -f "/workspace/antigravity-docker/proxy/lib/proxy.js" ]; then
+            if [ -f "/workspace/antigravity-docker/proxy/auth-proxy.js" ]; then
+                PROXY_SCRIPT="/workspace/antigravity-docker/proxy/auth-proxy.js"
+                echo " 🔧 Using local auth-proxy override: $PROXY_SCRIPT"
+            elif [ -f "/workspace/proxy/auth-proxy.js" ] && [ -f "/workspace/proxy/lib/proxy.js" ]; then
+                PROXY_SCRIPT="/workspace/proxy/auth-proxy.js"
+                echo " 🔧 Using local auth-proxy override: $PROXY_SCRIPT"
+            fi
+        fi
+        gosu "$DEVELOPER_USER" bun "$PROXY_SCRIPT" &
 
         if [ ! -s "$TOKEN_FILE" ]; then
             echo "==================================================================="
