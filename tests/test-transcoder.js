@@ -137,6 +137,27 @@ test('Stream Transcoder - Anthropic & OpenAI Event Normalization', async (t) => 
         assert.equal(normalized.properties.count.type, 'integer');
         assert.equal(normalized.properties.items.type, 'array');
         assert.equal(normalized.properties.items.items.type, 'string');
+        assert.equal(normalized.properties.type, undefined, 'properties dictionary must not have a type property injected');
+
+        const emptyNormalized = normalizeJsonSchema({});
+        assert.equal(emptyNormalized.type, 'object');
+        assert.deepEqual(emptyNormalized.properties, {});
+
+        const nestedSchema = {
+            type: 'OBJECT',
+            properties: {
+                metadata: {
+                    type: 'OBJECT',
+                    properties: {
+                        tag: { type: 'STRING' }
+                    }
+                }
+            }
+        };
+        const nestedNormalized = normalizeJsonSchema(nestedSchema);
+        assert.equal(nestedNormalized.properties.metadata.type, 'object');
+        assert.equal(nestedNormalized.properties.metadata.properties.tag.type, 'string');
+        assert.equal(nestedNormalized.properties.metadata.properties.type, undefined);
     });
 
     await t.test('converts Gemini tools to Anthropic and OpenAI format', () => {
@@ -161,12 +182,15 @@ test('Stream Transcoder - Anthropic & OpenAI Event Normalization', async (t) => 
         assert.equal(anthropicTools[0].name, 'run_command');
         assert.equal(anthropicTools[0].input_schema.type, 'object');
         assert.equal(anthropicTools[0].input_schema.properties.CommandLine.type, 'string');
+        assert.equal(anthropicTools[0].input_schema.properties.type, undefined);
 
         const openAiTools = geminiToolsToOpenAI(geminiTools);
         assert.equal(openAiTools.length, 1);
         assert.equal(openAiTools[0].type, 'function');
         assert.equal(openAiTools[0].function.name, 'run_command');
         assert.equal(openAiTools[0].function.parameters.type, 'object');
+        assert.equal(openAiTools[0].function.parameters.properties.CommandLine.type, 'string');
+        assert.equal(openAiTools[0].function.parameters.properties.type, undefined);
     });
 
     await t.test('converts Gemini contents to Anthropic messages alternating roles', () => {

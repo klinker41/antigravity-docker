@@ -281,22 +281,70 @@ function callOpenAIStream(options) {
 
 /**
  * Normalizes JSON schema types from uppercase (e.g. OBJECT, STRING) to lowercase standard JSON schema.
+ * Ensures the root schema has type: 'object' and properties: {}, while preserving nested schemas without
+ * corrupting properties dictionaries.
  */
-function normalizeJsonSchema(schema) {
-    if (!schema || typeof schema !== 'object') return { type: 'object', properties: {} };
-    const out = Array.isArray(schema) ? [] : {};
-    for (const [k, v] of Object.entries(schema)) {
-        if (k === 'type' && typeof v === 'string') {
-            out[k] = v.toLowerCase();
-        } else if (typeof v === 'object' && v !== null) {
-            out[k] = normalizeJsonSchema(v);
+function normalizeJsonSchema(schema, isRoot = true) {
+    if (!schema || typeof schema !== 'object' || Array.isArray(schema)) {
+        return isRoot ? { type: 'object', properties: {} } : schema;
+    }
+
+    const out = {};
+
+    for (const [key, value] of Object.entries(schema)) {
+        if (key === 'type') {
+            if (typeof value === 'string') {
+                out.type = value.toLowerCase();
+            } else if (Array.isArray(value)) {
+                out.type = value.map(t => typeof t === 'string' ? t.toLowerCase() : t);
+            } else {
+                out.type = value;
+            }
+        } else if (key === 'properties' && value && typeof value === 'object' && !Array.isArray(value)) {
+            out.properties = {};
+            for (const [propName, propSchema] of Object.entries(value)) {
+                out.properties[propName] = normalizeJsonSchema(propSchema, false);
+            }
+        } else if (key === 'patternProperties' && value && typeof value === 'object' && !Array.isArray(value)) {
+            out.patternProperties = {};
+            for (const [pat, propSchema] of Object.entries(value)) {
+                out.patternProperties[pat] = normalizeJsonSchema(propSchema, false);
+            }
+        } else if ((key === '$defs' || key === 'definitions') && value && typeof value === 'object' && !Array.isArray(value)) {
+            out[key] = {};
+            for (const [defName, defSchema] of Object.entries(value)) {
+                out[key][defName] = normalizeJsonSchema(defSchema, false);
+            }
+        } else if (key === 'items') {
+            if (Array.isArray(value)) {
+                out.items = value.map(item => normalizeJsonSchema(item, false));
+            } else if (value && typeof value === 'object') {
+                out.items = normalizeJsonSchema(value, false);
+            } else {
+                out.items = value;
+            }
+        } else if (key === 'prefixItems' && Array.isArray(value)) {
+            out.prefixItems = value.map(item => normalizeJsonSchema(item, false));
+        } else if ((key === 'anyOf' || key === 'oneOf' || key === 'allOf') && Array.isArray(value)) {
+            out[key] = value.map(item => normalizeJsonSchema(item, false));
+        } else if (key === 'additionalProperties' && value && typeof value === 'object' && !Array.isArray(value)) {
+            out.additionalProperties = normalizeJsonSchema(value, false);
+        } else if (key === 'required' && Array.isArray(value)) {
+            out.required = value.filter(r => typeof r === 'string');
         } else {
-            out[k] = v;
+            out[key] = value;
         }
     }
-    if (!Array.isArray(out) && !out.type) {
-        out.type = 'object';
+
+    if (isRoot) {
+        if (!out.type) {
+            out.type = 'object';
+        }
+        if (!out.properties && out.type === 'object') {
+            out.properties = {};
+        }
     }
+
     return out;
 }
 
