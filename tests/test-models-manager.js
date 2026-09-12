@@ -10,7 +10,7 @@ test('Models Manager - Configuration, CRUD & Provider Connectivity', async (t) =
     const configPath = path.join(tempDir, 'custom_models.json');
 
     // Create fresh instance of ModelsManager with isolated config path
-    const { ModelsManager, getModelVariants } = require('../proxy/lib/models-manager');
+    const { ModelsManager, getModelVariants, isThinkingModel, extractSupportsThinking } = require('../proxy/lib/models-manager');
     const manager = new ModelsManager({ configPath });
 
     t.after(() => {
@@ -187,7 +187,8 @@ test('Models Manager - Configuration, CRUD & Provider Connectivity', async (t) =
                     object: 'list',
                     data: [
                         { id: 'gpt-4o', object: 'model' },
-                        { id: 'gpt-4o-mini', object: 'model' }
+                        { id: 'gpt-4o-mini', object: 'model' },
+                        { id: 'gpt-6-astra', object: 'model' }
                     ]
                 }));
             } else {
@@ -207,8 +208,13 @@ test('Models Manager - Configuration, CRUD & Provider Connectivity', async (t) =
             });
 
             assert.equal(result.success, true);
-            assert.ok(result.models.length >= 2);
-            assert.ok(result.models.some(m => m.id === 'gpt-4o'));
+            assert.ok(result.models.length >= 3);
+            const gpt4o = result.models.find(m => m.id === 'gpt-4o');
+            const astra = result.models.find(m => m.id === 'gpt-6-astra');
+            assert.ok(gpt4o);
+            assert.equal(gpt4o.supportsThinking, false);
+            assert.ok(astra);
+            assert.equal(astra.supportsThinking, true);
         } finally {
             mockServer.close();
         }
@@ -225,7 +231,13 @@ test('Models Manager - Configuration, CRUD & Provider Connectivity', async (t) =
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({
                 data: [
-                    { id: 'claude-3-7-sonnet-20250219', display_name: 'Claude 3.7 Sonnet' }
+                    {
+                        id: 'claude-3-7-sonnet-20250219',
+                        display_name: 'Claude 3.7 Sonnet',
+                        capabilities: {
+                            thinking: { supported: true }
+                        }
+                    }
                 ]
             }));
         });
@@ -245,6 +257,7 @@ test('Models Manager - Configuration, CRUD & Provider Connectivity', async (t) =
             assert.equal(receivedApiKey, 'sk-ant-test-key-123456789');
             assert.equal(result.models.length, 1);
             assert.equal(result.models[0].id, 'claude-3-7-sonnet-20250219');
+            assert.equal(result.models[0].supportsThinking, true);
         } finally {
             mockServer.close();
         }
@@ -314,5 +327,59 @@ test('Models Manager - Configuration, CRUD & Provider Connectivity', async (t) =
         assert.equal(nonThinking[0].supportsThinking, false);
         assert.equal(nonThinking[0].thinkingLevel, undefined);
         assert.equal(nonThinking[0].variantSuffix, '');
+    });
+
+    await t.test('isThinkingModel correctly classifies reasoning models including astra and o4', () => {
+        // Thinking models
+        assert.equal(isThinkingModel('gpt-6-astra'), true);
+        assert.equal(isThinkingModel('astra-latest'), true);
+        assert.equal(isThinkingModel('o4-mini'), true);
+        assert.equal(isThinkingModel('o4-mini-2025-04-16'), true);
+        assert.equal(isThinkingModel('claude-fable-5-1'), true);
+        assert.equal(isThinkingModel('deepseek-r1'), true);
+        assert.equal(isThinkingModel('custom-model', 'DeepSeek Reasoner'), true);
+        assert.equal(isThinkingModel('custom-model', 'Qwen Thinking 32B'), true);
+
+        // Non-thinking models and false-positive prevention (word boundaries)
+        assert.equal(isThinkingModel('gpt-4o'), false);
+        assert.equal(isThinkingModel('llama3.3:70b'), false);
+        assert.equal(isThinkingModel('gemma4:e2b'), false);
+        assert.equal(isThinkingModel('text-embedding-3-large'), false);
+        assert.equal(isThinkingModel('server1-7b'), false);
+        assert.equal(isThinkingModel('gpt-3.5-turbo1'), false);
+        assert.equal(isThinkingModel('macro1'), false);
+        assert.equal(isThinkingModel('master1'), false);
+    });
+
+    await t.test('extractSupportsThinking detects capabilities from provider metadata and fallback', () => {
+        // 1. Anthropic capabilities metadata
+        assert.equal(extractSupportsThinking({ id: 'unknown-id', capabilities: { thinking: { supported: true } } }, 'anthropic'), true);
+        assert.equal(extractSupportsThinking({ id: 'unknown-id', capabilities: { effort: { supported: true } } }, 'anthropic'), true);
+        assert.equal(extractSupportsThinking({ id: 'unknown-id', capabilities: { reasoning: true } }, 'anthropic'), true);
+
+        // 2. OpenRouter / LiteLLM parameter metadata
+        assert.equal(extractSupportsThinking({ id: 'unknown-id', supported_parameters: ['reasoning', 'tools'] }, 'openai'), true);
+        assert.equal(extractSupportsThinking({ id: 'unknown-id', supported_parameters: ['thinking'] }, 'openai'), true);
+
+        // 3. Direct boolean properties
+        assert.equal(extractSupportsThinking({ id: 'unknown-id', supports_thinking: true }, 'openai'), true);
+        assert.equal(extractSupportsThinking({ id: 'unknown-id', supportsThinking: true }, 'openai'), true);
+
+        // 4. Explicit false capability metadata overrides name-based heuristics
+        assert.equal(extractSupportsThinking({ id: 'claude-3-5-sonnet', capabilities: { thinking: { supported: false } } }, 'anthropic'), false);
+        assert.equal(extractSupportsThinking({ id: 'claude-3-5-sonnet', supportsThinking: false }, 'anthropic'), false);
+        assert.equal(extractSupportsThinking({ id: 'gpt-6-astra', supports_thinking: false }, 'openai'), false);
+
+        // 5. Server intelligence fallback when provider omits metadata (OpenAI)
+        assert.equal(extractSupportsThinking({ id: 'gpt-6-astra' }, 'openai'), true);
+        assert.equal(extractSupportsThinking({ id: 'o4-mini' }, 'openai'), true);
+        assert.equal(extractSupportsThinking({ id: 'o3-mini' }, 'openai'), true);
+        assert.equal(extractSupportsThinking({ id: 'deepseek-r1' }, 'openai'), true);
+        assert.equal(extractSupportsThinking({ id: 'custom-model', display_name: 'DeepSeek Reasoner' }, 'openai'), true);
+
+        // 6. Non-thinking models
+        assert.equal(extractSupportsThinking({ id: 'gpt-4o' }, 'openai'), false);
+        assert.equal(extractSupportsThinking({ id: 'llama-3.3-70b' }, 'openai'), false);
+        assert.equal(extractSupportsThinking(null, 'openai'), false);
     });
 });

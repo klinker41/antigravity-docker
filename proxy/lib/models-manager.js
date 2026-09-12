@@ -25,6 +25,44 @@ const THINKING_BUDGETS = {
     high: 32768
 };
 
+const THINKING_MODEL_REGEX = /(?:claude|\b(?:o[134]|r1)\b|astra|gpt-6|reason(?:er)?|think(?:ing)?)/i;
+
+/**
+ * Determines whether a model ID or label represents a model with thinking/reasoning capabilities.
+ */
+function isThinkingModel(modelId, label = '') {
+    const combined = `${modelId || ''} ${label || ''}`;
+    return THINKING_MODEL_REGEX.test(combined);
+}
+
+/**
+ * Extracts whether a model returned by a provider supports thinking / reasoning.
+ * Checks provider-declared capabilities metadata (e.g. Anthropic, OpenRouter, LiteLLM)
+ * and falls back to server-side model identification when providers omit capabilities.
+ */
+function extractSupportsThinking(m, _providerType) {
+    if (!m || typeof m !== 'object') return false;
+
+    // 1. Direct provider capability metadata (explicit booleans take precedence)
+    if (typeof m.supportsThinking === 'boolean') return m.supportsThinking;
+    if (typeof m.supports_thinking === 'boolean') return m.supports_thinking;
+    if (m.capabilities && typeof m.capabilities === 'object') {
+        if (typeof m.capabilities.thinking?.supported === 'boolean') return m.capabilities.thinking.supported;
+        if (typeof m.capabilities.effort?.supported === 'boolean') return m.capabilities.effort.supported;
+        if (typeof m.capabilities.reasoning === 'boolean') return m.capabilities.reasoning;
+    }
+    if (Array.isArray(m.supported_parameters)) {
+        if (m.supported_parameters.includes('reasoning') || m.supported_parameters.includes('thinking')) {
+            return true;
+        }
+    }
+
+    // 2. Server-side model intelligence fallback when provider does not expose capabilities (e.g. vanilla OpenAI)
+    const id = String(m.id || m.name || m.model || '');
+    const label = String(m.display_name || m.name || m.id || m.model || '');
+    return isThinkingModel(id, label);
+}
+
 const DEFAULT_ALLOWED_TIERS = [
     'TEAMS_TIER_PRO',
     'TEAMS_TIER_TEAMS',
@@ -231,7 +269,7 @@ class ModelsManager {
             id: String(m.id || '').trim(),
             label: String(m.label || m.id || '').trim(),
             enabled: m.enabled !== false,
-            supportsThinking: Boolean(m.supportsThinking)
+            supportsThinking: m.supportsThinking !== undefined ? Boolean(m.supportsThinking) : isThinkingModel(m.id, m.label)
         })).filter(m => m.id.length > 0) : [];
 
         const cleanProvider = {
@@ -463,7 +501,8 @@ class ModelsManager {
                                 .filter(m => m && typeof m === 'object')
                                 .map(m => ({
                                     id: String(m.id || m.name || m.model || ''),
-                                    label: String(m.display_name || m.name || m.id || m.model || '')
+                                    label: String(m.display_name || m.name || m.id || m.model || ''),
+                                    supportsThinking: extractSupportsThinking(m, type)
                                 }))
                                 .filter(m => m.id.length > 0);
                             resolve({ success: true, models, status: res.statusCode });
@@ -507,5 +546,8 @@ module.exports = {
     THINKING_LEVELS,
     THINKING_BUDGETS,
     EFFORT_REGEX,
-    getModelVariants
+    getModelVariants,
+    isThinkingModel,
+    THINKING_MODEL_REGEX,
+    extractSupportsThinking
 };

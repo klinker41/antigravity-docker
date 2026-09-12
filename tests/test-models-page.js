@@ -70,6 +70,12 @@ test('renderModelsPage - Responsive Layout & Modal Configuration', async (t) => 
         assert.ok(html.includes('id="toggleManualModelBtn"'));
         assert.ok(html.includes('id="manualModelRow"'));
         assert.ok(html.includes('id="addCustomModelBtn"'));
+
+        // Thinking capability controls
+        assert.ok(html.includes('id="customModelThinking"'));
+        assert.ok(html.includes('toggleModelThinking'));
+        // UI uses provider-provided metadata; no hardcoded model regex in client HTML
+        assert.equal(html.includes('isThinkingModel'), false);
     });
 });
 

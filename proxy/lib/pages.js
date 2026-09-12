@@ -2212,9 +2212,13 @@ function renderModelsPage() {
                         <button type="button" id="toggleManualModelBtn" style="background: none; border: none; color: var(--accent-cyan); font-size: 12px; cursor: pointer; padding: 0; display: inline-flex; align-items: center; gap: 4px;">
                             <span>+ Add unlisted / custom model manually</span>
                         </button>
-                        <div id="manualModelRow" class="custom-model-row" style="display: none; margin-top: 10px;">
+                        <div id="manualModelRow" class="custom-model-row" style="display: none; margin-top: 10px; align-items: center;">
                             <input type="text" id="customModelId" class="input-field" placeholder="Model ID" style="flex: 2;">
                             <input type="text" id="customModelLabel" class="input-field" placeholder="Display Name (optional)" style="flex: 2;">
+                            <label style="display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-secondary); cursor: pointer; white-space: nowrap; user-select: none;">
+                                <input type="checkbox" id="customModelThinking" style="accent-color: var(--accent-purple); width: 14px; height: 14px;">
+                                Thinking
+                            </label>
                             <button type="button" class="btn-secondary btn-small" id="addCustomModelBtn">+ Add</button>
                         </div>
                     </div>
@@ -2418,7 +2422,9 @@ function renderModelsPage() {
                             </span>
                         </label>
                         <div style="display: flex; align-items: center; gap: 6px; flex-shrink: 0; margin-left: 8px;">
-                            \${m.supportsThinking ? '<span style="font-size: 9px; padding: 2px 5px; border-radius: 4px; background: rgba(167, 139, 250, 0.15); color: var(--accent-purple); border: 1px solid rgba(167, 139, 250, 0.3);">Thinking</span>' : ''}
+                            <button type="button" onclick="toggleModelThinking(\${idx})" title="\${m.supportsThinking ? 'Thinking enabled (click to disable)' : 'Thinking disabled (click to enable)'}" style="font-size: 9.5px; padding: 2px 7px; border-radius: 4px; cursor: pointer; transition: all 0.15s ease; \${m.supportsThinking ? 'background: rgba(167, 139, 250, 0.2); color: #c4b5fd; border: 1px solid rgba(167, 139, 250, 0.4);' : 'background: transparent; color: var(--text-muted); border: 1px dashed rgba(255, 255, 255, 0.2);'}">
+                                \${m.supportsThinking ? '🧠 Thinking' : '+ Thinking'}
+                            </button>
                             <button type="button" onclick="removeModel(\${idx})" title="Remove" style="background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 16px; line-height: 1; padding: 2px 6px; border-radius: 4px;">&times;</button>
                         </div>
                     </div>
@@ -2430,6 +2436,13 @@ function renderModelsPage() {
         window.toggleModelEnabled = function(idx) {
             if (stagedModels[idx]) {
                 stagedModels[idx].enabled = !stagedModels[idx].enabled;
+                renderStagedModels();
+            }
+        };
+
+        window.toggleModelThinking = function(idx) {
+            if (stagedModels[idx]) {
+                stagedModels[idx].supportsThinking = !stagedModels[idx].supportsThinking;
                 renderStagedModels();
             }
         };
@@ -2468,16 +2481,23 @@ function renderModelsPage() {
         document.getElementById('addCustomModelBtn').addEventListener('click', () => {
             const idInput = document.getElementById('customModelId');
             const labelInput = document.getElementById('customModelLabel');
-            const id = (idInput.value || '').trim();
-            const label = (labelInput.value || id).trim();
+            const thinkingInput = document.getElementById('customModelThinking');
+            const id = (idInput?.value || '').trim();
+            const label = (labelInput?.value || id).trim();
 
             if (!id) return;
             if (!stagedModels.some(m => m.id === id)) {
-                stagedModels.push({ id, label, enabled: true, supportsThinking: id.includes('claude') || id.includes('r1') || id.includes('o1') || id.includes('o3') });
+                stagedModels.push({
+                    id,
+                    label,
+                    enabled: true,
+                    supportsThinking: Boolean(thinkingInput ? thinkingInput.checked : false)
+                });
                 renderStagedModels();
             }
-            idInput.value = '';
-            labelInput.value = '';
+            if (idInput) idInput.value = '';
+            if (labelInput) labelInput.value = '';
+            if (thinkingInput) thinkingInput.checked = false;
         });
 
         async function fetchAvailableModels(auto = false) {
@@ -2523,12 +2543,15 @@ function renderModelsPage() {
                             if (!existing.label || existing.label === existing.id) {
                                 existing.label = m.label || m.id;
                             }
+                            if (m.supportsThinking !== undefined && existing.supportsThinking === undefined) {
+                                existing.supportsThinking = Boolean(m.supportsThinking);
+                            }
                         } else {
                             stagedModels.push({
                                 id: m.id,
                                 label: m.label || m.id,
                                 enabled: true,
-                                supportsThinking: m.id.includes('claude') || m.id.includes('r1') || m.id.includes('o1') || m.id.includes('o3')
+                                supportsThinking: Boolean(m.supportsThinking)
                             });
                         }
                     }
