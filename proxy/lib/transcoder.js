@@ -216,42 +216,33 @@ function isOpenAIResponsesModel(modelName, endpoint) {
 function chatMessagesToResponsesInput(messages) {
     if (!Array.isArray(messages)) return [];
     const input = [];
-    const pendingCallIds = [];
-    const registeredCallIds = new Set();
 
-    function flushOrphanedCalls() {
-        while (pendingCallIds.length > 0) {
-            const orphanedCallId = pendingCallIds.shift();
-            input.push({
-                type: 'function_call_output',
-                call_id: orphanedCallId,
-                output: '{}'
-            });
+    let i = 0;
+    while (i < messages.length) {
+        const m = messages[i];
+        if (!m) {
+            i++;
+            continue;
         }
-    }
 
-    for (const m of messages) {
-        if (!m) continue;
         if (m.role === 'system') {
-            flushOrphanedCalls();
-            if (m.content) input.push({ role: 'system', content: String(m.content) });
-        } else if (m.role === 'user') {
-            flushOrphanedCalls();
-            input.push({ role: 'user', content: m.content });
+            if (m.content) {
+                input.push({ role: 'system', content: String(m.content) });
+            }
+            i++;
         } else if (m.role === 'assistant') {
-            flushOrphanedCalls();
             if (m.content) {
                 input.push({ role: 'assistant', content: String(m.content) });
             }
-            if (Array.isArray(m.tool_calls)) {
+            if (Array.isArray(m.tool_calls) && m.tool_calls.length > 0) {
+                const callList = [];
                 for (const tc of m.tool_calls) {
                     const fnName = tc.function?.name || tc.name || '';
                     const fnArgs = typeof tc.function?.arguments === 'string'
                         ? tc.function.arguments
                         : JSON.stringify(tc.function?.arguments || {});
                     const callId = tc.id || `call_${crypto.randomUUID().slice(0, 8)}`;
-                    pendingCallIds.push(callId);
-                    registeredCallIds.add(callId);
+                    callList.push({ callId, fnName, fnArgs });
                     input.push({
                         type: 'function_call',
                         call_id: callId,
@@ -259,28 +250,82 @@ function chatMessagesToResponsesInput(messages) {
                         arguments: fnArgs
                     });
                 }
+
+                // Look ahead in subsequent messages to find tool responses matching these calls
+                // before the next assistant turn.
+                let nextIdx = i + 1;
+                const toolOutputsMap = new Map();
+                const consumedIndices = new Set();
+                const fifoPendingCalls = [...callList];
+
+                while (nextIdx < messages.length && messages[nextIdx]?.role !== 'assistant') {
+                    const cand = messages[nextIdx];
+                    if (cand?.role === 'tool') {
+                        consumedIndices.add(nextIdx);
+                        const candCallId = cand.tool_call_id;
+                        let matchedCallId = null;
+
+                        const callMatch = fifoPendingCalls.find(c => c.callId === candCallId);
+                        if (callMatch) {
+                            matchedCallId = callMatch.callId;
+                            const idx = fifoPendingCalls.indexOf(callMatch);
+                            if (idx !== -1) fifoPendingCalls.splice(idx, 1);
+                        } else if (fifoPendingCalls.length > 0) {
+                            matchedCallId = fifoPendingCalls.shift().callId;
+                        } else {
+                            matchedCallId = candCallId || 'call_unknown';
+                        }
+
+                        const outStr = typeof cand.content === 'string'
+                            ? cand.content
+                            : JSON.stringify(cand.content !== undefined ? cand.content : {});
+                        toolOutputsMap.set(matchedCallId, outStr);
+                    }
+                    nextIdx++;
+                }
+
+                for (const c of callList) {
+                    const output = toolOutputsMap.has(c.callId)
+                        ? toolOutputsMap.get(c.callId)
+                        : '{}';
+                    input.push({
+                        type: 'function_call_output',
+                        call_id: c.callId,
+                        output
+                    });
+                }
+
+                i++;
+                while (i < nextIdx) {
+                    if (!consumedIndices.has(i)) {
+                        const nonToolMsg = messages[i];
+                        if (nonToolMsg) {
+                            if (nonToolMsg.role === 'system' && nonToolMsg.content) {
+                                input.push({ role: 'system', content: String(nonToolMsg.content) });
+                            } else if (nonToolMsg.role === 'user') {
+                                input.push({ role: 'user', content: nonToolMsg.content });
+                            }
+                        }
+                    }
+                    i++;
+                }
+            } else {
+                i++;
             }
+        } else if (m.role === 'user') {
+            input.push({ role: 'user', content: m.content });
+            i++;
         } else if (m.role === 'tool') {
-            let callId = m.tool_call_id;
-            if ((!callId || callId === 'call_unknown' || !registeredCallIds.has(callId)) && pendingCallIds.length > 0) {
-                callId = pendingCallIds.shift();
-            } else if (callId && registeredCallIds.has(callId)) {
-                const idx = pendingCallIds.indexOf(callId);
-                if (idx !== -1) pendingCallIds.splice(idx, 1);
-            }
-            if (!callId) {
-                callId = 'call_unknown';
-            }
             input.push({
                 type: 'function_call_output',
-                call_id: callId,
+                call_id: m.tool_call_id || 'call_unknown',
                 output: typeof m.content === 'string' ? m.content : JSON.stringify(m.content || {})
             });
+            i++;
+        } else {
+            i++;
         }
     }
-
-    // Safeguard: OpenAI Responses API strictly requires every function_call to have a matching function_call_output.
-    flushOrphanedCalls();
 
     return input;
 }
@@ -715,8 +760,10 @@ function geminiToolsToAnthropic(tools) {
     if (!Array.isArray(tools)) return undefined;
     const anthropicTools = [];
     for (const toolGroup of tools) {
-        if (Array.isArray(toolGroup.functionDeclarations)) {
-            for (const fn of toolGroup.functionDeclarations) {
+        if (!toolGroup) continue;
+        const decls = toolGroup.functionDeclarations || toolGroup.function_declarations || (toolGroup.name ? [toolGroup] : null);
+        if (Array.isArray(decls)) {
+            for (const fn of decls) {
                 if (!fn || !fn.name) continue;
                 anthropicTools.push({
                     name: fn.name,
@@ -736,8 +783,10 @@ function geminiToolsToOpenAI(tools) {
     if (!Array.isArray(tools)) return undefined;
     const openAiTools = [];
     for (const toolGroup of tools) {
-        if (Array.isArray(toolGroup.functionDeclarations)) {
-            for (const fn of toolGroup.functionDeclarations) {
+        if (!toolGroup) continue;
+        const decls = toolGroup.functionDeclarations || toolGroup.function_declarations || (toolGroup.name ? [toolGroup] : null);
+        if (Array.isArray(decls)) {
+            for (const fn of decls) {
                 if (!fn || !fn.name) continue;
                 openAiTools.push({
                     type: 'function',
@@ -796,7 +845,7 @@ function getFunctionCall(part) {
     return {
         name: call.name || '',
         args: call.args || call.arguments || {},
-        id: call.id || null
+        id: call.id || call.call_id || call.callId || null
     };
 }
 
@@ -807,18 +856,29 @@ function getFunctionCall(part) {
 function extractResponseValue(resp, part) {
     if (!resp && !part) return {};
 
-    // 1. Direct response / output / content / result
+    // 1. Direct response / output / content / result from resp, then fallback to part
     let val = resp?.response !== undefined ? resp.response :
               (resp?.output !== undefined ? resp.output :
               (resp?.content !== undefined ? resp.content :
               (resp?.result !== undefined ? resp.result : undefined)));
 
+    if (val === undefined && part && part !== resp) {
+        val = part.response !== undefined ? part.response :
+              (part.output !== undefined ? part.output :
+              (part.content !== undefined ? part.content :
+              (part.result !== undefined ? part.result : undefined)));
+    }
+
     const isEmptyObj = val !== null && typeof val === 'object' && !Array.isArray(val) && Object.keys(val).length === 0;
 
-    // 2. If val is empty or undefined, check parts (used by Go cortex/genai functionResponseFromString)
-    if ((val === undefined || isEmptyObj) && Array.isArray(resp?.parts) && resp.parts.length > 0) {
+    // 2. If val is empty, null, or undefined, check parts (used by Go cortex/genai functionResponseFromString)
+    const candParts = (Array.isArray(resp?.parts) && resp.parts.length > 0)
+        ? resp.parts
+        : ((Array.isArray(part?.parts) && part.parts.length > 0) ? part.parts : null);
+
+    if ((val === undefined || val === null || isEmptyObj) && candParts) {
         const textParts = [];
-        for (const p of resp.parts) {
+        for (const p of candParts) {
             if (typeof p === 'string') {
                 textParts.push(p);
             } else if (p && typeof p === 'object') {
@@ -891,7 +951,7 @@ function getFunctionResponse(part) {
             return {
                 name: part.name || '',
                 response: extractResponseValue(part, part),
-                id: part.id || null
+                id: part.id || part.call_id || part.callId || null
             };
         }
         return null;
@@ -899,7 +959,7 @@ function getFunctionResponse(part) {
     return {
         name: resp.name || '',
         response: extractResponseValue(resp, part),
-        id: resp.id || null
+        id: resp.id || resp.call_id || resp.callId || null
     };
 }
 
@@ -1082,12 +1142,16 @@ function geminiContentsToOpenAI(contents, systemInstruction) {
                 }
             } else {
                 if (Array.isArray(item.parts)) {
+                    const toolMessages = [];
+                    const userTextParts = [];
+                    const userImageParts = [];
+
                     for (const part of item.parts) {
                         const fnResp = getFunctionResponse(part);
                         if (fnResp) {
                             const callId = resolveToolCallId(fnResp, pendingCalls, knownToolCallIds, 'call');
 
-                            messages.push({
+                            toolMessages.push({
                                 role: 'tool',
                                 tool_call_id: callId,
                                 content: typeof fnResp.response === 'string'
@@ -1095,19 +1159,34 @@ function geminiContentsToOpenAI(contents, systemInstruction) {
                                     : JSON.stringify(fnResp.response !== undefined ? fnResp.response : {})
                             });
                         } else if (part.text) {
-                            messages.push({ role: 'user', content: part.text });
-                        } else if (part.inlineData) {
-                            messages.push({
-                                role: 'user',
-                                content: [
-                                    {
-                                        type: 'image_url',
-                                        image_url: {
-                                            url: `data:${part.inlineData.mimeType || 'image/jpeg'};base64,${part.inlineData.data}`
-                                        }
-                                    }
-                                ]
+                            userTextParts.push(part.text);
+                        } else if (part.inlineData || part.inline_data) {
+                            const rawData = part.inlineData || part.inline_data;
+                            userImageParts.push({
+                                type: 'image_url',
+                                image_url: {
+                                    url: `data:${rawData.mimeType || rawData.mime_type || 'image/jpeg'};base64,${rawData.data}`
+                                }
                             });
+                        }
+                    }
+
+                    // Tool responses must immediately follow the assistant tool_calls in ChatML
+                    for (const tm of toolMessages) {
+                        messages.push(tm);
+                    }
+
+                    // Accompanying user text / media emitted after tool responses
+                    if (userTextParts.length > 0 || userImageParts.length > 0) {
+                        if (userImageParts.length > 0) {
+                            const content = [];
+                            if (userTextParts.length > 0) {
+                                content.push({ type: 'text', text: userTextParts.join('\n') });
+                            }
+                            content.push(...userImageParts);
+                            messages.push({ role: 'user', content });
+                        } else {
+                            messages.push({ role: 'user', content: userTextParts.join('\n') });
                         }
                     }
                 }

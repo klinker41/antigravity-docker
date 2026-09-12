@@ -1223,5 +1223,171 @@ test('Stream Transcoder - Anthropic & OpenAI Event Normalization', async (t) => 
         assert.equal(toolMsg.tool_call_id, 'call_100');
         assert.equal(toolMsg.content, 'echo test output');
     });
+
+    await t.test('geminiContentsToOpenAI partitions tool responses before user text in mixed turns', () => {
+        const contents = [
+            {
+                role: 'model',
+                parts: [{
+                    functionCall: {
+                        name: 'view_file',
+                        id: 'call_view_1',
+                        args: { AbsolutePath: '/workspace/test.txt' }
+                    }
+                }]
+            },
+            {
+                role: 'user',
+                parts: [
+                    { text: 'Intervening commentary before tool response' },
+                    {
+                        functionResponse: {
+                            name: 'view_file',
+                            id: 'call_view_1',
+                            response: { content: 'hello world file content' }
+                        }
+                    }
+                ]
+            }
+        ];
+
+        const messages = geminiContentsToOpenAI(contents);
+        assert.equal(messages.length, 3);
+        assert.equal(messages[0].role, 'assistant');
+        assert.equal(messages[1].role, 'tool');
+        assert.equal(messages[1].tool_call_id, 'call_view_1');
+        assert.equal(messages[1].content, JSON.stringify({ content: 'hello world file content' }));
+        assert.equal(messages[2].role, 'user');
+        assert.equal(messages[2].content, 'Intervening commentary before tool response');
+    });
+
+    await t.test('chatMessagesToResponsesInput pairs tool calls with real outputs when user text is present', () => {
+        const messages = [
+            {
+                role: 'user',
+                content: 'Please inspect the repo'
+            },
+            {
+                role: 'assistant',
+                tool_calls: [
+                    {
+                        id: 'call_cmd_1',
+                        type: 'function',
+                        function: {
+                            name: 'run_command',
+                            arguments: '{"CommandLine":"printf \'tool-output-check\\n\'"}'
+                        }
+                    },
+                    {
+                        id: 'call_view_1',
+                        type: 'function',
+                        function: {
+                            name: 'view_file',
+                            arguments: '{"AbsolutePath":"/workspace/test.md"}'
+                        }
+                    }
+                ]
+            },
+            {
+                role: 'tool',
+                tool_call_id: 'call_cmd_1',
+                content: 'The command exited with code 0.\nOutput:\ntool-output-check\n'
+            },
+            {
+                role: 'tool',
+                tool_call_id: 'call_view_1',
+                content: '# Test Document\n\nContent here'
+            },
+            {
+                role: 'user',
+                content: 'Check on checkpoint progress'
+            }
+        ];
+
+        const input = chatMessagesToResponsesInput(messages);
+        assert.equal(input.length, 6);
+        assert.deepEqual(input[0], { role: 'user', content: 'Please inspect the repo' });
+        assert.equal(input[1].type, 'function_call');
+        assert.equal(input[1].call_id, 'call_cmd_1');
+        assert.equal(input[2].type, 'function_call');
+        assert.equal(input[2].call_id, 'call_view_1');
+
+        assert.equal(input[3].type, 'function_call_output');
+        assert.equal(input[3].call_id, 'call_cmd_1');
+        assert.equal(input[3].output, 'The command exited with code 0.\nOutput:\ntool-output-check\n');
+
+        assert.equal(input[4].type, 'function_call_output');
+        assert.equal(input[4].call_id, 'call_view_1');
+        assert.equal(input[4].output, '# Test Document\n\nContent here');
+
+        assert.deepEqual(input[5], { role: 'user', content: 'Check on checkpoint progress' });
+    });
+
+    await t.test('chatMessagesToResponsesInput falls back to empty object only for truly orphaned calls', () => {
+        const messages = [
+            {
+                role: 'assistant',
+                tool_calls: [
+                    {
+                        id: 'call_answered',
+                        type: 'function',
+                        function: { name: 'run_command', arguments: '{}' }
+                    },
+                    {
+                        id: 'call_orphaned',
+                        type: 'function',
+                        function: { name: 'run_command', arguments: '{}' }
+                    }
+                ]
+            },
+            {
+                role: 'tool',
+                tool_call_id: 'call_answered',
+                content: 'Real answer output'
+            }
+        ];
+
+        const input = chatMessagesToResponsesInput(messages);
+        assert.equal(input.length, 4);
+        assert.equal(input[0].type, 'function_call');
+        assert.equal(input[0].call_id, 'call_answered');
+        assert.equal(input[1].type, 'function_call');
+        assert.equal(input[1].call_id, 'call_orphaned');
+
+        assert.equal(input[2].type, 'function_call_output');
+        assert.equal(input[2].call_id, 'call_answered');
+        assert.equal(input[2].output, 'Real answer output');
+
+        assert.equal(input[3].type, 'function_call_output');
+        assert.equal(input[3].call_id, 'call_orphaned');
+        assert.equal(input[3].output, '{}');
+    });
+
+    await t.test('geminiToolsToOpenAI and geminiToolsToAnthropic support snake_case function_declarations', () => {
+        const tools = [
+            {
+                function_declarations: [
+                    {
+                        name: 'custom_search',
+                        description: 'Custom search tool',
+                        parameters: {
+                            type: 'OBJECT',
+                            properties: { query: { type: 'STRING' } }
+                        }
+                    }
+                ]
+            }
+        ];
+
+        const openAiTools = geminiToolsToOpenAI(tools);
+        assert.ok(openAiTools);
+        assert.equal(openAiTools.length, 1);
+        assert.equal(openAiTools[0].function.name, 'custom_search');
+
+        const anthropicTools = geminiToolsToAnthropic(tools);
+        assert.ok(anthropicTools);
+        assert.equal(anthropicTools.length, 1);
+        assert.equal(anthropicTools[0].name, 'custom_search');
+    });
 });
 
