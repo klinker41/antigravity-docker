@@ -17,6 +17,7 @@ const {
     geminiContentsToOpenAI,
     getFunctionCall,
     getFunctionResponse,
+    extractResponseValue,
     resolveToolCallId
 } = require('../proxy/lib/transcoder');
 
@@ -1138,4 +1139,89 @@ test('Stream Transcoder - Anthropic & OpenAI Event Normalization', async (t) => 
         assert.equal(input[4].role, 'user');
         assert.equal(input[4].content, 'Second prompt');
     });
+
+    await t.test('extractResponseValue decodes base64 string data from parts', () => {
+        const b64 = Buffer.from('TOOL_CHECK\nfile1.txt\n', 'utf8').toString('base64');
+        const part = {
+            functionResponse: {
+                name: 'run_command',
+                id: 'call_cmd_1',
+                parts: [{ data: b64 }]
+            }
+        };
+
+        const fnResp = getFunctionResponse(part);
+        assert.ok(fnResp);
+        assert.equal(fnResp.name, 'run_command');
+        assert.equal(fnResp.id, 'call_cmd_1');
+        assert.equal(fnResp.response, 'TOOL_CHECK\nfile1.txt\n');
+    });
+
+    await t.test('extractResponseValue decodes base64 inlineData from parts', () => {
+        const b64 = Buffer.from('console.log("hello")', 'utf8').toString('base64');
+        const part = {
+            functionResponse: {
+                name: 'view_file',
+                id: 'call_vf_1',
+                parts: [{
+                    inlineData: {
+                        mimeType: 'text/plain',
+                        data: b64
+                    }
+                }]
+            }
+        };
+
+        const fnResp = getFunctionResponse(part);
+        assert.ok(fnResp);
+        assert.equal(fnResp.response, 'console.log("hello")');
+    });
+
+    await t.test('extractResponseValue captures error details on tool failure or permission denial', () => {
+        const part = {
+            functionResponse: {
+                name: 'read_url_content',
+                id: 'call_url_1',
+                response: {},
+                error: 'permission check failed: user denied permission'
+            }
+        };
+
+        const fnResp = getFunctionResponse(part);
+        assert.ok(fnResp);
+        assert.equal(fnResp.response, 'Error: permission check failed: user denied permission');
+    });
+
+    await t.test('geminiContentsToOpenAI includes decoded tool response parts in tool message content', () => {
+        const b64 = Buffer.from('echo test output', 'utf8').toString('base64');
+        const contents = [
+            {
+                role: 'model',
+                parts: [{
+                    functionCall: {
+                        name: 'run_command',
+                        id: 'call_100',
+                        args: { CommandLine: 'echo test' }
+                    }
+                }]
+            },
+            {
+                role: 'user',
+                parts: [{
+                    functionResponse: {
+                        name: 'run_command',
+                        id: 'call_100',
+                        parts: [{ data: b64 }]
+                    }
+                }]
+            }
+        ];
+
+        const messages = geminiContentsToOpenAI(contents);
+        const toolMsg = messages.find(m => m.role === 'tool');
+        assert.ok(toolMsg);
+        assert.equal(toolMsg.tool_call_id, 'call_100');
+        assert.equal(toolMsg.content, 'echo test output');
+    });
 });
+

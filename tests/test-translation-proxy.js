@@ -5,6 +5,8 @@ const http = require('node:http');
 
 const {
     TranslationProxy,
+    isStreamGenerateContent,
+    isGenerateContent,
     isFetchAvailableModels,
     injectAvailableModels
 } = require('../proxy/translation-proxy');
@@ -561,4 +563,158 @@ test('Translation Proxy - fetchAvailableModels HTTP Interception and Placeholder
         assert.equal(resolvedStandard, null);
     });
 });
+
+test('Translation Proxy - generateContent Unary Interception & Search Web Support', async (t) => {
+    await t.test('isGenerateContent accurately distinguishes unary from streaming endpoints', () => {
+        assert.equal(isGenerateContent('/v1internal:generateContent'), true);
+        assert.equal(isGenerateContent('/v1beta/models/gemini-2.5-flash:generateContent'), true);
+        assert.equal(isGenerateContent('/generateContent'), true);
+        assert.equal(isGenerateContent('/v1internal:streamGenerateContent'), false);
+        assert.equal(isGenerateContent('/v1internal:streamGenerateContent?alt=sse'), false);
+        assert.equal(isGenerateContent('/v1internal:fetchAvailableModels'), false);
+        assert.equal(isGenerateContent(null), false);
+        assert.equal(isGenerateContent(''), false);
+    });
+
+    // 1. Mock upstream (Google CloudCode)
+    let upstreamCalled = false;
+    const mockGoogleUpstream = http.createServer((req, res) => {
+        upstreamCalled = true;
+        let body = '';
+        req.on('data', chunk => body += chunk);
+        req.on('end', () => {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+                candidates: [{
+                    content: { role: 'model', parts: [{ text: 'Upstream response' }] },
+                    finishReason: 'STOP'
+                }]
+            }));
+        });
+    });
+
+    await new Promise((resolve) => mockGoogleUpstream.listen(0, '127.0.0.1', resolve));
+    const upstreamPort = mockGoogleUpstream.address().port;
+
+    // 2. Mock Custom Model Provider (OpenAI Responses API compatible)
+    let providerCalled = false;
+    const mockOpenAIProvider = http.createServer((req, res) => {
+        providerCalled = true;
+        assert.equal(req.headers['authorization'], 'Bearer astra-key');
+        res.writeHead(200, {
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache'
+        });
+        res.write('data: {"type":"response.output_text.delta","delta":"Summary: Gemma 4 vision model is ready."}\n\n');
+        res.write('data: {"type":"response.completed","response":{"status":"completed"}}\n\n');
+        res.write('data: [DONE]\n\n');
+        res.end();
+    });
+
+    await new Promise((resolve) => mockOpenAIProvider.listen(0, '127.0.0.1', resolve));
+    const providerPort = mockOpenAIProvider.address().port;
+
+    const proxyPort = upstreamPort + 20;
+    const proxy = new TranslationProxy({
+        port: proxyPort,
+        upstreamUrl: `http://127.0.0.1:${upstreamPort}`
+    });
+
+    proxy.activeConversationModels.set('latest', {
+        providerType: 'openai',
+        endpoint: `http://127.0.0.1:${providerPort}`,
+        apiKey: 'astra-key',
+        rawModelId: 'gpt-6-astra',
+        supportsThinking: false
+    });
+
+    await proxy.start();
+
+    t.after(async () => {
+        await proxy.stop();
+        mockGoogleUpstream.close();
+        mockOpenAIProvider.close();
+    });
+
+    await t.test('intercepts unary /v1internal:generateContent and returns valid GenerateContentResponse', async () => {
+        const payload = JSON.stringify({
+            model: 'MODEL_PLACEHOLDER_M500',
+            contents: [{ role: 'user', parts: [{ text: 'Summarize web search results' }] }]
+        });
+
+        const res = await new Promise((resolve, reject) => {
+            const req = http.request({
+                hostname: '127.0.0.1',
+                port: proxyPort,
+                path: '/v1internal:generateContent',
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Content-Length': Buffer.byteLength(payload)
+                }
+            }, (res) => {
+                let data = '';
+                res.on('data', chunk => data += chunk);
+                res.on('end', () => resolve({
+                    statusCode: res.statusCode,
+                    headers: res.headers,
+                    body: data
+                }));
+            });
+            req.on('error', reject);
+            req.write(payload);
+            req.end();
+        });
+
+        assert.equal(res.statusCode, 200);
+        assert.ok(providerCalled, 'Provider must be called for custom model unary generation');
+        const parsed = JSON.parse(res.body);
+        assert.ok(Array.isArray(parsed.candidates), 'Response must have top-level candidates');
+        assert.equal(parsed.candidates.length, 1);
+        assert.equal(parsed.candidates[0].content.parts[0].text, 'Summary: Gemma 4 vision model is ready.');
+        assert.equal(parsed.candidates[0].finishReason, 'STOP');
+
+        // Also check wrapped response.candidates for Go protojson compatibility
+        assert.ok(parsed.response?.candidates, 'Response must have response.candidates');
+        assert.equal(parsed.response.candidates[0].content.parts[0].text, 'Summary: Gemma 4 vision model is ready.');
+    });
+
+    await t.test('passes unary /v1internal:generateContent through to upstream for non-custom standard model', async () => {
+        upstreamCalled = false;
+        const payload = JSON.stringify({
+            model: 'gemini-2.5-flash',
+            contents: [{ role: 'user', parts: [{ text: 'Test standard' }] }]
+        });
+
+        const res = await new Promise((resolve, reject) => {
+            const req = http.request({
+                hostname: '127.0.0.1',
+                port: proxyPort,
+                path: '/v1internal:generateContent',
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Content-Length': Buffer.byteLength(payload)
+                }
+            }, (res) => {
+                let data = '';
+                res.on('data', chunk => data += chunk);
+                res.on('end', () => resolve({
+                    statusCode: res.statusCode,
+                    headers: res.headers,
+                    body: data
+                }));
+            });
+            req.on('error', reject);
+            req.write(payload);
+            req.end();
+        });
+
+        assert.equal(res.statusCode, 200);
+        assert.ok(upstreamCalled, 'Upstream must be called for non-custom model');
+        const parsed = JSON.parse(res.body);
+        assert.equal(parsed.candidates[0].content.parts[0].text, 'Upstream response');
+    });
+});
+
 

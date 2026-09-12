@@ -40,6 +40,11 @@ function isStreamGenerateContent(url) {
     return url.includes(':streamGenerateContent') || url.includes('/streamGenerateContent');
 }
 
+function isGenerateContent(url) {
+    if (!url) return false;
+    return (url.includes(':generateContent') || url.includes('/generateContent')) && !isStreamGenerateContent(url);
+}
+
 /**
  * Checks whether an incoming HTTP request is targeting the fetchAvailableModels endpoint.
  */
@@ -184,21 +189,28 @@ class TranslationProxy {
             return;
         }
 
+        // Intercept Gemini unary generateContent requests
+        if (isGenerateContent(parsedUrl.pathname) && req.method === 'POST') {
+            this.handleGenerateContent(req, res);
+            return;
+        }
+
         // Standard pass-through reverse proxy
         this.forwardPassThrough(req, res);
     }
 
     resolveCustomModel(parsedData) {
-        const modelStr = parsedData?.model || parsedData?.request?.model;
+        const rawModelStr = parsedData?.model || parsedData?.request?.model;
+        const modelStr = typeof rawModelStr === 'string' ? rawModelStr.replace(/^.*models\//, '') : '';
 
-        // 1. Direct model lookup by placeholder if modelsManager is present
+        // 1. Direct model lookup by placeholder or ID if modelsManager is present
         if (modelStr && this.modelsManager && typeof this.modelsManager.getModelByPlaceholder === 'function') {
             const custom = this.modelsManager.getModelByPlaceholder(modelStr);
             if (custom) return custom;
         }
 
         // 2. Explicit standard model guard: if an explicit non-custom model is requested, pass through directly
-        if (typeof modelStr === 'string' && modelStr.length > 0 && !CUSTOM_PLACEHOLDER_REGEX.test(modelStr)) {
+        if (typeof modelStr === 'string' && modelStr.length > 0 && !CUSTOM_PLACEHOLDER_REGEX.test(modelStr) && !modelStr.startsWith('custom-')) {
             return null;
         }
 
@@ -362,48 +374,216 @@ class TranslationProxy {
         };
 
         try {
-            if (customModel.providerType === 'anthropic') {
-                const { system, messages } = geminiContentsToAnthropic(contents, systemInstruction);
-                const anthropicTools = geminiToolsToAnthropic(tools);
-
-                await callAnthropicStream({
-                    endpoint: customModel.endpoint,
-                    apiKey: customModel.apiKey,
-                    model: customModel.rawModelId,
-                    messages,
-                    system,
-                    tools: anthropicTools,
-                    supportsThinking: Boolean(customModel.supportsThinking),
-                    thinkingLevel: customModel.thinkingLevel,
-                    thinkingBudget: customModel.thinkingBudget,
-                    maxTokens,
-                    signal: abortController.signal,
-                    onEvent
-                });
-            } else {
-                // OpenAI or Ollama-compatible
-                const messages = geminiContentsToOpenAI(contents, systemInstruction);
-                const openAiTools = geminiToolsToOpenAI(tools);
-
-                await callOpenAIStream({
-                    endpoint: customModel.endpoint,
-                    apiKey: customModel.apiKey,
-                    model: customModel.rawModelId,
-                    messages,
-                    tools: openAiTools,
-                    supportsThinking: Boolean(customModel.supportsThinking),
-                    thinkingLevel: customModel.thinkingLevel,
-                    maxTokens,
-                    signal: abortController.signal,
-                    onEvent
-                });
-            }
+            await this._callProviderStream({
+                customModel,
+                contents,
+                systemInstruction,
+                tools,
+                maxTokens,
+                signal: abortController.signal,
+                onEvent
+            });
         } finally {
             res.removeListener('close', onClose);
         }
 
         if (!res.writableEnded && !res.destroyed) {
             res.end();
+        }
+    }
+
+    async _callProviderStream({ customModel, contents, systemInstruction, tools, maxTokens, signal, onEvent }) {
+        if (customModel.providerType === 'anthropic') {
+            const { system, messages } = geminiContentsToAnthropic(contents, systemInstruction);
+            const anthropicTools = geminiToolsToAnthropic(tools);
+
+            await callAnthropicStream({
+                endpoint: customModel.endpoint,
+                apiKey: customModel.apiKey,
+                model: customModel.rawModelId,
+                messages,
+                system,
+                tools: anthropicTools,
+                supportsThinking: Boolean(customModel.supportsThinking),
+                thinkingLevel: customModel.thinkingLevel,
+                thinkingBudget: customModel.thinkingBudget,
+                maxTokens,
+                signal,
+                onEvent
+            });
+        } else {
+            // OpenAI or Ollama-compatible
+            const messages = geminiContentsToOpenAI(contents, systemInstruction);
+            const openAiTools = geminiToolsToOpenAI(tools);
+
+            await callOpenAIStream({
+                endpoint: customModel.endpoint,
+                apiKey: customModel.apiKey,
+                model: customModel.rawModelId,
+                messages,
+                tools: openAiTools,
+                supportsThinking: Boolean(customModel.supportsThinking),
+                thinkingLevel: customModel.thinkingLevel,
+                maxTokens,
+                signal,
+                onEvent
+            });
+        }
+    }
+
+    handleGenerateContent(req, res) {
+        const chunks = [];
+        req.on('data', chunk => chunks.push(chunk));
+        req.on('error', (err) => {
+            console.error('[Translation Proxy] Request error in generateContent:', err.message);
+            if (!res.headersSent && !res.writableEnded && !res.destroyed) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: err.message }));
+            }
+        });
+        req.on('end', async () => {
+            const rawBody = Buffer.concat(chunks);
+            let parsedData = null;
+            try {
+                parsedData = JSON.parse(rawBody.toString('utf8'));
+            } catch (e) {}
+
+            const customModel = this.resolveCustomModel(parsedData);
+            if (!customModel) {
+                // Pass through directly to upstream Google CloudCode
+                this.forwardPassThrough(req, res, rawBody);
+                return;
+            }
+
+            try {
+                await this.translateAndGenerate(parsedData, customModel, res);
+            } catch (err) {
+                console.error('[Translation Proxy] Translation error in generateContent:', err.message);
+                if (!res.headersSent && !res.writableEnded && !res.destroyed) {
+                    const errorText = `\n\n**Error connecting to custom model provider (${customModel.providerType}):**\n\`\`\`\n${err.message}\n\`\`\`\nPlease check your provider configuration in \`/models\`.`;
+                    const errCandidate = {
+                        content: {
+                            role: 'model',
+                            parts: [{ text: errorText }]
+                        },
+                        finishReason: 'STOP'
+                    };
+                    const errResponse = {
+                        candidates: [errCandidate],
+                        response: {
+                            candidates: [errCandidate]
+                        },
+                        usageMetadata: {
+                            promptTokenCount: 0,
+                            candidatesTokenCount: 0,
+                            totalTokenCount: 0
+                        }
+                    };
+                    const bodyStr = JSON.stringify(errResponse);
+                    res.writeHead(200, {
+                        'Content-Type': 'application/json; charset=utf-8',
+                        'Content-Length': Buffer.byteLength(bodyStr)
+                    });
+                    res.end(bodyStr);
+                }
+            }
+        });
+    }
+
+    async translateAndGenerate(parsedData, customModel, res) {
+        const abortController = new AbortController();
+        const onClose = () => {
+            abortController.abort();
+        };
+        res.on('close', onClose);
+
+        const requestObj = parsedData.request || parsedData;
+        const contents = requestObj.contents || [];
+        const systemInstruction = requestObj.systemInstruction;
+        const tools = requestObj.tools;
+        const generationConfig = requestObj.generationConfig || {};
+        const maxTokens = generationConfig.maxOutputTokens || 4096;
+
+        let accumulatedText = '';
+        let accumulatedThought = '';
+        const toolCalls = [];
+        let finishReason = 'STOP';
+
+        const onEvent = (ev) => {
+            if (ev.type === 'thought') {
+                accumulatedThought += ev.text || '';
+            } else if (ev.type === 'text') {
+                accumulatedText += ev.text || '';
+            } else if (ev.type === 'tool_call') {
+                let argsObj = {};
+                try {
+                    argsObj = typeof ev.arguments === 'string' ? JSON.parse(ev.arguments) : (ev.arguments || {});
+                } catch (e) {
+                    argsObj = { raw: ev.arguments };
+                }
+                const fnCall = { name: ev.name, args: argsObj };
+                if (ev.id) fnCall.id = ev.id;
+                toolCalls.push(fnCall);
+            } else if (ev.type === 'done') {
+                finishReason = normalizeFinishReason(ev.finishReason || ev.stopReason);
+            }
+        };
+
+        try {
+            await this._callProviderStream({
+                customModel,
+                contents,
+                systemInstruction,
+                tools,
+                maxTokens,
+                signal: abortController.signal,
+                onEvent
+            });
+
+            if (res.writableEnded || res.destroyed) return;
+
+            const parts = [];
+            if (accumulatedThought) {
+                parts.push({ text: accumulatedThought, thought: true });
+            }
+            if (accumulatedText) {
+                parts.push({ text: accumulatedText });
+            }
+            for (const tc of toolCalls) {
+                parts.push({ functionCall: tc });
+            }
+            if (parts.length === 0) {
+                parts.push({ text: '' });
+            }
+
+            const candidate = {
+                content: {
+                    role: 'model',
+                    parts
+                },
+                finishReason
+            };
+
+            const responseObj = {
+                candidates: [candidate],
+                response: {
+                    candidates: [candidate]
+                },
+                usageMetadata: {
+                    promptTokenCount: 0,
+                    candidatesTokenCount: 0,
+                    totalTokenCount: 0
+                }
+            };
+
+            const bodyStr = JSON.stringify(responseObj);
+            res.writeHead(200, {
+                'Content-Type': 'application/json; charset=utf-8',
+                'Content-Length': Buffer.byteLength(bodyStr)
+            });
+            res.end(bodyStr);
+        } finally {
+            res.removeListener('close', onClose);
         }
     }
 
@@ -570,6 +750,7 @@ module.exports = {
     DEFAULT_PORT,
     DEFAULT_UPSTREAM,
     isStreamGenerateContent,
+    isGenerateContent,
     isFetchAvailableModels,
     injectAvailableModels
 };

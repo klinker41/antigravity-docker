@@ -801,16 +801,104 @@ function getFunctionCall(part) {
 }
 
 /**
+ * Safely extracts the response payload from a function response or part,
+ * resolving nested parts (including base64 decoded data), output fields, and error details.
+ */
+function extractResponseValue(resp, part) {
+    if (!resp && !part) return {};
+
+    // 1. Direct response / output / content / result
+    let val = resp?.response !== undefined ? resp.response :
+              (resp?.output !== undefined ? resp.output :
+              (resp?.content !== undefined ? resp.content :
+              (resp?.result !== undefined ? resp.result : undefined)));
+
+    const isEmptyObj = val !== null && typeof val === 'object' && !Array.isArray(val) && Object.keys(val).length === 0;
+
+    // 2. If val is empty or undefined, check parts (used by Go cortex/genai functionResponseFromString)
+    if ((val === undefined || isEmptyObj) && Array.isArray(resp?.parts) && resp.parts.length > 0) {
+        const textParts = [];
+        for (const p of resp.parts) {
+            if (typeof p === 'string') {
+                textParts.push(p);
+            } else if (p && typeof p === 'object') {
+                if (typeof p.text === 'string') {
+                    textParts.push(p.text);
+                } else if (p.data) {
+                    let decoded = null;
+                    if (typeof p.data === 'string') {
+                        try {
+                            const buf = Buffer.from(p.data, 'base64');
+                            const utf8 = buf.toString('utf8');
+                            if (!utf8.includes('\ufffd') && utf8.length > 0) {
+                                decoded = utf8;
+                            }
+                        } catch {}
+                    }
+                    textParts.push(decoded || p.data);
+                } else if (p.inlineData?.data || p.inline_data?.data) {
+                    const rawData = p.inlineData?.data || p.inline_data?.data;
+                    let decoded = null;
+                    if (typeof rawData === 'string') {
+                        try {
+                            const buf = Buffer.from(rawData, 'base64');
+                            const utf8 = buf.toString('utf8');
+                            if (!utf8.includes('\ufffd') && utf8.length > 0) {
+                                decoded = utf8;
+                            }
+                        } catch {}
+                    }
+                    textParts.push(decoded || rawData);
+                } else if (p.fileData || p.file_data) {
+                    textParts.push(JSON.stringify(p.fileData || p.file_data));
+                }
+            }
+        }
+        if (textParts.length > 0) {
+            val = textParts.join('\n');
+        }
+    }
+
+    // 3. Extract errors from resp or part if present
+    const err = resp?.error || resp?.error_details || resp?.errorDetails ||
+                part?.error || part?.error_details || part?.errorDetails;
+    const isNonEmptyErr = err && (typeof err === 'object' ? Object.keys(err).length > 0 : Boolean(err));
+    if (isNonEmptyErr) {
+        const errStr = typeof err === 'string' ? err : JSON.stringify(err);
+        if (val === undefined || isEmptyObj) {
+            val = `Error: ${errStr}`;
+        } else if (typeof val === 'string') {
+            val = `${val}\nError: ${errStr}`;
+        } else if (typeof val === 'object' && val !== null && !Array.isArray(val)) {
+            val = { ...val, error: errStr };
+        } else if (Array.isArray(val)) {
+            val = { result: val, error: errStr };
+        }
+    }
+
+    return val !== undefined ? val : {};
+}
+
+/**
  * Helper to safely extract function response details from a Gemini part, supporting camelCase, snake_case,
- * and alternative toolResponse keys.
+ * alternative toolResponse keys, nested parts, and error details.
  */
 function getFunctionResponse(part) {
     if (!part || typeof part !== 'object') return null;
     const resp = part.functionResponse || part.function_response || part.toolResponse || part.tool_response;
-    if (!resp || typeof resp !== 'object') return null;
+    if (!resp || typeof resp !== 'object') {
+        if (part.name && (part.response !== undefined || part.output !== undefined || part.parts !== undefined || part.content !== undefined || part.result !== undefined)) {
+            return {
+                name: part.name || '',
+                response: extractResponseValue(part, part),
+                id: part.id || null
+            };
+        }
+        return null;
+    }
     return {
         name: resp.name || '',
-        response: resp.response !== undefined ? resp.response : (resp.output !== undefined ? resp.output : resp.content),
+        response: extractResponseValue(resp, part),
         id: resp.id || null
     };
 }
@@ -1050,5 +1138,6 @@ module.exports = {
     geminiContentsToOpenAI,
     getFunctionCall,
     getFunctionResponse,
+    extractResponseValue,
     resolveToolCallId
 };

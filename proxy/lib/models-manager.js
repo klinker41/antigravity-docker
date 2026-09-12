@@ -350,6 +350,7 @@ class ModelsManager {
      */
     getModelByPlaceholder(placeholderEnum) {
         if (!placeholderEnum || typeof placeholderEnum !== 'string') return null;
+        const cleanEnum = placeholderEnum.replace(/^.*models\//, '');
         const config = this.getConfig();
         const usedEnums = new Set();
         for (const provider of config.providers) {
@@ -359,7 +360,7 @@ class ModelsManager {
                 for (const v of getModelVariants(model)) {
                     const variantModelId = `custom-${provider.type}-${model.id}${v.variantSuffix}`;
                     const enumName = this.getPlaceholderEnum(variantModelId, usedEnums);
-                    if (enumName === placeholderEnum) {
+                    if (enumName === cleanEnum || variantModelId === cleanEnum || model.id === cleanEnum) {
                         return {
                             label: v.label,
                             modelId: variantModelId,
