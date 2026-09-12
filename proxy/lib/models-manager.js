@@ -253,8 +253,16 @@ class ModelsManager {
      * Tests connectivity to an Anthropic or OpenAI-compatible endpoint.
      */
     async testProvider(providerConfig) {
-        const { type, endpoint, apiKey } = providerConfig;
+        const { type, endpoint } = providerConfig;
         if (!endpoint) throw new Error('Endpoint URL is required');
+
+        let apiKey = providerConfig.apiKey !== undefined && providerConfig.apiKey !== null ? String(providerConfig.apiKey).trim() : '';
+        if (!apiKey && providerConfig.id) {
+            const existing = this.getProvider(providerConfig.id);
+            if (existing && existing.apiKey) {
+                apiKey = existing.apiKey;
+            }
+        }
 
         const isAnthropic = type === 'anthropic';
         let cleanBase = endpoint.trim().replace(/\/+$/, '');
@@ -308,11 +316,16 @@ class ModelsManager {
                     if (res.statusCode >= 200 && res.statusCode < 300) {
                         try {
                             const parsedData = JSON.parse(data);
-                            const rawModels = Array.isArray(parsedData.data) ? parsedData.data : [];
-                            const models = rawModels.map(m => ({
-                                id: m.id,
-                                label: m.display_name || m.id
-                            }));
+                            const rawModels = Array.isArray(parsedData.data)
+                                ? parsedData.data
+                                : (Array.isArray(parsedData.models) ? parsedData.models : []);
+                            const models = rawModels
+                                .filter(m => m && typeof m === 'object')
+                                .map(m => ({
+                                    id: String(m.id || m.name || m.model || ''),
+                                    label: String(m.display_name || m.name || m.id || m.model || '')
+                                }))
+                                .filter(m => m.id.length > 0);
                             resolve({ success: true, models, status: res.statusCode });
                         } catch (e) {
                             resolve({ success: true, models: [], status: res.statusCode, raw: data });

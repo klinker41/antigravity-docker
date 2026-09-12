@@ -5,8 +5,8 @@ Connect to your agent from any browser via your reverse proxy or local network
 with built-in password protection, an integrated **Sidecar Manager** for
 scheduled agent prompts and autonomous workers, a **VS Code Web IDE** for
 inspecting project files, a **Host Web Terminal** for running commands on
-the host machine, and **External Model Providers** for using Claude 3.5/3.7,
-OpenAI GPT-4o, or local Ollama directly in Antigravity. The web gateway is
+the host machine, and **External Model Providers** for using Anthropic,
+OpenAI, or local Ollama directly in Antigravity. The web gateway is
 powered by **Bun** and **Hono** for ultra-fast startup and low memory usage.
 
 ---
@@ -166,12 +166,12 @@ Access the configuration page by clicking **Custom Models** in the left
 navigation pane of the Antigravity UI or navigating directly to `/models`.
 
 ### Supported Providers & Protocols:
-- **Anthropic Messages API**: Connect Claude 3.7 Sonnet, Claude 3.5 Sonnet,
-  and Claude 3.5 Haiku via your Anthropic API key (`sk-ant-...`). Thinking
-  blocks stream directly into Antigravity's collapsible Thoughts drawer.
+- **Anthropic Messages API**: Connect Anthropic models via your Anthropic
+  API key (`sk-ant-...`). Thinking blocks stream directly into
+  Antigravity's collapsible Thoughts drawer.
 - **OpenAI & OpenAI-Compatible Endpoints**: Connect official OpenAI models
-  (GPT-4o, o3-mini) or compatible self-hosted endpoints such as local Ollama,
-  vLLM, or DeepSeek.
+  or compatible self-hosted endpoints such as local Ollama, vLLM, or
+  DeepSeek.
 
 ### Key Features:
 - **Dynamic Dropdown Injection**: Enabled external models are automatically

@@ -151,6 +151,42 @@ test('Models Manager - Configuration, CRUD & Provider Connectivity', async (t) =
         }
     });
 
+    await t.test('reuses stored API key when testing provider without supplying apiKey', async () => {
+        const list = manager.listProviders();
+        const anthropicProvider = list.find(p => p.type === 'anthropic');
+        assert.ok(anthropicProvider, 'Anthropic provider should exist');
+
+        let receivedApiKey = null;
+        const mockServer = http.createServer((req, res) => {
+            receivedApiKey = req.headers['x-api-key'];
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+                data: [
+                    { id: 'claude-3-7-sonnet-20250219', display_name: 'Claude 3.7 Sonnet' }
+                ]
+            }));
+        });
+
+        await new Promise((resolve) => mockServer.listen(0, '127.0.0.1', resolve));
+        const port = mockServer.address().port;
+
+        try {
+            // Omit apiKey and provide existing provider id
+            const result = await manager.testProvider({
+                id: anthropicProvider.id,
+                type: 'anthropic',
+                endpoint: `http://127.0.0.1:${port}`
+            });
+
+            assert.equal(result.success, true);
+            assert.equal(receivedApiKey, 'sk-ant-test-key-123456789');
+            assert.equal(result.models.length, 1);
+            assert.equal(result.models[0].id, 'claude-3-7-sonnet-20250219');
+        } finally {
+            mockServer.close();
+        }
+    });
+
     await t.test('deletes a provider by ID', () => {
         const list = manager.listProviders();
         assert.equal(list.length, 2);

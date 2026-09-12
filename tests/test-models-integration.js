@@ -160,7 +160,7 @@ test('Multi-Model Integration - HTTP Proxy, Models API, & Upstream Interception'
             assert.equal(rpcData.clientModelSorts[0].groups[0].modelLabels[0], 'Gemini 3.8 Flash');
         });
 
-        await t.test('/models UI page renders management interface', async () => {
+        await t.test('/models UI page renders management interface with responsive mobile styles and no outdated models', async () => {
             const res = await makeRequest('/models', {
                 headers: { Cookie: authCookie }
             });
@@ -168,6 +168,15 @@ test('Multi-Model Integration - HTTP Proxy, Models API, & Upstream Interception'
             assert.ok(res.body.includes('External Providers & Models'));
             assert.ok(res.body.includes('Add Model Provider'));
             assert.ok(res.body.includes('providerModal'));
+            assert.ok(res.body.includes('models-header'));
+            assert.ok(res.body.includes('custom-model-row'));
+            assert.ok(res.body.includes('openModal'));
+            assert.ok(res.body.includes('.modal-overlay.show'));
+            assert.ok(res.body.includes("modal.classList.add('active')"));
+            // Outdated Anthropic example models must not be present
+            assert.ok(!res.body.includes('Claude 3.5/3.7'));
+            assert.ok(!res.body.includes('claude-3-7-sonnet-20250219'));
+            assert.ok(!res.body.includes('Anthropic Claude'));
         });
 
         await t.test('tests provider connectivity via /api/models/test', async () => {

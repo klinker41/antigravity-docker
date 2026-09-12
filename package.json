@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "scripts": {
     "start": "bun run proxy/auth-proxy.js",
-    "test": "bun test ./tests/*.js"
+    "test": "bun test ./tests/test-*.js"
   },
   "dependencies": {
     "hono": "^4.13.7"

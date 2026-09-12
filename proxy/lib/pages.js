@@ -476,6 +476,12 @@ button[type="submit"]:hover,
     color: #ffffff;
 }
 
+.btn-small {
+    padding: 6px 12px;
+    font-size: 12px;
+    border-radius: 8px;
+}
+
 .btn-icon {
     width: 16px;
     height: 16px;
@@ -610,7 +616,7 @@ button[type="submit"]:hover,
     text-align: left;
     margin-bottom: 24px;
 }
-.content-card {
+.content-card, .sidecar-card {
     background: rgba(9, 12, 18, 0.65);
     border: 1px solid rgba(255, 255, 255, 0.08);
     border-radius: 14px;
@@ -618,7 +624,7 @@ button[type="submit"]:hover,
     transition: all 0.25s ease;
     position: relative;
 }
-.content-card:hover {
+.content-card:hover, .sidecar-card:hover {
     border-color: rgba(66, 133, 244, 0.3);
     box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
 }
@@ -746,7 +752,8 @@ input:checked + .slider:before {
     justify-content: center;
     padding: 20px;
 }
-.modal-overlay.active { display: flex; }
+.modal-overlay.active,
+.modal-overlay.show { display: flex; }
 .modal-box {
     background: #0d111a;
     border: 1px solid rgba(255, 255, 255, 0.15);
@@ -859,10 +866,128 @@ input:checked + .slider:before {
 .empty-state svg { width: 44px; height: 44px; color: var(--text-muted); margin-bottom: 12px; }
 .empty-state p { color: var(--text-secondary); font-size: 14px; margin-bottom: 16px; }
 
+/* Models Page & Section Layout */
+.models-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 20px;
+    text-align: left;
+}
+.models-header-content {
+    flex: 1;
+}
+.models-header-content h2 {
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+.models-header-content p {
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin-top: 4px;
+    line-height: 1.45;
+}
+.provider-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 12px;
+    margin-bottom: 12px;
+}
+.provider-title-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+.provider-endpoint {
+    font-size: 12px;
+    color: var(--text-muted);
+    font-family: "Google Sans Code", monospace;
+    margin-top: 4px;
+    word-break: break-all;
+}
+.provider-actions {
+    display: flex;
+    gap: 6px;
+    flex-shrink: 0;
+}
+.custom-model-row {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
+}
+.modal-footer {
+    margin-top: 24px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 16px;
+}
+.modal-footer-actions {
+    display: flex;
+    gap: 10px;
+}
+
 @media (max-width: 600px) {
-    .page-card { padding: 24px 16px; border-radius: 16px; }
+    body { padding: 16px 12px; }
+    .page-card { padding: 22px 16px; border-radius: 16px; }
     .status-grid { grid-template-columns: 1fr; }
-    h1 { font-size: 20px; }
+    .brand-header { margin-bottom: 18px; }
+    .logo-container { width: 50px; height: 50px; border-radius: 14px; margin-bottom: 12px; }
+    .logo-svg { width: 28px; height: 28px; }
+    .status-pill { margin-bottom: 12px; font-size: 10px; padding: 3px 10px; }
+    h1 { font-size: 20px; margin-bottom: 4px; }
+    p.subtitle { font-size: 12.5px; line-height: 1.35; }
+    .empty-state { padding: 28px 16px; margin-bottom: 18px; }
+    .empty-state svg { width: 36px; height: 36px; margin-bottom: 8px; }
+    .models-header {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 14px;
+    }
+    .models-header .btn-primary {
+        width: 100%;
+        justify-content: center;
+    }
+    .provider-header {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 10px;
+    }
+    .provider-actions {
+        width: 100%;
+        justify-content: flex-end;
+    }
+    .modal-overlay {
+        padding: 12px;
+    }
+    .modal-box {
+        padding: 20px 16px;
+        border-radius: 14px;
+        max-height: 92vh;
+    }
+    .custom-model-row {
+        flex-direction: column;
+        gap: 8px;
+    }
+    .custom-model-row button {
+        width: 100%;
+        padding: 9px 12px;
+    }
+    .modal-footer {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 16px;
+    }
+    .modal-footer-actions {
+        width: 100%;
+    }
+    .modal-footer-actions button {
+        flex: 1;
+    }
 }
 `;
 
@@ -2004,19 +2129,19 @@ function renderModelsPage() {
     const statusPill = renderStatusPill('ready', 'Model Provider Gateway');
 
     const bodyHtml = `
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-            <div>
-                <h2 style="font-size: 18px; font-weight: 600; color: var(--text-primary);">External Providers & Models</h2>
-                <p style="font-size: 13px; color: var(--text-secondary); margin-top: 4px;">
+        <div class="models-header">
+            <div class="models-header-content">
+                <h2>External Providers & Models</h2>
+                <p>
                     Configure Anthropic, OpenAI, or local Ollama endpoints to appear in Antigravity's model selector.
                 </p>
             </div>
-            <button type="button" class="btn-primary" id="addProviderBtn" style="white-space: nowrap;">
+            <button type="button" class="btn-primary" id="addProviderBtn">
                 + Add Provider
             </button>
         </div>
 
-        <div id="models-list-container" class="sidecars-grid">
+        <div id="models-list-container" class="content-list">
             <div class="empty-state">Loading model providers...</div>
         </div>
 
@@ -2032,7 +2157,7 @@ function renderModelsPage() {
 
                     <div class="form-group">
                         <label for="providerName">Provider Name</label>
-                        <input type="text" id="providerName" class="input-field" placeholder="e.g. Anthropic Claude, OpenAI, Local Ollama" required>
+                        <input type="text" id="providerName" class="input-field" placeholder="e.g. Anthropic, OpenAI, Local Ollama" required>
                     </div>
 
                     <div class="form-group">
@@ -2055,32 +2180,51 @@ function renderModelsPage() {
                         <p class="field-hint">Leave blank for local Ollama or to retain your existing saved key.</p>
                     </div>
 
-                    <div style="margin: 16px 0;">
-                        <button type="button" class="btn-secondary btn-small" id="testConnBtn">
-                            ⚡ Test Connection & Fetch Models
+                    <div style="margin: 18px 0;">
+                        <button type="button" class="btn-primary" id="fetchModelsBtn" style="width: 100%; justify-content: center; gap: 8px;">
+                            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                                <circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                            </svg>
+                            <span>Fetch Available Models from Provider</span>
                         </button>
-                        <span id="testStatus" style="font-size: 12px; margin-left: 10px; color: var(--text-secondary);"></span>
+                        <div id="fetchStatus" style="font-size: 12px; margin-top: 8px; text-align: center; color: var(--text-secondary); min-height: 18px;"></div>
                     </div>
 
-                    <div class="form-group">
-                        <label>Configured Models</label>
-                        <div id="modelsContainer" style="display: flex; flex-direction: column; gap: 8px; max-height: 200px; overflow-y: auto; padding: 8px; background: var(--input-bg); border: 1px solid var(--input-border); border-radius: 8px;">
-                            <p style="font-size: 12px; color: var(--text-muted);">Click 'Test Connection & Fetch Models' or enter a model ID below.</p>
+                    <div class="form-group" style="margin-bottom: 14px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; flex-wrap: wrap; gap: 8px;">
+                            <label id="modelsSectionTitle" style="font-weight: 600;">Available Models</label>
+                            <div id="modelsQuickActions" style="display: none; gap: 12px; font-size: 12px;">
+                                <a href="#" id="selectAllModels" style="color: var(--accent-cyan); text-decoration: none;">Select All</a>
+                                <a href="#" id="deselectAllModels" style="color: var(--text-muted); text-decoration: none;">Deselect All</a>
+                            </div>
+                        </div>
+                        <div id="modelFilterContainer" style="display: none; margin-bottom: 8px;">
+                            <input type="text" id="modelFilterInput" class="input-field" placeholder="Filter models..." style="padding: 7px 12px; font-size: 12px;">
+                        </div>
+                        <div id="modelsContainer" style="display: flex; flex-direction: column; gap: 6px; max-height: 220px; overflow-y: auto; padding: 8px; background: var(--input-bg); border: 1px solid var(--input-border); border-radius: 10px;">
+                            <p style="font-size: 12px; color: var(--text-muted); text-align: center; padding: 14px 4px;">
+                                Click <strong>Fetch Available Models from Provider</strong> above to automatically load models.
+                            </p>
                         </div>
                     </div>
 
-                    <div style="display: flex; gap: 8px; margin-top: 8px;">
-                        <input type="text" id="customModelId" class="input-field" placeholder="Model ID (e.g. claude-3-7-sonnet-20250219)" style="flex: 2;">
-                        <input type="text" id="customModelLabel" class="input-field" placeholder="Display Name" style="flex: 2;">
-                        <button type="button" class="btn-secondary btn-small" id="addCustomModelBtn" style="flex: 1;">+ Add</button>
+                    <div style="margin-bottom: 18px;">
+                        <button type="button" id="toggleManualModelBtn" style="background: none; border: none; color: var(--accent-cyan); font-size: 12px; cursor: pointer; padding: 0; display: inline-flex; align-items: center; gap: 4px;">
+                            <span>+ Add unlisted / custom model manually</span>
+                        </button>
+                        <div id="manualModelRow" class="custom-model-row" style="display: none; margin-top: 10px;">
+                            <input type="text" id="customModelId" class="input-field" placeholder="Model ID" style="flex: 2;">
+                            <input type="text" id="customModelLabel" class="input-field" placeholder="Display Name (optional)" style="flex: 2;">
+                            <button type="button" class="btn-secondary btn-small" id="addCustomModelBtn">+ Add</button>
+                        </div>
                     </div>
 
-                    <div class="modal-footer" style="margin-top: 24px; display: flex; justify-content: space-between; align-items: center;">
+                    <div class="modal-footer">
                         <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px;">
                             <input type="checkbox" id="providerEnabled" checked>
                             <span>Enable this provider in model selector</span>
                         </label>
-                        <div style="display: flex; gap: 10px;">
+                        <div class="modal-footer-actions">
                             <button type="button" class="btn-secondary" id="cancelModalBtn">Cancel</button>
                             <button type="submit" class="btn-primary" id="saveProviderBtn">Save Provider</button>
                         </div>
@@ -2105,8 +2249,14 @@ function renderModelsPage() {
         const providerEndpoint = document.getElementById('providerEndpoint');
         const endpointHint = document.getElementById('endpointHint');
         const modelsContainer = document.getElementById('modelsContainer');
-        const testConnBtn = document.getElementById('testConnBtn');
-        const testStatus = document.getElementById('testStatus');
+        const fetchModelsBtn = document.getElementById('fetchModelsBtn');
+        const fetchStatus = document.getElementById('fetchStatus');
+        const toggleManualBtn = document.getElementById('toggleManualModelBtn');
+        const manualModelRow = document.getElementById('manualModelRow');
+        const modelFilterInput = document.getElementById('modelFilterInput');
+        const modelFilterContainer = document.getElementById('modelFilterContainer');
+        const modelsQuickActions = document.getElementById('modelsQuickActions');
+        const modelsSectionTitle = document.getElementById('modelsSectionTitle');
 
         function escapeHtml(str) {
             if (str === null || str === undefined) return '';
@@ -2127,6 +2277,24 @@ function renderModelsPage() {
             setTimeout(() => toast.classList.remove('show'), 3500);
         }
 
+        function openModal(title) {
+            document.getElementById('modalTitle').textContent = title;
+            modal.classList.add('active');
+            modal.classList.add('show');
+        }
+
+        function closeModal() {
+            modal.classList.remove('active');
+            modal.classList.remove('show');
+        }
+
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) closeModal();
+        });
+
+        document.getElementById('closeModalBtn').addEventListener('click', closeModal);
+        document.getElementById('cancelModalBtn').addEventListener('click', closeModal);
+
         providerType.addEventListener('change', () => {
             if (providerType.value === 'anthropic') {
                 if (!providerEndpoint.value || providerEndpoint.value.includes('openai') || providerEndpoint.value.includes('11434')) {
@@ -2135,10 +2303,11 @@ function renderModelsPage() {
                 endpointHint.textContent = 'Default for Anthropic: https://api.anthropic.com';
             } else {
                 if (!providerEndpoint.value || providerEndpoint.value.includes('anthropic')) {
-                    providerEndpoint.value = 'https://api.openai.com/v1';
+                    providerEndpoint.value = 'http://host.docker.internal:11434/v1';
                 }
-                endpointHint.textContent = 'OpenAI: https://api.openai.com/v1 | Local Ollama: http://host.docker.internal:11434/v1';
+                endpointHint.textContent = 'Local Ollama: http://host.docker.internal:11434/v1 | OpenAI: https://api.openai.com/v1';
             }
+            if (fetchStatus) fetchStatus.textContent = '';
         });
 
         async function fetchProviders() {
@@ -2162,7 +2331,7 @@ function renderModelsPage() {
                             <path d="M12 18v4"></path><path d="M8 22h8"></path>
                         </svg>
                         <p style="font-size: 14px; font-weight: 500; color: var(--text-secondary); margin-bottom: 4px;">No external model providers configured</p>
-                        <p style="font-size: 12px; color: var(--text-muted);">Add Anthropic (Claude 3.5/3.7) or an OpenAI/Ollama endpoint to show them in Antigravity.</p>
+                        <p style="font-size: 12px; color: var(--text-muted);">Add Anthropic, OpenAI, or local Ollama endpoints to show them in Antigravity.</p>
                     </div>
                 \`;
                 return;
@@ -2183,21 +2352,21 @@ function renderModelsPage() {
                 \`).join('') || '<span style="font-size: 12px; color: var(--text-muted);">No models configured</span>';
 
                 html += \`
-                    <div class="sidecar-card" style="padding: 18px;">
-                        <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px;">
+                    <div class="content-card" style="padding: 18px;">
+                        <div class="provider-header">
                             <div>
-                                <div style="display: flex; align-items: center; gap: 8px;">
+                                <div class="provider-title-row">
                                     <h3 style="font-size: 15px; font-weight: 600; color: var(--text-primary);">\${escapeHtml(p.name)}</h3>
                                     <span style="font-size: 10px; font-weight: 600; text-transform: uppercase; padding: 2px 6px; border-radius: 4px; color: \${badgeColor}; background: \${badgeBg}; border: 1px solid \${badgeColor}40;">
                                         \${escapeHtml(p.type)}
                                     </span>
                                     \${enabledBadge}
                                 </div>
-                                <p style="font-size: 12px; color: var(--text-muted); font-family: 'Google Sans Code', monospace; margin-top: 4px;">
+                                <p class="provider-endpoint">
                                     \${escapeHtml(p.endpoint)} \${p.hasKey ? '• Key: ' + escapeHtml(p.apiKey) : '• (No key)'}
                                 </p>
                             </div>
-                            <div style="display: flex; gap: 6px;">
+                            <div class="provider-actions">
                                 <button type="button" class="btn-secondary btn-small" onclick="editProvider('\${escapeHtml(p.id)}')">Edit</button>
                                 <button type="button" class="btn-danger btn-small" onclick="deleteProvider('\${escapeHtml(p.id)}')">Delete</button>
                             </div>
@@ -2216,19 +2385,46 @@ function renderModelsPage() {
         }
 
         function renderStagedModels() {
+            const filter = (modelFilterInput?.value || '').toLowerCase().trim();
+
             if (stagedModels.length === 0) {
-                modelsContainer.innerHTML = '<p style="font-size: 12px; color: var(--text-muted); padding: 4px;">No models added yet.</p>';
+                if (modelsQuickActions) modelsQuickActions.style.display = 'none';
+                if (modelFilterContainer) modelFilterContainer.style.display = 'none';
+                if (modelsSectionTitle) modelsSectionTitle.textContent = 'Available Models';
+                modelsContainer.innerHTML = '<p style="font-size: 12px; color: var(--text-muted); text-align: center; padding: 14px 4px;">Click <strong>Fetch Available Models from Provider</strong> above to automatically load models.</p>';
                 return;
             }
-            modelsContainer.innerHTML = stagedModels.map((m, idx) => \`
-                <div style="display: flex; align-items: center; justify-content: space-between; padding: 4px 8px; background: rgba(255,255,255,0.03); border-radius: 6px;">
-                    <label style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-primary); cursor: pointer;">
-                        <input type="checkbox" \${m.enabled ? 'checked' : ''} onchange="toggleModelEnabled(\${idx})">
-                        <span><strong>\${escapeHtml(m.label)}</strong> <code style="font-size: 11px; opacity: 0.7;">(\${escapeHtml(m.id)})</code></span>
-                    </label>
-                    <button type="button" onclick="removeModel(\${idx})" style="background: none; border: none; color: var(--error-text); cursor: pointer; font-size: 14px;">&times;</button>
-                </div>
-            \`).join('');
+
+            if (modelsQuickActions) modelsQuickActions.style.display = 'flex';
+            if (modelFilterContainer) {
+                modelFilterContainer.style.display = stagedModels.length > 5 ? 'block' : 'none';
+            }
+            const enabledCount = stagedModels.filter(m => m.enabled).length;
+            if (modelsSectionTitle) {
+                modelsSectionTitle.textContent = \`Available Models (\${enabledCount} of \${stagedModels.length} selected)\`;
+            }
+
+            let html = '';
+            stagedModels.forEach((m, idx) => {
+                const isMatch = !filter || m.label.toLowerCase().includes(filter) || m.id.toLowerCase().includes(filter);
+                const displayStyle = isMatch ? 'display: flex;' : 'display: none;';
+                html += \`
+                    <div class="model-row-item" style="\${displayStyle} align-items: center; justify-content: space-between; padding: 6px 10px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06); border-radius: 8px;">
+                        <label style="display: flex; align-items: center; gap: 10px; font-size: 12.5px; color: var(--text-primary); cursor: pointer; flex: 1; min-width: 0;">
+                            <input type="checkbox" \${m.enabled ? 'checked' : ''} onchange="toggleModelEnabled(\${idx})" style="accent-color: var(--accent-blue); width: 16px; height: 16px; flex-shrink: 0;">
+                            <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                                <strong>\${escapeHtml(m.label)}</strong>
+                                <code style="font-size: 11px; margin-left: 6px; color: var(--text-muted);">\${escapeHtml(m.id)}</code>
+                            </span>
+                        </label>
+                        <div style="display: flex; align-items: center; gap: 6px; flex-shrink: 0; margin-left: 8px;">
+                            \${m.supportsThinking ? '<span style="font-size: 9px; padding: 2px 5px; border-radius: 4px; background: rgba(167, 139, 250, 0.15); color: var(--accent-purple); border: 1px solid rgba(167, 139, 250, 0.3);">Thinking</span>' : ''}
+                            <button type="button" onclick="removeModel(\${idx})" title="Remove" style="background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 16px; line-height: 1; padding: 2px 6px; border-radius: 4px;">&times;</button>
+                        </div>
+                    </div>
+                \`;
+            });
+            modelsContainer.innerHTML = html;
         }
 
         window.toggleModelEnabled = function(idx) {
@@ -2243,6 +2439,32 @@ function renderModelsPage() {
             renderStagedModels();
         };
 
+        if (modelFilterInput) {
+            modelFilterInput.addEventListener('input', () => {
+                renderStagedModels();
+            });
+        }
+
+        document.getElementById('selectAllModels').addEventListener('click', (e) => {
+            e.preventDefault();
+            stagedModels.forEach(m => m.enabled = true);
+            renderStagedModels();
+        });
+
+        document.getElementById('deselectAllModels').addEventListener('click', (e) => {
+            e.preventDefault();
+            stagedModels.forEach(m => m.enabled = false);
+            renderStagedModels();
+        });
+
+        toggleManualBtn.addEventListener('click', () => {
+            const isHidden = manualModelRow.style.display === 'none';
+            manualModelRow.style.display = isHidden ? 'flex' : 'none';
+            toggleManualBtn.firstElementChild.textContent = isHidden
+                ? '− Hide manual model entry'
+                : '+ Add unlisted / custom model manually';
+        });
+
         document.getElementById('addCustomModelBtn').addEventListener('click', () => {
             const idInput = document.getElementById('customModelId');
             const labelInput = document.getElementById('customModelLabel');
@@ -2251,77 +2473,99 @@ function renderModelsPage() {
 
             if (!id) return;
             if (!stagedModels.some(m => m.id === id)) {
-                stagedModels.push({ id, label, enabled: true, supportsThinking: true });
+                stagedModels.push({ id, label, enabled: true, supportsThinking: id.includes('claude') || id.includes('r1') || id.includes('o1') || id.includes('o3') });
                 renderStagedModels();
             }
             idInput.value = '';
             labelInput.value = '';
         });
 
-        testConnBtn.addEventListener('click', async () => {
+        async function fetchAvailableModels(auto = false) {
+            const id = document.getElementById('providerId').value;
             const type = providerType.value;
             const endpoint = providerEndpoint.value.trim();
             const apiKey = document.getElementById('providerApiKey').value.trim();
 
             if (!endpoint) {
-                testStatus.textContent = 'Please enter an endpoint URL first.';
-                testStatus.style.color = 'var(--error-text)';
+                if (!auto) {
+                    fetchStatus.textContent = 'Please enter an endpoint URL first.';
+                    fetchStatus.style.color = 'var(--error-text)';
+                }
                 return;
             }
 
-            testStatus.textContent = 'Testing connection...';
-            testStatus.style.color = 'var(--text-secondary)';
+            if (type === 'anthropic' && !apiKey && !id) {
+                if (!auto) {
+                    fetchStatus.textContent = 'Please enter your Anthropic API key to query models.';
+                    fetchStatus.style.color = 'var(--error-text)';
+                }
+                return;
+            }
+
+            fetchStatus.textContent = 'Querying provider for available models...';
+            fetchStatus.style.color = 'var(--text-secondary)';
+            fetchModelsBtn.disabled = true;
 
             try {
                 const res = await fetch('/api/models/test', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ type, endpoint, apiKey })
+                    body: JSON.stringify({ id: id || undefined, type, endpoint, apiKey })
                 });
                 const data = await res.json();
-                if (data.success) {
-                    testStatus.textContent = \`Connected! Found \${data.models.length} models.\`;
-                    testStatus.style.color = 'var(--success-text)';
+                if (data.success && Array.isArray(data.models)) {
+                    fetchStatus.textContent = \`Connected! Found \${data.models.length} models from provider.\`;
+                    fetchStatus.style.color = 'var(--success-text)';
 
                     for (const m of data.models) {
-                        if (!stagedModels.some(existing => existing.id === m.id)) {
+                        const existing = stagedModels.find(s => s.id === m.id);
+                        if (existing) {
+                            if (!existing.label || existing.label === existing.id) {
+                                existing.label = m.label || m.id;
+                            }
+                        } else {
                             stagedModels.push({
                                 id: m.id,
                                 label: m.label || m.id,
                                 enabled: true,
-                                supportsThinking: m.id.includes('claude') || m.id.includes('r1')
+                                supportsThinking: m.id.includes('claude') || m.id.includes('r1') || m.id.includes('o1') || m.id.includes('o3')
                             });
                         }
                     }
                     renderStagedModels();
                 } else {
-                    testStatus.textContent = 'Connection failed: ' + (data.error || 'Check endpoint & key');
-                    testStatus.style.color = 'var(--error-text)';
+                    fetchStatus.textContent = 'Connection failed: ' + (data.error || 'Check endpoint & key');
+                    fetchStatus.style.color = 'var(--error-text)';
                 }
             } catch (e) {
-                testStatus.textContent = 'Test failed: ' + e.message;
-                testStatus.style.color = 'var(--error-text)';
+                fetchStatus.textContent = 'Failed to query provider: ' + e.message;
+                fetchStatus.style.color = 'var(--error-text)';
+            } finally {
+                fetchModelsBtn.disabled = false;
             }
-        });
+        }
+
+        fetchModelsBtn.addEventListener('click', () => fetchAvailableModels(false));
 
         document.getElementById('addProviderBtn').addEventListener('click', () => {
-            document.getElementById('modalTitle').textContent = 'Add Model Provider';
             document.getElementById('providerId').value = '';
             form.reset();
             providerType.value = 'anthropic';
             providerEndpoint.value = 'https://api.anthropic.com';
             endpointHint.textContent = 'Default for Anthropic: https://api.anthropic.com';
             stagedModels = [];
+            manualModelRow.style.display = 'none';
+            toggleManualBtn.firstElementChild.textContent = '+ Add unlisted / custom model manually';
+            if (modelFilterInput) modelFilterInput.value = '';
             renderStagedModels();
-            testStatus.textContent = '';
-            modal.classList.add('show');
+            fetchStatus.textContent = '';
+            openModal('Add Model Provider');
         });
 
         window.editProvider = function(id) {
             const p = providersData.find(item => item.id === id);
             if (!p) return;
 
-            document.getElementById('modalTitle').textContent = 'Edit Model Provider';
             document.getElementById('providerId').value = p.id;
             document.getElementById('providerName').value = p.name;
             providerType.value = p.type;
@@ -2330,9 +2574,12 @@ function renderModelsPage() {
             document.getElementById('providerApiKey').placeholder = p.hasKey ? '(Key preserved, enter new key to change)' : '';
             document.getElementById('providerEnabled').checked = p.enabled !== false;
             stagedModels = (p.models || []).map(m => ({ ...m }));
+            manualModelRow.style.display = 'none';
+            toggleManualBtn.firstElementChild.textContent = '+ Add unlisted / custom model manually';
+            if (modelFilterInput) modelFilterInput.value = '';
             renderStagedModels();
-            testStatus.textContent = '';
-            modal.classList.add('show');
+            fetchStatus.textContent = '';
+            openModal('Edit Model Provider');
         };
 
         window.deleteProvider = async function(id) {
@@ -2347,13 +2594,6 @@ function renderModelsPage() {
                 alert('Failed to delete: ' + e.message);
             }
         };
-
-        function closeModal() {
-            modal.classList.remove('show');
-        }
-
-        document.getElementById('closeModalBtn').addEventListener('click', closeModal);
-        document.getElementById('cancelModalBtn').addEventListener('click', closeModal);
 
         form.addEventListener('submit', async (e) => {
             e.preventDefault();
