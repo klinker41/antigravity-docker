@@ -5,6 +5,11 @@ const http = require('node:http');
 const {
     callAnthropicStream,
     callOpenAIStream,
+    callOpenAIResponsesStream,
+    isAdaptiveThinkingModel,
+    isOpenAIResponsesModel,
+    chatMessagesToResponsesInput,
+    chatToolsToResponsesTools,
     normalizeJsonSchema,
     geminiToolsToAnthropic,
     geminiToolsToOpenAI,
@@ -339,5 +344,298 @@ test('Stream Transcoder - Anthropic & OpenAI Event Normalization', async (t) => 
         assert.equal(oaiMessages[1].tool_calls[1].id, 'call_second');
         assert.equal(oaiMessages[2].tool_call_id, 'call_first');
         assert.equal(oaiMessages[3].tool_call_id, 'call_second');
+    });
+
+    await t.test('detects Anthropic adaptive thinking models and configures payloads appropriately', async () => {
+        // Model detection
+        assert.equal(isAdaptiveThinkingModel('claude-fable-5-1'), true);
+        assert.equal(isAdaptiveThinkingModel('claude-fable-5'), true);
+        assert.equal(isAdaptiveThinkingModel('claude-opus-5'), true);
+        assert.equal(isAdaptiveThinkingModel('claude-sonnet-5'), true);
+        assert.equal(isAdaptiveThinkingModel('claude-opus-4-8'), true);
+        assert.equal(isAdaptiveThinkingModel('claude-sonnet-4-6'), true);
+        assert.equal(isAdaptiveThinkingModel('claude-opus-4-6'), true);
+        assert.equal(isAdaptiveThinkingModel('claude-opus-4-5-20251101'), false);
+        assert.equal(isAdaptiveThinkingModel('claude-3-7-sonnet'), false);
+
+        // Server verifying payload structure
+        let receivedThinking = null;
+        const mockAdaptiveServer = http.createServer((req, res) => {
+            let body = '';
+            req.on('data', c => body += c);
+            req.on('end', () => {
+                const parsed = JSON.parse(body);
+                receivedThinking = parsed.thinking;
+                res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+                res.write('data: {"type":"message_stop"}\n\n');
+                res.end();
+            });
+        });
+        await new Promise((resolve) => mockAdaptiveServer.listen(0, '127.0.0.1', resolve));
+        const adaptivePort = mockAdaptiveServer.address().port;
+
+        // Fable 5.1 -> adaptive thinking
+        await callAnthropicStream({
+            endpoint: `http://127.0.0.1:${adaptivePort}`,
+            apiKey: 'test-key',
+            model: 'claude-fable-5-1',
+            messages: [{ role: 'user', content: 'Hi' }],
+            supportsThinking: true,
+            onEvent: () => {}
+        });
+        assert.deepEqual(receivedThinking, { type: 'adaptive' });
+
+        // Claude 3.7 Sonnet -> enabled thinking with budget_tokens
+        await callAnthropicStream({
+            endpoint: `http://127.0.0.1:${adaptivePort}`,
+            apiKey: 'test-key',
+            model: 'claude-3-7-sonnet',
+            messages: [{ role: 'user', content: 'Hi' }],
+            supportsThinking: true,
+            onEvent: () => {}
+        });
+        assert.deepEqual(receivedThinking, { type: 'enabled', budget_tokens: 2048 });
+
+        mockAdaptiveServer.close();
+    });
+
+    await t.test('transparently retries Anthropic request if thinking mode is rejected with 400', async () => {
+        let attempts = 0;
+        const mockRetryServer = http.createServer((req, res) => {
+            let body = '';
+            req.on('data', c => body += c);
+            req.on('end', () => {
+                attempts++;
+                const parsed = JSON.parse(body);
+                if (attempts === 1) {
+                    // First attempt simulates error: thinking.type.enabled is not supported
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({
+                        type: 'error',
+                        error: {
+                            type: 'invalid_request_error',
+                            message: '"thinking.type.enabled" is not supported for this model. Use "thinking.type.adaptive" and "output_config.effort" to control thinking behavior.'
+                        }
+                    }));
+                } else {
+                    assert.deepEqual(parsed.thinking, { type: 'adaptive' });
+                    res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+                    res.write('event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n');
+                    res.write('event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Recovered!"}}\n\n');
+                    res.write('event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n');
+                    res.write('event: message_stop\ndata: {"type":"message_stop"}\n\n');
+                    res.end();
+                }
+            });
+        });
+        await new Promise((resolve) => mockRetryServer.listen(0, '127.0.0.1', resolve));
+        const retryPort = mockRetryServer.address().port;
+
+        const events = [];
+        await callAnthropicStream({
+            endpoint: `http://127.0.0.1:${retryPort}`,
+            apiKey: 'test-key',
+            model: 'custom-claude-unknown',
+            messages: [{ role: 'user', content: 'Hi' }],
+            supportsThinking: true,
+            onEvent: (ev) => events.push(ev)
+        });
+
+        assert.equal(attempts, 2);
+        assert.equal(events.find(e => e.type === 'text')?.text, 'Recovered!');
+        mockRetryServer.close();
+    });
+
+    await t.test('detects OpenAI Responses API models and converts messages/tools to Responses API format', () => {
+        assert.equal(isOpenAIResponsesModel('gpt-6-astra'), true);
+        assert.equal(isOpenAIResponsesModel('gpt-6'), true);
+        assert.equal(isOpenAIResponsesModel('o1-preview'), true);
+        assert.equal(isOpenAIResponsesModel('o3-mini'), true);
+        assert.equal(isOpenAIResponsesModel('gpt-4o'), false);
+        assert.equal(isOpenAIResponsesModel('gemma4:e2b'), false);
+
+        const chatMessages = [
+            { role: 'system', content: 'You are an agent' },
+            { role: 'user', content: 'Run command' },
+            {
+                role: 'assistant',
+                content: 'Running...',
+                tool_calls: [
+                    {
+                        id: 'call_cmd1',
+                        type: 'function',
+                        function: { name: 'run_command', arguments: '{"CommandLine":"ls"}' }
+                    }
+                ]
+            },
+            {
+                role: 'tool',
+                tool_call_id: 'call_cmd1',
+                content: 'file1.txt\nfile2.txt'
+            }
+        ];
+
+        const responsesInput = chatMessagesToResponsesInput(chatMessages);
+        assert.equal(responsesInput.length, 5);
+        assert.deepEqual(responsesInput[0], { role: 'system', content: 'You are an agent' });
+        assert.deepEqual(responsesInput[1], { role: 'user', content: 'Run command' });
+        assert.deepEqual(responsesInput[2], { role: 'assistant', content: 'Running...' });
+        assert.deepEqual(responsesInput[3], {
+            type: 'function_call',
+            call_id: 'call_cmd1',
+            name: 'run_command',
+            arguments: '{"CommandLine":"ls"}'
+        });
+        assert.deepEqual(responsesInput[4], {
+            type: 'function_call_output',
+            call_id: 'call_cmd1',
+            output: 'file1.txt\nfile2.txt'
+        });
+
+        const chatTools = [
+            {
+                type: 'function',
+                function: {
+                    name: 'run_command',
+                    description: 'Run shell command',
+                    parameters: { type: 'object', properties: {} }
+                }
+            }
+        ];
+        const responsesTools = chatToolsToResponsesTools(chatTools);
+        assert.equal(responsesTools.length, 1);
+        assert.deepEqual(responsesTools[0], {
+            type: 'function',
+            name: 'run_command',
+            description: 'Run shell command',
+            parameters: { type: 'object', properties: {} }
+        });
+    });
+
+    await t.test('streams and normalizes OpenAI Responses API events (/v1/responses)', async () => {
+        const mockResponsesServer = http.createServer((req, res) => {
+            assert.equal(req.url, '/v1/responses');
+            assert.equal(req.headers['authorization'], 'Bearer test-openai-key');
+
+            res.writeHead(200, {
+                'Content-Type': 'text/event-stream',
+                'Cache-Control': 'no-cache'
+            });
+
+            // Reasoning delta
+            res.write('event: response.reasoning_summary_text.delta\ndata: {"type":"response.reasoning_summary_text.delta","delta":"Planning the execution..."}\n\n');
+
+            // Text delta
+            res.write('event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"Calling the function..."}\n\n');
+
+            // Function call item added & arguments delta
+            res.write('event: response.output_item.added\ndata: {"type":"response.output_item.added","item":{"id":"fc_1","type":"function_call","call_id":"call_123","name":"run_command","arguments":""}}\n\n');
+            res.write('event: response.function_call_arguments.delta\ndata: {"type":"response.function_call_arguments.delta","item_id":"fc_1","delta":"{\\"Command\\"}\n\n');
+            res.write('event: response.function_call_arguments.done\ndata: {"type":"response.function_call_arguments.done","item_id":"fc_1","arguments":"{\\"CommandLine\\":\\"echo hello\\"}"}\n\n');
+            res.write('event: response.output_item.done\ndata: {"type":"response.output_item.done","item":{"id":"fc_1","type":"function_call","call_id":"call_123","name":"run_command","arguments":"{\\"CommandLine\\":\\"echo hello\\"}"}}\n\n');
+
+            // Completion
+            res.write('event: response.completed\ndata: {"type":"response.completed","response":{"status":"completed"}}\n\n');
+            res.end();
+        });
+
+        await new Promise((resolve) => mockResponsesServer.listen(0, '127.0.0.1', resolve));
+        const respPort = mockResponsesServer.address().port;
+
+        const events = [];
+        await callOpenAIResponsesStream({
+            endpoint: `http://127.0.0.1:${respPort}`,
+            apiKey: 'test-openai-key',
+            model: 'gpt-6-astra',
+            messages: [{ role: 'user', content: 'Run hello' }],
+            onEvent: (ev) => events.push(ev)
+        });
+
+        mockResponsesServer.close();
+
+        const thoughts = events.filter(e => e.type === 'thought').map(e => e.text).join('');
+        assert.equal(thoughts, 'Planning the execution...');
+
+        const text = events.filter(e => e.type === 'text').map(e => e.text).join('');
+        assert.equal(text, 'Calling the function...');
+
+        const tools = events.filter(e => e.type === 'tool_call');
+        assert.equal(tools.length, 1);
+        assert.equal(tools[0].name, 'run_command');
+        assert.equal(tools[0].id, 'call_123');
+        assert.deepEqual(JSON.parse(tools[0].arguments), { CommandLine: 'echo hello' });
+
+        const done = events.find(e => e.type === 'done');
+        assert.ok(done);
+        assert.equal(done.finishReason, 'STOP');
+    });
+
+    await t.test('callOpenAIStream automatically routes gpt-6-astra to Responses API', async () => {
+        let routedToResponses = false;
+        const mockServer = http.createServer((req, res) => {
+            if (req.url === '/v1/responses') {
+                routedToResponses = true;
+                res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+                res.write('event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"Astra routed!"}\n\n');
+                res.write('event: response.completed\ndata: {"type":"response.completed","response":{"status":"completed"}}\n\n');
+                res.end();
+            } else {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end('{"error":{"message":"Should not call completions"}}');
+            }
+        });
+
+        await new Promise((resolve) => mockServer.listen(0, '127.0.0.1', resolve));
+        const port = mockServer.address().port;
+
+        const events = [];
+        await callOpenAIStream({
+            endpoint: `http://127.0.0.1:${port}`,
+            apiKey: 'test-key',
+            model: 'gpt-6-astra',
+            messages: [{ role: 'user', content: 'Hi' }],
+            onEvent: (ev) => events.push(ev)
+        });
+
+        mockServer.close();
+        assert.equal(routedToResponses, true);
+        assert.equal(events.find(e => e.type === 'text')?.text, 'Astra routed!');
+    });
+
+    await t.test('callOpenAIStream falls back to Responses API when chat completions returns 400 with /v1/responses', async () => {
+        let attempts = 0;
+        const mockServer = http.createServer((req, res) => {
+            attempts++;
+            if (req.url === '/v1/chat/completions') {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({
+                    error: {
+                        message: "Function tools with reasoning_effort are not supported for custom-model in /v1/chat/completions. To use function tools, use /v1/responses or set reasoning_effort to 'none'."
+                    }
+                }));
+            } else if (req.url === '/v1/responses') {
+                res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+                res.write('event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"Fell back to responses!"}\n\n');
+                res.write('event: response.completed\ndata: {"type":"response.completed","response":{"status":"completed"}}\n\n');
+                res.end();
+            }
+        });
+
+        await new Promise((resolve) => mockServer.listen(0, '127.0.0.1', resolve));
+        const port = mockServer.address().port;
+
+        const events = [];
+        await callOpenAIStream({
+            endpoint: `http://127.0.0.1:${port}`,
+            apiKey: 'test-key',
+            model: 'custom-reasoning-model',
+            messages: [{ role: 'user', content: 'Hi' }],
+            tools: [{ type: 'function', function: { name: 'fn', parameters: {} } }],
+            onEvent: (ev) => events.push(ev)
+        });
+
+        mockServer.close();
+        assert.equal(attempts, 2);
+        assert.equal(events.find(e => e.type === 'text')?.text, 'Fell back to responses!');
     });
 });

@@ -379,6 +379,7 @@ class TranslationProxy {
                     model: customModel.rawModelId,
                     messages,
                     tools: openAiTools,
+                    maxTokens,
                     signal: abortController.signal,
                     onEvent
                 });
