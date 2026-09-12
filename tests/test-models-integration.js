@@ -518,7 +518,7 @@ test('Multi-Model Integration - HTTP Proxy, Models API, & Upstream Interception'
             assert.ok(sorts.includes('Claude 3.7 Sonnet'), 'Custom model label must be in sort group');
         });
 
-        await t.test('rewrites custom model placeholder to MODEL_PLACEHOLDER_M318 over WebSocket', async () => {
+        await t.test('preserves custom model placeholder enum over WebSocket', async () => {
             const ws = new WebSocket(`ws://127.0.0.1:${TEST_PORT}/connect-websocket`, {
                 headers: {
                     Cookie: authCookie,
@@ -570,11 +570,11 @@ test('Multi-Model Integration - HTTP Proxy, Models API, & Upstream Interception'
             });
 
             assert.ok(lastAgyReceivedWsText, 'Upstream agy must receive message');
-            assert.ok(lastAgyReceivedWsText.includes('MODEL_PLACEHOLDER_M318'), 'Must rewrite custom placeholder to M318');
-            assert.ok(!lastAgyReceivedWsText.includes(customPlaceholder), 'Must NOT contain custom placeholder');
+            assert.ok(lastAgyReceivedWsText.includes(customPlaceholder), 'Must preserve custom placeholder');
+            assert.ok(!lastAgyReceivedWsText.includes('MODEL_PLACEHOLDER_M318'), 'Must NOT rewrite custom placeholder to M318');
         });
 
-        await t.test('rewrites custom model placeholder to MODEL_PLACEHOLDER_M318 over HTTP POST', async () => {
+        await t.test('preserves custom model placeholder enum over HTTP POST', async () => {
             const customPlaceholder = 'MODEL_PLACEHOLDER_M567';
             const reqBody = JSON.stringify({
                 cascadeId: 'cascade-test-http',
@@ -589,8 +589,8 @@ test('Multi-Model Integration - HTTP Proxy, Models API, & Upstream Interception'
 
             assert.equal(res.status, 200);
             assert.ok(lastAgyReceivedHttpBody, 'Upstream agy must receive HTTP POST body');
-            assert.ok(lastAgyReceivedHttpBody.includes('MODEL_PLACEHOLDER_M318'), 'Must rewrite custom placeholder to M318 in HTTP body');
-            assert.ok(!lastAgyReceivedHttpBody.includes(customPlaceholder), 'Must NOT contain custom placeholder');
+            assert.ok(lastAgyReceivedHttpBody.includes(customPlaceholder), 'Must preserve custom placeholder in HTTP body');
+            assert.ok(!lastAgyReceivedHttpBody.includes('MODEL_PLACEHOLDER_M318'), 'Must NOT rewrite custom placeholder to M318 in HTTP body');
         });
 
         await t.test('deletes provider via DELETE /api/models/:id', async () => {

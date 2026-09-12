@@ -376,10 +376,13 @@ case "$1" in
 
         if [ "$HAS_CUSTOM_MODELS" = "true" ] || [ "${ENABLE_TRANSLATION_PROXY:-false}" = "true" ]; then
             echo " 🧠 Custom Models detected: routing inference via translation proxy on port ${TRANSLATION_PORT}"
+            export CLOUDCODE_UPSTREAM_URL="${CLOUDCODE_UPSTREAM_URL:-https://daily-cloudcode-pa.googleapis.com}"
             export CLOUD_CODE_URL="${CLOUD_CODE_URL:-http://127.0.0.1:${TRANSLATION_PORT}}"
             export ENABLE_TRANSLATION_PROXY="true"
         elif [ -n "${CLOUD_CODE_URL:-}" ]; then
             echo " 🧠 Custom CLOUD_CODE_URL specified: ${CLOUD_CODE_URL}"
+            export CLOUDCODE_UPSTREAM_URL="${CLOUDCODE_UPSTREAM_URL:-$CLOUD_CODE_URL}"
+            export CLOUD_CODE_URL="http://127.0.0.1:${TRANSLATION_PORT}"
             export ENABLE_TRANSLATION_PROXY="true"
         else
             echo " ⚪ Custom Models disabled or not configured: standard Google CloudCode active"

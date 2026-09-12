@@ -5,8 +5,8 @@ const { renderServiceStartingPage } = require('./pages');
 const { INJECTED_UI_STYLES, buildInjectedScript } = require('./ui-injection');
 const {
     CUSTOM_PLACEHOLDER_REGEX,
-    CUSTOM_PLACEHOLDER_REGEX_GLOBAL,
-    isCustomPlaceholder
+    isCustomPlaceholder,
+    matchCustomPlaceholders
 } = require('./models-manager');
 
 // Hop-by-hop headers defined in RFC 7230 / RFC 9110 to strip when proxying
@@ -108,23 +108,21 @@ async function proxyWebRequest(c, targetPort, targetPath, options = {}) {
         if (isUpstream && parsedUrl.pathname.startsWith('/exa.language_server_pb.LanguageServerService/')) {
             try {
                 let textBody = await c.req.text();
-                if (CUSTOM_PLACEHOLDER_REGEX_GLOBAL.test(textBody)) {
-                    const matches = textBody.match(CUSTOM_PLACEHOLDER_REGEX_GLOBAL) || [];
+                const matches = matchCustomPlaceholders(textBody);
+                if (matches.length > 0) {
+                    let parsed = null;
+                    try { parsed = JSON.parse(textBody); } catch (e) {}
+                    const cascadeId = parsed?.cascadeId || parsed?.payload?.cascadeId;
+                    const convoId = parsed?.conversationId || parsed?.payload?.conversationId;
+
                     for (const placeholder of matches) {
                         const modelConfig = modelsManager?.getModelByPlaceholder?.(placeholder);
                         if (modelConfig) {
-                            try {
-                                const parsed = JSON.parse(textBody);
-                                const cascadeId = parsed?.cascadeId || parsed?.payload?.cascadeId;
-                                const convoId = parsed?.conversationId || parsed?.payload?.conversationId;
-                                if (cascadeId) setTrackedModel(cascadeId, modelConfig);
-                                if (convoId) setTrackedModel(convoId, modelConfig);
-                            } catch (e) {}
+                            if (cascadeId) setTrackedModel(cascadeId, modelConfig);
+                            if (convoId) setTrackedModel(convoId, modelConfig);
                             setTrackedModel('latest', modelConfig);
                         }
                     }
-                    textBody = textBody.replace(CUSTOM_PLACEHOLDER_REGEX_GLOBAL, 'MODEL_PLACEHOLDER_M318');
-                    proxyHeaders['content-length'] = String(Buffer.byteLength(textBody));
                 }
                 requestBody = textBody;
             } catch (readErr) {
@@ -270,8 +268,7 @@ const MAX_CONCURRENT_STREAMS = 500;
 
 /**
  * Inspects outgoing client messages on /connect-websocket, tracks active stream IDs,
- * maps custom model placeholders to active conversation/cascade context, and rewrites
- * custom placeholders to standard fallback MODEL_PLACEHOLDER_M318 to prevent agy crashes.
+ * and maps custom model placeholders to active conversation/cascade context for translation.
  */
 function handleWebSocketClientMessage(ws, message, modelsManager, activeModelsMap = activeConversationModels) {
     if (!ws.data || !ws.data.activeStreams) return message;
@@ -309,14 +306,14 @@ function handleWebSocketClientMessage(ws, message, modelsManager, activeModelsMa
                 ws.data.activeStreams.delete(parsed.streamId);
             }
 
-            if (CUSTOM_PLACEHOLDER_REGEX_GLOBAL.test(text)) {
+            const matches = matchCustomPlaceholders(text);
+            if (matches.length > 0) {
                 if (modelsManager) {
-                    const matches = text.match(CUSTOM_PLACEHOLDER_REGEX_GLOBAL) || [];
+                    const cascadeId = parsed.payload?.cascadeId || parsed.cascadeId;
+                    const convoId = parsed.payload?.conversationId || parsed.conversationId;
                     for (const placeholder of matches) {
                         const modelConfig = modelsManager.getModelByPlaceholder(placeholder);
                         if (modelConfig) {
-                            const cascadeId = parsed.payload?.cascadeId || parsed.cascadeId;
-                            const convoId = parsed.payload?.conversationId || parsed.conversationId;
                             if (cascadeId) setTrackedModel(cascadeId, modelConfig, activeModelsMap);
                             if (convoId) setTrackedModel(convoId, modelConfig, activeModelsMap);
                             setTrackedModel('latest', modelConfig, activeModelsMap);
@@ -324,9 +321,8 @@ function handleWebSocketClientMessage(ws, message, modelsManager, activeModelsMa
                     }
                 }
 
-                // Rewrite custom placeholder to safe fallback M318 so agy executor accepts it
-                const rewrittenText = text.replace(CUSTOM_PLACEHOLDER_REGEX_GLOBAL, 'MODEL_PLACEHOLDER_M318');
-                return isBinary ? Buffer.from(rewrittenText, 'utf8') : rewrittenText;
+                // Native placeholder preservation: agy accepts M500..M649 via fetchAvailableModels interception
+                return message;
             } else {
                 // Only remove from active models if the message explicitly specifies a standard model
                 const explicitModel = parsed.payload?.cascadeConfig?.plannerConfig?.planModel ||

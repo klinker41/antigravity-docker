@@ -25,6 +25,14 @@ function isCustomPlaceholder(placeholderEnum) {
 }
 
 /**
+ * Finds all custom model placeholder enums in a text string.
+ */
+function matchCustomPlaceholders(str) {
+    if (!str || typeof str !== 'string') return [];
+    return str.match(/MODEL_PLACEHOLDER_M(5\d\d|6[0-4]\d)/g) || [];
+}
+
+/**
  * Masks an API key for safe UI display (e.g. sk-••••••••1234).
  */
 function maskApiKey(key) {
@@ -283,6 +291,7 @@ class ModelsManager {
                     label: String(model.label || '').trim() || String(model.id || '').trim(),
                     modelOrAlias: { model: placeholderEnum },
                     supportsImages: true,
+                    supportsThinking: Boolean(model.supportsThinking),
                     isRecommended: true,
                     allowedTiers: [
                         'TEAMS_TIER_PRO',
@@ -439,6 +448,7 @@ module.exports = {
     defaultManager,
     maskApiKey,
     isCustomPlaceholder,
+    matchCustomPlaceholders,
     CUSTOM_PLACEHOLDER_REGEX,
     CUSTOM_PLACEHOLDER_REGEX_GLOBAL
 };

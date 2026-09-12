@@ -3,7 +3,11 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 const http = require('node:http');
 
-const { TranslationProxy } = require('../proxy/translation-proxy');
+const {
+    TranslationProxy,
+    isFetchAvailableModels,
+    injectAvailableModels
+} = require('../proxy/translation-proxy');
 
 test('Translation Proxy - Server Lifecycle & Transparent Pass-Through', async (t) => {
     // 1. Create a mock upstream representing Google CloudCode
@@ -361,13 +365,200 @@ test('Translation Proxy - Server Lifecycle & Transparent Pass-Through', async (t
         });
         assert.equal(resolvedStandard, null, 'Standard Gemini models must not be intercepted');
 
-        // Aliased custom placeholder must resolve
-        const resolvedCustom = proxy.resolveCustomModel({
+        // Standard Gemini 3.8 Flash (M318) must also pass through directly
+        const resolvedM318 = proxy.resolveCustomModel({
             request: { model: 'MODEL_PLACEHOLDER_M318' }
+        });
+        assert.equal(resolvedM318, null, 'Standard Gemini 3.8 Flash (M318) must not be intercepted');
+
+        // Custom placeholder without direct modelsManager registration should resolve to latest
+        const resolvedCustom = proxy.resolveCustomModel({
+            request: { model: 'MODEL_PLACEHOLDER_M500' }
         });
         assert.ok(resolvedCustom, 'Custom placeholder should resolve to latest custom model');
 
         proxy.activeConversationModels.delete('latest');
+    });
+});
+
+test('Translation Proxy - isFetchAvailableModels and injectAvailableModels helpers', (t) => {
+    assert.equal(isFetchAvailableModels('/v1internal:fetchAvailableModels'), true);
+    assert.equal(isFetchAvailableModels('/v1internal/fetchAvailableModels'), true);
+    assert.equal(isFetchAvailableModels('/v1internal:streamGenerateContent'), false);
+    assert.equal(isFetchAvailableModels(null), false);
+    assert.equal(isFetchAvailableModels(''), false);
+
+    // Mock modelsManager
+    const mockModelsManager = {
+        getInjectedModels() {
+            return [
+                {
+                    label: 'Claude Fable 5.1',
+                    modelOrAlias: { model: 'MODEL_PLACEHOLDER_M592' },
+                    supportsImages: true,
+                    supportsThinking: true
+                }
+            ];
+        }
+    };
+
+    const upstreamData = {
+        models: {
+            MODEL_PLACEHOLDER_M0: { displayName: 'Gemini 3.8 Flash' }
+        },
+        agentModelSorts: [
+            {
+                groups: [
+                    { modelIds: ['MODEL_PLACEHOLDER_M0'] }
+                ]
+            }
+        ]
+    };
+
+    const result = injectAvailableModels(upstreamData, mockModelsManager);
+    assert.ok(result.models.MODEL_PLACEHOLDER_M592);
+    assert.equal(result.models.MODEL_PLACEHOLDER_M592.displayName, 'Claude Fable 5.1');
+    assert.equal(result.models.MODEL_PLACEHOLDER_M592.supportsThinking, true);
+    assert.equal(result.models.MODEL_PLACEHOLDER_M592.supportsImages, true);
+    assert.ok(result.agentModelSorts[0].groups[0].modelIds.includes('MODEL_PLACEHOLDER_M592'));
+    assert.ok(result.agentModelSorts[0].groups[0].modelIds.includes('MODEL_PLACEHOLDER_M0'));
+
+    // Handles missing or empty agentModelSorts gracefully
+    const missingSorts = injectAvailableModels({ models: {} }, mockModelsManager);
+    assert.ok(missingSorts.agentModelSorts[0].groups[0].modelIds.includes('MODEL_PLACEHOLDER_M592'));
+
+    // Safe handling of null/empty inputs
+    assert.deepEqual(injectAvailableModels(null, mockModelsManager), null);
+    assert.deepEqual(injectAvailableModels({}, null), {});
+    assert.deepEqual(injectAvailableModels({ foo: 1 }, { getInjectedModels: () => [] }), { foo: 1 });
+});
+
+test('Translation Proxy - fetchAvailableModels HTTP Interception and Placeholder Resolution', async (t) => {
+    let upstreamCalled = false;
+    let upstreamHeaders = null;
+    const mockGoogleUpstream = http.createServer((req, res) => {
+        if (req.url.includes('fetchAvailableModels')) {
+            upstreamCalled = true;
+            upstreamHeaders = req.headers;
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+                models: {
+                    MODEL_PLACEHOLDER_M0: { displayName: 'Gemini 3.8 Flash' }
+                },
+                agentModelSorts: [
+                    {
+                        groups: [
+                            { modelIds: ['MODEL_PLACEHOLDER_M0'] }
+                        ]
+                    }
+                ]
+            }));
+            return;
+        }
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'not found' }));
+    });
+
+    await new Promise((resolve) => mockGoogleUpstream.listen(0, '127.0.0.1', resolve));
+    const upstreamPort = mockGoogleUpstream.address().port;
+    const proxyPort = upstreamPort + 10;
+
+    const mockModelsManager = {
+        getInjectedModels() {
+            return [
+                {
+                    label: 'Fable 5.1',
+                    modelOrAlias: { model: 'MODEL_PLACEHOLDER_M592' },
+                    supportsImages: true,
+                    supportsThinking: true
+                }
+            ];
+        },
+        getModelByPlaceholder(placeholder) {
+            if (placeholder === 'MODEL_PLACEHOLDER_M592') {
+                return {
+                    label: 'Fable 5.1',
+                    modelId: 'custom-anthropic-claude-fable-5-1',
+                    placeholder: 'MODEL_PLACEHOLDER_M592',
+                    providerType: 'anthropic',
+                    endpoint: 'https://api.anthropic.com',
+                    apiKey: 'test-key',
+                    rawModelId: 'claude-fable-5-1',
+                    supportsThinking: true
+                };
+            }
+            return null;
+        }
+    };
+
+    const proxy = new TranslationProxy({
+        port: proxyPort,
+        upstreamUrl: `http://127.0.0.1:${upstreamPort}`,
+        modelsManager: mockModelsManager
+    });
+
+    await proxy.start();
+
+    t.after(async () => {
+        await proxy.stop();
+        mockGoogleUpstream.close();
+    });
+
+    await t.test('intercepts fetchAvailableModels and merges custom models', async () => {
+        const res = await new Promise((resolve, reject) => {
+            const req = http.request({
+                hostname: '127.0.0.1',
+                port: proxyPort,
+                path: '/v1internal:fetchAvailableModels',
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': 'Bearer test-token'
+                }
+            }, (res) => {
+                let data = '';
+                res.on('data', chunk => data += chunk);
+                res.on('end', () => resolve({
+                    statusCode: res.statusCode,
+                    headers: res.headers,
+                    body: data
+                }));
+            });
+            req.on('error', reject);
+            req.write(JSON.stringify({}));
+            req.end();
+        });
+
+        assert.equal(res.statusCode, 200);
+        assert.ok(upstreamCalled, 'Upstream must be called');
+        assert.equal(upstreamHeaders['accept-encoding'], 'identity', 'Must request uncompressed upstream response');
+        const parsed = JSON.parse(res.body);
+        assert.ok(parsed.models.MODEL_PLACEHOLDER_M0, 'Upstream standard models must be preserved');
+        assert.ok(parsed.models.MODEL_PLACEHOLDER_M592, 'Custom model must be injected');
+        assert.equal(parsed.models.MODEL_PLACEHOLDER_M592.displayName, 'Fable 5.1');
+        assert.equal(parsed.models.MODEL_PLACEHOLDER_M592.supportsThinking, true);
+        assert.ok(parsed.agentModelSorts[0].groups[0].modelIds.includes('MODEL_PLACEHOLDER_M592'));
+    });
+
+    await t.test('resolveCustomModel resolves placeholder directly from modelsManager without session mapping', () => {
+        const resolved = proxy.resolveCustomModel({
+            request: { model: 'MODEL_PLACEHOLDER_M592' }
+        });
+        assert.ok(resolved, 'Must resolve custom model directly from modelsManager');
+        assert.equal(resolved.rawModelId, 'claude-fable-5-1');
+        assert.equal(resolved.providerType, 'anthropic');
+    });
+
+    await t.test('resolveCustomModel returns null for unknown placeholder or standard model', () => {
+        const resolvedUnknown = proxy.resolveCustomModel({
+            request: { model: 'MODEL_PLACEHOLDER_M600' }
+        });
+        assert.equal(resolvedUnknown, null);
+
+        const resolvedStandard = proxy.resolveCustomModel({
+            request: { model: 'MODEL_PLACEHOLDER_M0' }
+        });
+        assert.equal(resolvedStandard, null);
     });
 });
 

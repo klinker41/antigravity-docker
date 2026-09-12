@@ -14,7 +14,7 @@ const {
 const { CUSTOM_PLACEHOLDER_REGEX } = require('./lib/models-manager.js');
 
 const DEFAULT_PORT = parseInt(process.env.TRANSLATION_PORT || '4405', 10);
-const DEFAULT_UPSTREAM = process.env.CLOUDCODE_UPSTREAM_URL || 'https://cloudcode-pa.googleapis.com';
+const DEFAULT_UPSTREAM = process.env.CLOUDCODE_UPSTREAM_URL || 'https://daily-cloudcode-pa.googleapis.com';
 
 const HOP_BY_HOP_HEADERS = new Set([
     'connection',
@@ -38,6 +38,59 @@ function filterHeaders(headers) {
 function isStreamGenerateContent(url) {
     if (!url) return false;
     return url.includes(':streamGenerateContent') || url.includes('/streamGenerateContent');
+}
+
+function isFetchAvailableModels(url) {
+    if (!url) return false;
+    return url.includes(':fetchAvailableModels') || url.includes('/fetchAvailableModels');
+}
+
+function injectAvailableModels(data, modelsManager) {
+    if (!data || typeof data !== 'object' || !modelsManager) return data;
+    if (typeof modelsManager.getInjectedModels !== 'function') return data;
+
+    const injected = modelsManager.getInjectedModels();
+    if (!injected || injected.length === 0) return data;
+
+    data.models = data.models || {};
+
+    for (const m of injected) {
+        const placeholderEnum = m.modelOrAlias?.model;
+        if (!placeholderEnum) continue;
+
+        data.models[placeholderEnum] = {
+            displayName: m.label,
+            supportsImages: Boolean(m.supportsImages),
+            supportsThinking: Boolean(m.supportsThinking),
+            thinkingBudget: 2048,
+            minThinkingBudget: 1024,
+            recommended: true,
+            maxTokens: 128000,
+            maxOutputTokens: 8192,
+            model: placeholderEnum,
+            quotaInfo: {
+                remainingFraction: 1.0
+            }
+        };
+    }
+
+    if (!Array.isArray(data.agentModelSorts) || data.agentModelSorts.length === 0) {
+        data.agentModelSorts = [{ groups: [{ modelIds: [] }] }];
+    }
+    const sort = data.agentModelSorts[0];
+    if (!Array.isArray(sort.groups) || sort.groups.length === 0) {
+        sort.groups = [{ modelIds: [] }];
+    }
+    const group = sort.groups[0];
+    group.modelIds = group.modelIds || [];
+    for (const m of injected) {
+        const placeholderEnum = m.modelOrAlias?.model;
+        if (placeholderEnum && !group.modelIds.includes(placeholderEnum)) {
+            group.modelIds.push(placeholderEnum);
+        }
+    }
+
+    return data;
 }
 
 function normalizeFinishReason(reason) {
@@ -109,6 +162,12 @@ class TranslationProxy {
             return;
         }
 
+        // Intercept Gemini fetchAvailableModels requests
+        if (isFetchAvailableModels(parsedUrl.pathname) && req.method === 'POST') {
+            this.handleFetchAvailableModels(req, res);
+            return;
+        }
+
         // Intercept Gemini streamGenerateContent requests
         if (isStreamGenerateContent(parsedUrl.pathname) && req.method === 'POST') {
             this.handleStreamGenerateContent(req, res);
@@ -120,6 +179,19 @@ class TranslationProxy {
     }
 
     resolveCustomModel(parsedData) {
+        const modelStr = parsedData?.model || parsedData?.request?.model;
+
+        // 1. Direct model lookup by placeholder if modelsManager is present
+        if (modelStr && this.modelsManager && typeof this.modelsManager.getModelByPlaceholder === 'function') {
+            const custom = this.modelsManager.getModelByPlaceholder(modelStr);
+            if (custom) return custom;
+        }
+
+        // 2. Explicit standard model guard: if an explicit non-custom model is requested, pass through directly
+        if (typeof modelStr === 'string' && modelStr.length > 0 && !CUSTOM_PLACEHOLDER_REGEX.test(modelStr)) {
+            return null;
+        }
+
         if (!this.activeConversationModels || this.activeConversationModels.size === 0) {
             return null;
         }
@@ -132,14 +204,6 @@ class TranslationProxy {
         const convoId = parsedData?.conversationId || parsedData?.request?.conversationId || parsedData?.request?.sessionId;
         if (convoId && this.activeConversationModels.has(convoId)) {
             return this.activeConversationModels.get(convoId);
-        }
-
-        // Guard: If request explicitly targets a standard model that is NOT aliased, pass through
-        const modelStr = parsedData?.model || parsedData?.request?.model;
-        if (typeof modelStr === 'string' && modelStr.length > 0) {
-            if (!modelStr.includes('M318') && !CUSTOM_PLACEHOLDER_REGEX.test(modelStr)) {
-                return null;
-            }
         }
 
         if (this.activeConversationModels.has('latest')) {
@@ -328,8 +392,103 @@ class TranslationProxy {
         }
     }
 
+    handleFetchAvailableModels(req, res) {
+        const chunks = [];
+        req.on('data', chunk => chunks.push(chunk));
+        req.on('error', (err) => {
+            console.error('[Translation Proxy] Request error in fetchAvailableModels:', err.message);
+            if (!res.headersSent && !res.writableEnded) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: err.message }));
+            }
+        });
+        req.on('end', () => {
+            const rawBodyBuffer = Buffer.concat(chunks);
+            const parsedReq = new URL(req.url, 'http://127.0.0.1');
+            const targetUrl = new URL(parsedReq.pathname + parsedReq.search, this.upstreamUrl);
+            const isHttps = targetUrl.protocol === 'https:';
+            const client = isHttps ? https : http;
+
+            const headers = filterHeaders(req.headers);
+            headers['host'] = targetUrl.host;
+            headers['accept-encoding'] = 'identity';
+            headers['content-length'] = String(rawBodyBuffer.length);
+
+            const proxyReq = client.request(targetUrl, {
+                method: req.method,
+                headers,
+                timeout: 30000
+            }, (proxyRes) => {
+                proxyRes.on('error', (err) => {
+                    console.error('[Translation Proxy] Upstream response error in fetchAvailableModels:', err.message);
+                    proxyReq.destroy(err);
+                });
+
+                const upstreamChunks = [];
+                proxyRes.on('data', chunk => upstreamChunks.push(chunk));
+                proxyRes.on('end', () => {
+                    const upstreamBody = Buffer.concat(upstreamChunks).toString('utf8');
+                    let data = {};
+                    try {
+                        data = JSON.parse(upstreamBody);
+                    } catch (e) {
+                        const resHeaders = filterHeaders(proxyRes.headers);
+                        res.writeHead(proxyRes.statusCode, resHeaders);
+                        res.end(upstreamBody);
+                        return;
+                    }
+
+                    if (proxyRes.statusCode >= 200 && proxyRes.statusCode < 300 && this.modelsManager) {
+                        data = injectAvailableModels(data, this.modelsManager);
+                    }
+
+                    const modifiedBody = JSON.stringify(data);
+                    const resHeaders = filterHeaders(proxyRes.headers);
+                    delete resHeaders['content-encoding'];
+                    resHeaders['content-length'] = Buffer.byteLength(modifiedBody);
+                    resHeaders['content-type'] = 'application/json; charset=utf-8';
+                    res.writeHead(proxyRes.statusCode, resHeaders);
+                    res.end(modifiedBody);
+                });
+            });
+
+            res.on('close', () => {
+                if (!res.writableEnded && !proxyReq.destroyed) {
+                    proxyReq.destroy();
+                }
+            });
+
+            proxyReq.on('timeout', () => {
+                proxyReq.destroy(new Error('Gateway timeout after 30000ms'));
+            });
+
+            proxyReq.on('error', (err) => {
+                console.error('[Translation Proxy] Upstream fetchAvailableModels error:', err.message);
+                if (res.headersSent || res.writableEnded) {
+                    res.destroy();
+                    return;
+                }
+                // Offline fallback: return custom models if upstream is unreachable
+                let data = { models: {}, agentModelSorts: [{ groups: [{ modelIds: [] }] }] };
+                if (this.modelsManager) {
+                    data = injectAvailableModels(data, this.modelsManager);
+                }
+                const body = JSON.stringify(data);
+                res.writeHead(200, {
+                    'content-type': 'application/json; charset=utf-8',
+                    'content-length': Buffer.byteLength(body)
+                });
+                res.end(body);
+            });
+
+            proxyReq.write(rawBodyBuffer);
+            proxyReq.end();
+        });
+    }
+
     forwardPassThrough(req, res, rawBodyBuffer = null) {
-        const targetUrl = new URL(req.url, this.upstreamUrl);
+        const parsedReq = new URL(req.url, 'http://127.0.0.1');
+        const targetUrl = new URL(parsedReq.pathname + parsedReq.search, this.upstreamUrl);
         const isHttps = targetUrl.protocol === 'https:';
         const client = isHttps ? https : http;
 
@@ -383,7 +542,8 @@ class TranslationProxy {
 }
 
 if (require.main === module) {
-    const proxy = new TranslationProxy();
+    const { defaultManager } = require('./lib/models-manager.js');
+    const proxy = new TranslationProxy({ modelsManager: defaultManager });
     proxy.start().catch((err) => {
         console.error('[Translation Proxy] Startup failed:', err);
         process.exit(1);
@@ -394,5 +554,7 @@ module.exports = {
     TranslationProxy,
     DEFAULT_PORT,
     DEFAULT_UPSTREAM,
-    isStreamGenerateContent
+    isStreamGenerateContent,
+    isFetchAvailableModels,
+    injectAvailableModels
 };
