@@ -1,7 +1,5 @@
 'use strict';
 
-const http = require('node:http');
-const { TERMINAL_PORT, IDE_PORT, ENABLE_IDE, ENABLE_TERMINAL } = require('./config');
 const { replaceFaviconInHtml } = require('./favicon');
 const { renderServiceStartingPage } = require('./pages');
 const { INJECTED_UI_STYLES, buildInjectedScript } = require('./ui-injection');
@@ -16,185 +14,6 @@ const HOP_BY_HOP_HEADERS = new Set([
     'upgrade',
 ]);
 
-// Dedicated persistent HTTP Agent for upstream proxy requests
-const proxyAgent = new http.Agent({
-    keepAlive: true,
-    keepAliveMsecs: 30000,
-    maxSockets: 256,
-    maxFreeSockets: 64,
-    timeout: 0
-});
-
-// Strip hop-by-hop headers from an incoming headers object
-function filterHopByHop(headers) {
-    const out = {};
-    for (const [key, value] of Object.entries(headers)) {
-        if (!HOP_BY_HOP_HEADERS.has(key.toLowerCase())) {
-            out[key] = value;
-        }
-    }
-    return out;
-}
-
-// Buffer an HTML response, apply a transform, then send it.
-// Owns the res.writeHead() call to ensure Content-Length is correct after
-// transformation. Falls back to streaming if the response exceeds MAX_HTML_BUFFER_BYTES.
-function interceptHtmlResponse(proxyRes, res, statusCode, resHeaders, transform) {
-    const MAX_HTML_BUFFER_BYTES = 5 * 1024 * 1024;
-    const chunks = [];
-    let totalLength = 0;
-    let tooLarge = false;
-
-    proxyRes.on('data', (chunk) => {
-        if (tooLarge) {
-            res.write(chunk);
-            return;
-        }
-        totalLength += chunk.length;
-        if (totalLength > MAX_HTML_BUFFER_BYTES) {
-            tooLarge = true;
-            // Headers not yet sent — write them now before streaming
-            res.writeHead(statusCode, resHeaders);
-            res.flushHeaders();
-            for (const c of chunks) res.write(c);
-            res.write(chunk);
-            return;
-        }
-        chunks.push(chunk);
-    });
-
-    proxyRes.on('end', () => {
-        if (tooLarge) {
-            res.end();
-            return;
-        }
-        let html = Buffer.concat(chunks).toString('utf8');
-        html = transform(html);
-        // Update content-length to reflect transformed HTML size, then send
-        resHeaders['content-length'] = Buffer.byteLength(html, 'utf8');
-        delete resHeaders['content-encoding'];
-        res.writeHead(statusCode, resHeaders);
-        res.end(html);
-    });
-}
-
-// Forward request to ttyd Web Terminal
-function proxyToTerminal(req, res, targetPath) {
-    if (req.socket) req.socket.setNoDelay(true);
-    if (res.socket) res.socket.setNoDelay(true);
-
-    const proxyHeaders = filterHopByHop(req.headers);
-    proxyHeaders['host'] = `localhost:${TERMINAL_PORT}`;
-    proxyHeaders['origin'] = `http://localhost:${TERMINAL_PORT}`;
-
-    // Request uncompressed body only for top-level HTML requests to preserve compression on web assets
-    const wantsHtml = (req.headers.accept || '').includes('text/html') || targetPath === '/' || targetPath === '/terminal' || targetPath === '/terminal/';
-    if (wantsHtml) {
-        proxyHeaders['accept-encoding'] = 'identity';
-    }
-
-    const proxyReq = http.request({
-        hostname: '127.0.0.1',
-        port: TERMINAL_PORT,
-        path: targetPath,
-        method: req.method,
-        headers: proxyHeaders,
-        agent: proxyAgent
-    }, (proxyRes) => {
-        if (proxyRes.socket) proxyRes.socket.setNoDelay(true);
-
-        const resHeaders = filterHopByHop(proxyRes.headers);
-        resHeaders['x-accel-buffering'] = 'no';
-
-        const encoding = resHeaders['content-encoding'];
-        const isUncompressed = !encoding || encoding === 'identity';
-        const isHtmlResponse = (resHeaders['content-type'] || '').includes('text/html') && isUncompressed;
-        if (isHtmlResponse && req.method === 'GET') {
-            interceptHtmlResponse(proxyRes, res, proxyRes.statusCode, resHeaders, (html) => {
-                html = replaceFaviconInHtml(html);
-                html = html.replace(/<title>ttyd - Terminal<\/title>/i, '<title>Antigravity Terminal</title>');
-                return html;
-            });
-            return;
-        }
-
-        res.writeHead(proxyRes.statusCode, resHeaders);
-        res.flushHeaders();
-        proxyRes.pipe(res);
-    });
-
-    proxyReq.on('error', (err) => {
-        if (!res.headersSent) {
-            res.writeHead(503, { 'Content-Type': 'text/html; charset=utf-8' });
-            res.end(renderServiceStartingPage('Host Terminal'));
-        } else {
-            res.destroy();
-        }
-    });
-
-    req.pipe(proxyReq, { end: true });
-}
-
-// Forward request to code-server Web IDE
-function proxyToIde(req, res, targetPath) {
-    if (req.socket) req.socket.setNoDelay(true);
-    if (res.socket) res.socket.setNoDelay(true);
-
-    const proxyHeaders = filterHopByHop(req.headers);
-    proxyHeaders['host'] = `localhost:${IDE_PORT}`;
-    proxyHeaders['origin'] = `http://localhost:${IDE_PORT}`;
-
-    // Request uncompressed body only for top-level HTML requests to preserve gzip/brotli on IDE bundles
-    const wantsHtml = (req.headers.accept || '').includes('text/html') || targetPath === '/' || targetPath.startsWith('/?');
-    if (wantsHtml) {
-        proxyHeaders['accept-encoding'] = 'identity';
-    }
-
-    const proxyReq = http.request({
-        hostname: '127.0.0.1',
-        port: IDE_PORT,
-        path: targetPath,
-        method: req.method,
-        headers: proxyHeaders,
-        agent: proxyAgent
-    }, (proxyRes) => {
-        if (proxyRes.socket) proxyRes.socket.setNoDelay(true);
-
-        const resHeaders = filterHopByHop(proxyRes.headers);
-
-        // Rewrite Location headers to stay under the /ide prefix
-        if (resHeaders['location'] && typeof resHeaders['location'] === 'string') {
-            if (resHeaders['location'].startsWith('/')) {
-                resHeaders['location'] = '/ide' + resHeaders['location'];
-            }
-        }
-        resHeaders['x-accel-buffering'] = 'no';
-
-        const encoding = resHeaders['content-encoding'];
-        const isUncompressed = !encoding || encoding === 'identity';
-        const isHtmlResponse = (resHeaders['content-type'] || '').includes('text/html') && isUncompressed;
-        if (isHtmlResponse && req.method === 'GET') {
-            interceptHtmlResponse(proxyRes, res, proxyRes.statusCode, resHeaders, replaceFaviconInHtml);
-            return;
-        }
-
-        res.writeHead(proxyRes.statusCode, resHeaders);
-        res.flushHeaders();
-        proxyRes.pipe(res);
-    });
-
-    proxyReq.on('error', (err) => {
-        if (!res.headersSent) {
-            res.writeHead(503, { 'Content-Type': 'text/html; charset=utf-8' });
-            res.end(renderServiceStartingPage('Web IDE'));
-        } else {
-            res.destroy();
-        }
-    });
-
-    req.pipe(proxyReq, { end: true });
-}
-
 // Helper to determine if a request path corresponds to a browser SPA frontend route
 function isSpaRoute(pathname) {
     if (pathname === '/' || pathname === '/index.html') return true;
@@ -205,70 +24,117 @@ function isSpaRoute(pathname) {
     return false;
 }
 
-// Proxy HTTP request to the main Antigravity upstream (agy), injecting tools UI on HTML responses
-function proxyToUpstream(req, res, targetPort, sidecarManager, modelsManager) {
-    if (req.socket) req.socket.setNoDelay(true);
-    if (res.socket) res.socket.setNoDelay(true);
+// Convert headers to a standard lowercased key-value map filtering hop-by-hop headers
+function getHeaderMap(headers) {
+    const out = {};
+    if (headers && typeof headers.entries === 'function') {
+        for (const [k, v] of headers.entries()) {
+            if (!HOP_BY_HOP_HEADERS.has(k.toLowerCase())) {
+                out[k.toLowerCase()] = v;
+            }
+        }
+    } else if (headers && typeof headers === 'object') {
+        for (const [k, v] of Object.entries(headers)) {
+            if (!HOP_BY_HOP_HEADERS.has(k.toLowerCase())) {
+                out[k.toLowerCase()] = v;
+            }
+        }
+    }
+    return out;
+}
 
-    const parsedUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+// Modern Web standard reverse proxy handler for Hono & Bun
+async function proxyWebRequest(c, targetPort, targetPath, options = {}) {
+    const { isTerminal, isIde, isUpstream, sidecarManager, modelsManager } = options;
 
-    const proxyHeaders = filterHopByHop(req.headers);
-    proxyHeaders['host'] = `localhost:${targetPort}`;
-    proxyHeaders['origin'] = `http://localhost:${targetPort}`;
-    if (req.headers['referer']) {
-        proxyHeaders['referer'] = req.headers['referer'].replace(/^https?:\/\/[^/]+/, `http://localhost:${targetPort}`);
+    // Guard against scheme-relative URLs and SSRF: ensure targetPath starts with single slash
+    const safePath = '/' + targetPath.replace(/^\/+/, '');
+    const targetUrl = new URL(safePath, `http://127.0.0.1:${targetPort}`);
+    if (targetUrl.hostname !== '127.0.0.1' || targetUrl.port !== String(targetPort)) {
+        return c.text('Invalid proxy target', 400);
     }
 
+    const proxyHeaders = getHeaderMap(c.req.raw.headers);
+    proxyHeaders['host'] = `localhost:${targetPort}`;
+    proxyHeaders['origin'] = `http://localhost:${targetPort}`;
+
+    const referer = c.req.header('referer');
+    if (referer) {
+        proxyHeaders['referer'] = referer.replace(/^https?:\/\/[^/]+/, `http://localhost:${targetPort}`);
+    }
+
+    const parsedUrl = new URL(c.req.raw.url);
     const shouldInterceptModels = Boolean(
+        isUpstream &&
         modelsManager &&
-        modelsManager.hasEnabledModels &&
+        typeof modelsManager.hasEnabledModels === 'function' &&
         modelsManager.hasEnabledModels() &&
         parsedUrl.pathname.endsWith('/GetCascadeModelConfigData')
     );
 
-    // Request uncompressed body only for SPA document routes, HTML requests, and intercepted model configs
-    if (isSpaRoute(parsedUrl.pathname) || (req.headers.accept || '').includes('text/html') || shouldInterceptModels) {
+    const wantsHtml = (c.req.header('accept') || '').includes('text/html') ||
+        targetPath === '/' || targetPath === '/terminal' || targetPath === '/terminal/' || targetPath.startsWith('/?') ||
+        shouldInterceptModels;
+    if (wantsHtml) {
         proxyHeaders['accept-encoding'] = 'identity';
     }
 
-    const proxyReq = http.request({
-        hostname: '127.0.0.1',
-        port: targetPort,
-        path: req.url,
-        method: req.method,
-        headers: proxyHeaders,
-        agent: proxyAgent,
-    }, (proxyRes) => {
-        if (proxyRes.socket) proxyRes.socket.setNoDelay(true);
+    const hasBody = c.req.method !== 'GET' && c.req.method !== 'HEAD';
 
-        const resHeaders = filterHopByHop(proxyRes.headers);
+    try {
+        const upstreamRes = await fetch(targetUrl.toString(), {
+            method: c.req.method,
+            headers: proxyHeaders,
+            body: hasBody ? c.req.raw.body : undefined,
+            redirect: 'manual',
+            // @ts-ignore
+            duplex: 'half'
+        });
+
+        const resHeaders = new Headers();
+        for (const [key, value] of upstreamRes.headers.entries()) {
+            if (!HOP_BY_HOP_HEADERS.has(key.toLowerCase()) && key.toLowerCase() !== 'content-encoding') {
+                resHeaders.set(key, value);
+            }
+        }
+        resHeaders.set('x-accel-buffering', 'no');
 
         const allowedOrigins = process.env.ALLOWED_ORIGINS
             ? new Set(process.env.ALLOWED_ORIGINS.split(',').map(s => s.trim()))
             : null;
-        if (resHeaders['access-control-allow-origin'] && req.headers.origin) {
-            if (allowedOrigins && allowedOrigins.has(req.headers.origin)) {
-                resHeaders['access-control-allow-origin'] = req.headers.origin;
+        const originHeader = c.req.header('origin');
+        if (upstreamRes.headers.has('access-control-allow-origin') && originHeader) {
+            if (allowedOrigins && allowedOrigins.has(originHeader)) {
+                resHeaders.set('access-control-allow-origin', originHeader);
             } else if (!allowedOrigins) {
-                delete resHeaders['access-control-allow-origin'];
+                resHeaders.delete('access-control-allow-origin');
             }
         }
 
-        resHeaders['x-accel-buffering'] = 'no';
+        if (isIde && resHeaders.has('location')) {
+            const loc = resHeaders.get('location');
+            if (loc && loc.startsWith('/')) {
+                resHeaders.set('location', '/ide' + loc);
+            }
+        }
 
-        const encoding = resHeaders['content-encoding'];
-        const isUncompressed = !encoding || encoding === 'identity';
-        const isHtmlResponse = (resHeaders['content-type'] || '').includes('text/html') && isUncompressed;
+        const contentType = upstreamRes.headers.get('content-type') || '';
+        const isHtmlResponse = contentType.includes('text/html');
 
-        // INTERCEPT HTML RESPONSES TO INJECT WORKSPACE TOOLS BUTTONS AND OVERRIDE FAVICON
-        if (isHtmlResponse && req.method === 'GET') {
-            interceptHtmlResponse(proxyRes, res, proxyRes.statusCode, resHeaders, (html) => {
+        if (isHtmlResponse && c.req.method === 'GET') {
+            let html = await upstreamRes.text();
+
+            if (isTerminal) {
+                html = replaceFaviconInHtml(html);
+                html = html.replace(/<title>ttyd - Terminal<\/title>/i, '<title>Antigravity Terminal</title>');
+            } else if (isIde) {
+                html = replaceFaviconInHtml(html);
+            } else if (isUpstream) {
                 const csrfMatch = html.match(/"csrfToken":"([^"]+)"/);
                 if (csrfMatch && sidecarManager) {
                     sidecarManager.setCsrfToken(csrfMatch[1]);
                 }
 
-                // Remove existing upstream/emoji favicon tags and inject Antigravity favicon
                 html = replaceFaviconInHtml(html);
 
                 const customScript = buildInjectedScript();
@@ -282,187 +148,58 @@ function proxyToUpstream(req, res, targetPort, sidecarManager, modelsManager) {
                         html += injection;
                     }
                 }
-                return html;
+            }
+
+            resHeaders.delete('content-length');
+            return new Response(html, {
+                status: upstreamRes.status,
+                headers: resHeaders
             });
-            return;
         }
 
-        // INTERCEPT MODEL CONFIG DATA ONLY IF CUSTOM MODELS ARE CONFIGURED & ENABLED
         if (shouldInterceptModels) {
-            const chunks = [];
-            proxyRes.on('data', chunk => chunks.push(chunk));
-            proxyRes.on('end', () => {
-                try {
-                    let json = Buffer.concat(chunks).toString('utf8');
-                    const data = JSON.parse(json);
-                    const injected = modelsManager.getInjectedModels();
-                    if (injected && injected.length > 0) {
-                        data.clientModelConfigs = data.clientModelConfigs || [];
-                        data.clientModelConfigs.push(...injected);
+            try {
+                const data = await upstreamRes.json();
+                const injected = modelsManager.getInjectedModels();
+                if (injected && injected.length > 0) {
+                    data.clientModelConfigs = data.clientModelConfigs || [];
+                    data.clientModelConfigs.push(...injected);
 
-                        if (Array.isArray(data.clientModelSorts) && data.clientModelSorts.length > 0) {
-                            const group = data.clientModelSorts[0].groups?.[0];
-                            if (group && Array.isArray(group.modelLabels)) {
-                                for (const m of injected) {
-                                    if (!group.modelLabels.includes(m.label)) {
-                                        group.modelLabels.push(m.label);
-                                    }
+                    if (Array.isArray(data.clientModelSorts) && data.clientModelSorts.length > 0) {
+                        const group = data.clientModelSorts[0].groups?.[0];
+                        if (group && Array.isArray(group.modelLabels)) {
+                            for (const m of injected) {
+                                if (!group.modelLabels.includes(m.label)) {
+                                    group.modelLabels.push(m.label);
                                 }
                             }
                         }
-                        json = JSON.stringify(data);
                     }
-                    resHeaders['content-length'] = Buffer.byteLength(json, 'utf8');
-                    delete resHeaders['content-encoding'];
-                    res.writeHead(proxyRes.statusCode, resHeaders);
-                    res.end(json);
-                } catch (e) {
-                    const raw = Buffer.concat(chunks);
-                    resHeaders['content-length'] = raw.length;
-                    res.writeHead(proxyRes.statusCode, resHeaders);
-                    res.end(raw);
                 }
-            });
-            return;
+                return c.json(data, upstreamRes.status, Object.fromEntries(resHeaders.entries()));
+            } catch (e) {
+                // fallback to raw response
+            }
         }
 
-        res.writeHead(proxyRes.statusCode, resHeaders);
-        res.flushHeaders();
-        proxyRes.pipe(res);
-    });
-
-    proxyReq.on('socket', (sock) => {
-        sock.setNoDelay(true);
-    });
-
-    const clientAbortHandler = () => {
-        if (!res.writableFinished && !res.writableEnded && !proxyReq.destroyed) {
-            proxyReq.destroy();
-        }
-    };
-
-    res.on('close', clientAbortHandler);
-    res.on('error', clientAbortHandler);
-    req.on('error', clientAbortHandler);
-
-    proxyReq.on('error', (err) => {
-        console.error('[HTTP Proxy Error]', err.message);
-        if (!res.headersSent) {
-            res.writeHead(502, { 'Content-Type': 'text/plain' });
-            res.end('Antigravity upstream server unavailable.');
+        return new Response(upstreamRes.body, {
+            status: upstreamRes.status,
+            headers: resHeaders
+        });
+    } catch (err) {
+        console.error(`[HTTP Gateway Upstream Error] ${c.req.method} ${targetPath} -> port ${targetPort}:`, err.message);
+        if (isTerminal) {
+            return c.html(renderServiceStartingPage('Host Terminal'), 503);
+        } else if (isIde) {
+            return c.html(renderServiceStartingPage('Web IDE'), 503);
         } else {
-            res.destroy();
-        }
-    });
-
-    req.pipe(proxyReq, { end: true });
-}
-
-// Helper to serialize HTTP status and headers into raw wire format
-function formatRawHttpResponse(statusCode, statusMessage, headers) {
-    let raw = `HTTP/1.1 ${statusCode}${statusMessage ? ' ' + statusMessage : ''}\r\n`;
-    for (const [key, value] of Object.entries(headers)) {
-        if (Array.isArray(value)) {
-            for (const v of value) raw += `${key}: ${v}\r\n`;
-        } else {
-            raw += `${key}: ${value}\r\n`;
+            return c.text('Antigravity upstream server unavailable.', 502);
         }
     }
-    raw += '\r\n';
-    return raw;
-}
-
-// Handle WebSocket / Upgrade requests
-function handleWebSocketUpgrade(req, clientSocket, head, targetPort) {
-    const parsedUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
-    let wsTargetPort = targetPort;
-    let wsTargetPath = req.url;
-
-    if (parsedUrl.pathname.startsWith('/terminal')) {
-        if (!ENABLE_TERMINAL) {
-            clientSocket.write('HTTP/1.1 404 Not Found\r\n\r\n');
-            clientSocket.destroy();
-            return;
-        }
-        wsTargetPort = TERMINAL_PORT;
-        wsTargetPath = req.url;
-    } else if (parsedUrl.pathname.startsWith('/ide')) {
-        if (!ENABLE_IDE) {
-            clientSocket.write('HTTP/1.1 404 Not Found\r\n\r\n');
-            clientSocket.destroy();
-            return;
-        }
-        wsTargetPort = IDE_PORT;
-        wsTargetPath = req.url.replace(/^\/ide/, '') || '/';
-    } else {
-        if (!targetPort) {
-            clientSocket.write('HTTP/1.1 503 Service Unavailable\r\n\r\n');
-            clientSocket.destroy();
-            return;
-        }
-        wsTargetPort = targetPort;
-    }
-
-    clientSocket.setNoDelay(true);
-
-    const proxyHeaders = { ...req.headers };
-    proxyHeaders['host'] = `localhost:${wsTargetPort}`;
-    proxyHeaders['origin'] = `http://localhost:${wsTargetPort}`;
-    if (proxyHeaders['referer']) {
-        proxyHeaders['referer'] = proxyHeaders['referer'].replace(/^https?:\/\/[^/]+/, `http://localhost:${wsTargetPort}`);
-    }
-
-    const upstreamReq = http.request({
-        hostname: '127.0.0.1',
-        port: wsTargetPort,
-        path: wsTargetPath,
-        method: req.method,
-        headers: proxyHeaders,
-        agent: false,
-    });
-
-    upstreamReq.on('upgrade', (upstreamRes, upstreamSocket, upstreamHead) => {
-        upstreamSocket.setNoDelay(true);
-
-        const rawResponse = formatRawHttpResponse(101, 'Switching Protocols', upstreamRes.headers);
-        clientSocket.write(rawResponse);
-        if (upstreamHead && upstreamHead.length > 0) clientSocket.write(upstreamHead);
-        if (head && head.length > 0) upstreamSocket.write(head);
-
-        upstreamSocket.pipe(clientSocket);
-        clientSocket.pipe(upstreamSocket);
-
-        const cleanup = () => {
-            upstreamSocket.destroy();
-            clientSocket.destroy();
-        };
-
-        upstreamSocket.on('error', cleanup);
-        clientSocket.on('error', cleanup);
-        upstreamSocket.on('close', cleanup);
-        clientSocket.on('close', cleanup);
-        upstreamSocket.on('end', () => clientSocket.end());
-        clientSocket.on('end', () => upstreamSocket.end());
-    });
-
-    upstreamReq.on('response', (upstreamRes) => {
-        const rawResponse = formatRawHttpResponse(upstreamRes.statusCode, upstreamRes.statusMessage || '', upstreamRes.headers);
-        clientSocket.write(rawResponse);
-        upstreamRes.pipe(clientSocket);
-    });
-
-    upstreamReq.on('error', (err) => {
-        console.error('[WebSocket Upgrade Error]', err.message);
-        clientSocket.destroy();
-    });
-
-    upstreamReq.end();
 }
 
 module.exports = {
-    proxyToTerminal,
-    proxyToIde,
     isSpaRoute,
-    proxyToUpstream,
-    handleWebSocketUpgrade,
+    proxyWebRequest,
+    replaceFaviconInHtml,
 };

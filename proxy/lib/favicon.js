@@ -76,7 +76,7 @@ function isFaviconRequest(pathname) {
     return false;
 }
 
-function handleFaviconRequest(req, res, pathname) {
+function getFaviconAsset(pathname) {
     let contentType = 'image/svg+xml; charset=utf-8';
     let data = FAVICON_SVG_BUFFER;
 
@@ -101,6 +101,12 @@ function handleFaviconRequest(req, res, pathname) {
         contentType = 'image/png';
         data = getCachedAsset('favicon.png', FAVICON_SVG_BUFFER);
     }
+
+    return { contentType, data };
+}
+
+function handleFaviconRequest(req, res, pathname) {
+    const { contentType, data } = getFaviconAsset(pathname);
 
     res.writeHead(200, {
         'Content-Type': contentType,
@@ -134,6 +140,7 @@ module.exports = {
     FAVICON_SVG_CONTENT,
     FAVICON_SVG_BUFFER,
     isFaviconRequest,
+    getFaviconAsset,
     handleFaviconRequest,
     replaceFaviconInHtml,
 };

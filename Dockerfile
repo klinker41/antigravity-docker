@@ -116,6 +116,10 @@ RUN if [ -d /usr/lib/code-server/src/browser/media ]; then \
         cp /usr/local/share/antigravity/assets/favicon.ico /usr/lib/code-server/lib/vscode/resources/server/favicon.ico 2>/dev/null || true; \
     fi
 
+COPY package.json /usr/local/bin/package.json
+COPY bun.lock /usr/local/bin/bun.lock
+RUN cd /usr/local/bin && bun install --production --frozen-lockfile
+
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY proxy/ /usr/local/bin/
 COPY scripts/host-terminal.sh /usr/local/bin/host-terminal.sh

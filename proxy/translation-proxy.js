@@ -1,3 +1,4 @@
+#!/usr/bin/env bun
 'use strict';
 
 const http = require('node:http');

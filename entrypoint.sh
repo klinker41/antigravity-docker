@@ -96,7 +96,7 @@ fi
 # Scan /workspace and register each folder as a separate project in ~/.gemini/config/projects/<UUID>.json
 # only if the projects folder is empty
 if [ -z "$(ls -A "$GEMINI_DIR/config/projects" 2>/dev/null)" ]; then
-    node -e '
+    bun -e '
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
@@ -365,7 +365,7 @@ case "$1" in
         export HOST_SSH_HOST="${HOST_SSH_HOST:-host.docker.internal}"
         export HOST_SSH_PORT="${HOST_SSH_PORT:-22}"
         export HOST_SSH_DIR="${HOST_SSH_DIR:-}"
-        gosu "$DEVELOPER_USER" node /usr/local/bin/auth-proxy.js &
+        gosu "$DEVELOPER_USER" bun /usr/local/bin/auth-proxy.js &
 
         if [ ! -s "$TOKEN_FILE" ]; then
             echo "==================================================================="

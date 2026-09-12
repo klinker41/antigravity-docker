@@ -1,0 +1,11 @@
+{
+  "name": "antigravity-docker",
+  "version": "1.0.0",
+  "scripts": {
+    "start": "bun run proxy/auth-proxy.js",
+    "test": "bun test ./tests/*.js"
+  },
+  "dependencies": {
+    "hono": "^4.13.7"
+  }
+}

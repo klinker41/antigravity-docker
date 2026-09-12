@@ -6,7 +6,8 @@ with built-in password protection, an integrated **Sidecar Manager** for
 scheduled agent prompts and autonomous workers, a **VS Code Web IDE** for
 inspecting project files, a **Host Web Terminal** for running commands on
 the host machine, and **External Model Providers** for using Claude 3.5/3.7,
-OpenAI GPT-4o, or local Ollama directly in Antigravity.
+OpenAI GPT-4o, or local Ollama directly in Antigravity. The web gateway is
+powered by **Bun** and **Hono** for ultra-fast startup and low memory usage.
 
 ---
 
