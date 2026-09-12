@@ -638,4 +638,167 @@ test('Stream Transcoder - Anthropic & OpenAI Event Normalization', async (t) => 
         assert.equal(attempts, 2);
         assert.equal(events.find(e => e.type === 'text')?.text, 'Fell back to responses!');
     });
+
+    await t.test('callAnthropicStream sets budget_tokens and max_tokens based on thinkingLevel', async () => {
+        let capturedPayload = null;
+        const mockServer = http.createServer((req, res) => {
+            let body = '';
+            req.on('data', chunk => body += chunk);
+            req.on('end', () => {
+                capturedPayload = JSON.parse(body);
+                res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+                res.write('event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}\n\n');
+                res.end();
+            });
+        });
+
+        await new Promise((resolve) => mockServer.listen(0, '127.0.0.1', resolve));
+        const port = mockServer.address().port;
+
+        // Test High thinking level
+        await callAnthropicStream({
+            endpoint: `http://127.0.0.1:${port}`,
+            apiKey: 'test-key',
+            model: 'claude-3-7-sonnet',
+            messages: [{ role: 'user', content: 'Hi' }],
+            supportsThinking: true,
+            thinkingLevel: 'high',
+            onEvent: () => {}
+        });
+
+        assert.equal(capturedPayload.thinking.type, 'enabled');
+        assert.equal(capturedPayload.thinking.budget_tokens, 32768);
+        assert.ok(capturedPayload.max_tokens >= 36864);
+
+        // Test Low thinking level
+        await callAnthropicStream({
+            endpoint: `http://127.0.0.1:${port}`,
+            apiKey: 'test-key',
+            model: 'claude-3-7-sonnet',
+            messages: [{ role: 'user', content: 'Hi' }],
+            supportsThinking: true,
+            thinkingLevel: 'low',
+            onEvent: () => {}
+        });
+
+        assert.equal(capturedPayload.thinking.type, 'enabled');
+        assert.equal(capturedPayload.thinking.budget_tokens, 2048);
+
+        // Test Medium thinking level
+        await callAnthropicStream({
+            endpoint: `http://127.0.0.1:${port}`,
+            apiKey: 'test-key',
+            model: 'claude-3-7-sonnet',
+            messages: [{ role: 'user', content: 'Hi' }],
+            supportsThinking: true,
+            thinkingLevel: 'medium',
+            onEvent: () => {}
+        });
+
+        assert.equal(capturedPayload.thinking.type, 'enabled');
+        assert.equal(capturedPayload.thinking.budget_tokens, 8192);
+
+        mockServer.close();
+    });
+
+    await t.test('callOpenAIStream and callOpenAIResponsesStream set reasoning effort based on thinkingLevel', async () => {
+        let capturedChatPayload = null;
+        let capturedResponsesPayload = null;
+
+        const mockServer = http.createServer((req, res) => {
+            let body = '';
+            req.on('data', chunk => body += chunk);
+            req.on('end', () => {
+                if (req.url === '/v1/chat/completions') {
+                    capturedChatPayload = JSON.parse(body);
+                    res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+                    res.write('data: {"choices":[{"delta":{"content":"ok"}}]}\n\n');
+                    res.write('data: [DONE]\n\n');
+                    res.end();
+                } else if (req.url === '/v1/responses') {
+                    capturedResponsesPayload = JSON.parse(body);
+                    res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+                    res.write('event: response.completed\ndata: {"type":"response.completed"}\n\n');
+                    res.end();
+                }
+            });
+        });
+
+        await new Promise((resolve) => mockServer.listen(0, '127.0.0.1', resolve));
+        const port = mockServer.address().port;
+
+        // 1. Chat completions with thinkingLevel
+        await callOpenAIStream({
+            endpoint: `http://127.0.0.1:${port}`,
+            apiKey: 'test-key',
+            model: 'deepseek-r1',
+            messages: [{ role: 'user', content: 'Hi' }],
+            supportsThinking: true,
+            thinkingLevel: 'high',
+            onEvent: () => {}
+        });
+
+        assert.ok(capturedChatPayload);
+        assert.equal(capturedChatPayload.reasoning_effort, 'high');
+
+        // 2. Responses API with thinkingLevel
+        await callOpenAIResponsesStream({
+            endpoint: `http://127.0.0.1:${port}`,
+            apiKey: 'test-key',
+            model: 'o3',
+            messages: [{ role: 'user', content: 'Hi' }],
+            supportsThinking: true,
+            thinkingLevel: 'medium',
+            onEvent: () => {}
+        });
+
+        assert.ok(capturedResponsesPayload);
+        assert.deepEqual(capturedResponsesPayload.reasoning, { effort: 'medium' });
+
+        mockServer.close();
+    });
+
+    await t.test('callOpenAIStream retries without reasoning_effort on HTTP 400 or 422 rejection', async () => {
+        let attempts = 0;
+        const capturedBodies = [];
+        const mockServer = http.createServer((req, res) => {
+            let body = '';
+            req.on('data', chunk => body += chunk);
+            req.on('end', () => {
+                attempts++;
+                const parsed = JSON.parse(body);
+                capturedBodies.push(parsed);
+                if (attempts === 1) {
+                    res.writeHead(422, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ error: { message: 'Unknown parameter: reasoning_effort' } }));
+                } else {
+                    res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+                    res.write('data: {"choices":[{"delta":{"content":"recovered without reasoning effort"}}]}\n\n');
+                    res.write('data: [DONE]\n\n');
+                    res.end();
+                }
+            });
+        });
+
+        await new Promise((resolve) => mockServer.listen(0, '127.0.0.1', resolve));
+        const port = mockServer.address().port;
+
+        const events = [];
+        await callOpenAIStream({
+            endpoint: `http://127.0.0.1:${port}`,
+            apiKey: 'test-key',
+            model: 'deepseek-r1',
+            messages: [{ role: 'user', content: 'Hi' }],
+            supportsThinking: true,
+            thinkingLevel: 'medium',
+            onEvent: (event) => events.push(event)
+        });
+
+        assert.equal(attempts, 2);
+        assert.equal(capturedBodies[0].reasoning_effort, 'medium');
+        assert.equal(capturedBodies[1].reasoning_effort, undefined);
+        assert.equal(events.find(e => e.type === 'text')?.text, 'recovered without reasoning effort');
+
+        mockServer.close();
+    });
 });

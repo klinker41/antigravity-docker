@@ -10,7 +10,7 @@ test('Models Manager - Configuration, CRUD & Provider Connectivity', async (t) =
     const configPath = path.join(tempDir, 'custom_models.json');
 
     // Create fresh instance of ModelsManager with isolated config path
-    const { ModelsManager } = require('../proxy/lib/models-manager');
+    const { ModelsManager, getModelVariants } = require('../proxy/lib/models-manager');
     const manager = new ModelsManager({ configPath });
 
     t.after(() => {
@@ -99,23 +99,47 @@ test('Models Manager - Configuration, CRUD & Provider Connectivity', async (t) =
 
     await t.test('generates Antigravity-compatible model entries for enabled models', () => {
         const injected = manager.getInjectedModels();
-        // Anthropic (1 enabled) + Ollama (1 enabled) = 2 models
-        assert.equal(injected.length, 2);
+        // Anthropic (1 enabled with supportsThinking: true -> Low, Medium, High = 3) + Ollama (1 enabled without thinking = 1) = 4 models
+        assert.equal(injected.length, 4);
 
-        const claude = injected.find(m => m.modelId.includes('claude-3-7-sonnet'));
-        assert.ok(claude);
-        assert.equal(claude.label, 'Claude 3.7 Sonnet');
-        assert.equal(claude.tagTitle, 'Anthropic Cloud Updated');
-        assert.equal(claude.supportsImages, true);
-        assert.equal(claude.isRecommended, true);
-        assert.match(claude.modelOrAlias.model, /^MODEL_PLACEHOLDER_M\d+$/);
+        const claudeLow = injected.find(m => m.modelId.endsWith('-low'));
+        const claudeMed = injected.find(m => m.modelId.endsWith('-medium'));
+        const claudeHigh = injected.find(m => m.modelId.endsWith('-high'));
+
+        assert.ok(claudeLow, 'Claude Low should exist');
+        assert.ok(claudeMed, 'Claude Medium should exist');
+        assert.ok(claudeHigh, 'Claude High should exist');
+
+        assert.equal(claudeLow.label, 'Claude 3.7 Sonnet (Low)');
+        assert.equal(claudeMed.label, 'Claude 3.7 Sonnet (Medium)');
+        assert.equal(claudeHigh.label, 'Claude 3.7 Sonnet (High)');
+
+        assert.equal(claudeLow.thinkingLevel, 'low');
+        assert.equal(claudeMed.thinkingLevel, 'medium');
+        assert.equal(claudeHigh.thinkingLevel, 'high');
+
+        assert.equal(claudeLow.thinkingBudget, 2048);
+        assert.equal(claudeMed.thinkingBudget, 8192);
+        assert.equal(claudeHigh.thinkingBudget, 32768);
+
+        assert.equal(claudeLow.tagTitle, 'Anthropic Cloud Updated');
+        assert.equal(claudeLow.supportsImages, true);
+        assert.equal(claudeLow.isRecommended, true);
+
+        // Verify distinct placeholder enums
+        assert.match(claudeLow.modelOrAlias.model, /^MODEL_PLACEHOLDER_M\d+$/);
+        assert.match(claudeMed.modelOrAlias.model, /^MODEL_PLACEHOLDER_M\d+$/);
+        assert.match(claudeHigh.modelOrAlias.model, /^MODEL_PLACEHOLDER_M\d+$/);
+        assert.notEqual(claudeLow.modelOrAlias.model, claudeMed.modelOrAlias.model);
+        assert.notEqual(claudeMed.modelOrAlias.model, claudeHigh.modelOrAlias.model);
 
         const llama = injected.find(m => m.modelId.includes('llama3.3'));
         assert.ok(llama);
         assert.equal(llama.label, 'Llama 3.3');
+        assert.equal(llama.supportsThinking, false);
         assert.equal(llama.tagTitle, 'Local Ollama');
         assert.match(llama.modelOrAlias.model, /^MODEL_PLACEHOLDER_M\d+$/);
-        assert.notEqual(claude.modelOrAlias.model, llama.modelOrAlias.model);
+        assert.notEqual(claudeLow.modelOrAlias.model, llama.modelOrAlias.model);
 
         // Verify security: getInjectedModels MUST NOT contain credentials or sensitive server properties
         for (const model of injected) {
@@ -125,15 +149,22 @@ test('Models Manager - Configuration, CRUD & Provider Connectivity', async (t) =
             assert.equal(model.rawModelId, undefined, 'Client model config must NOT include rawModelId');
         }
 
-        // Verify inverse lookup for server-side proxying DOES include provider credentials
-        const lookedUp = manager.getModelByPlaceholder(claude.modelOrAlias.model);
-        assert.ok(lookedUp);
-        assert.equal(lookedUp.modelId, claude.modelId);
-        assert.equal(lookedUp.apiKey, 'sk-ant-test-key-123456789');
-        assert.equal(lookedUp.endpoint, 'https://api.anthropic.com');
-        assert.equal(lookedUp.providerType, 'anthropic');
-        assert.equal(lookedUp.rawModelId, 'claude-3-7-sonnet-20250219');
-        assert.equal(lookedUp.supportsThinking, true);
+        // Verify inverse lookup for server-side proxying DOES include provider credentials and thinking level
+        const lookedUpLow = manager.getModelByPlaceholder(claudeLow.modelOrAlias.model);
+        assert.ok(lookedUpLow);
+        assert.equal(lookedUpLow.modelId, claudeLow.modelId);
+        assert.equal(lookedUpLow.apiKey, 'sk-ant-test-key-123456789');
+        assert.equal(lookedUpLow.endpoint, 'https://api.anthropic.com');
+        assert.equal(lookedUpLow.providerType, 'anthropic');
+        assert.equal(lookedUpLow.rawModelId, 'claude-3-7-sonnet-20250219');
+        assert.equal(lookedUpLow.supportsThinking, true);
+        assert.equal(lookedUpLow.thinkingLevel, 'low');
+        assert.equal(lookedUpLow.thinkingBudget, 2048);
+
+        const lookedUpHigh = manager.getModelByPlaceholder(claudeHigh.modelOrAlias.model);
+        assert.ok(lookedUpHigh);
+        assert.equal(lookedUpHigh.thinkingLevel, 'high');
+        assert.equal(lookedUpHigh.thinkingBudget, 32768);
 
         // Verify collision handling and capacity limit
         const used = new Set();
@@ -249,5 +280,39 @@ test('Models Manager - Configuration, CRUD & Provider Connectivity', async (t) =
         assert.equal(gemma2b.tagDescription, 'ollama');
 
         manager.deleteProvider(ollamaProvider.id);
+    });
+
+    await t.test('getModelVariants expands thinking models and respects pre-labeled effort', () => {
+        // 1. Unadorned thinking model expands into 3 variants
+        const unadorned = getModelVariants({ id: 'claude-3-7-sonnet', label: 'Claude 3.7 Sonnet', supportsThinking: true });
+        assert.equal(unadorned.length, 3);
+        assert.deepEqual(unadorned.map(v => v.thinkingLevel), ['low', 'medium', 'high']);
+        assert.deepEqual(unadorned.map(v => v.thinkingBudget), [2048, 8192, 32768]);
+        assert.equal(unadorned[0].label, 'Claude 3.7 Sonnet (Low)');
+        assert.equal(unadorned[0].variantSuffix, '-low');
+
+        // 2. Pre-labeled model with (High) does not expand
+        const preLabeledHigh = getModelVariants({ id: 'claude-3-7-high', label: 'Claude 3.7 Sonnet (High)', supportsThinking: true });
+        assert.equal(preLabeledHigh.length, 1);
+        assert.equal(preLabeledHigh[0].label, 'Claude 3.7 Sonnet (High)');
+        assert.equal(preLabeledHigh[0].thinkingLevel, 'high');
+        assert.equal(preLabeledHigh[0].thinkingBudget, 32768);
+        assert.equal(preLabeledHigh[0].variantSuffix, '-high');
+
+        // 3. Pre-labeled model with (Medium thinking) does not expand
+        const preLabeledMed = getModelVariants({ id: 'o3-mini', label: 'o3-mini (medium thinking)', supportsThinking: true });
+        assert.equal(preLabeledMed.length, 1);
+        assert.equal(preLabeledMed[0].label, 'o3-mini (medium thinking)');
+        assert.equal(preLabeledMed[0].thinkingLevel, 'medium');
+        assert.equal(preLabeledMed[0].thinkingBudget, 8192);
+        assert.equal(preLabeledMed[0].variantSuffix, '-medium');
+
+        // 4. Non-thinking model returns single item without thinking props
+        const nonThinking = getModelVariants({ id: 'gpt-4o', label: 'GPT-4o', supportsThinking: false });
+        assert.equal(nonThinking.length, 1);
+        assert.equal(nonThinking[0].label, 'GPT-4o');
+        assert.equal(nonThinking[0].supportsThinking, false);
+        assert.equal(nonThinking[0].thinkingLevel, undefined);
+        assert.equal(nonThinking[0].variantSuffix, '');
     });
 });

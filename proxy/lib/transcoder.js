@@ -3,6 +3,7 @@
 const http = require('node:http');
 const https = require('node:https');
 const crypto = require('node:crypto');
+const { THINKING_BUDGETS } = require('./models-manager');
 
 /**
  * Determines whether an Anthropic model requires adaptive thinking (Claude 4.6+, 5+, Fable).
@@ -25,7 +26,19 @@ function isAdaptiveThinkingModel(modelName) {
  * Streams chat completion from an Anthropic Messages endpoint and normalizes events.
  */
 function callAnthropicStream(options) {
-    const { endpoint, apiKey, model, messages, system, tools, supportsThinking, maxTokens = 4096, onEvent } = options;
+    const {
+        endpoint,
+        apiKey,
+        model,
+        messages,
+        system,
+        tools,
+        supportsThinking,
+        useAdaptiveThinking: forceAdaptive,
+        maxTokens = 8192,
+        signal,
+        onEvent
+    } = options;
 
     let cleanBase = (endpoint || 'https://api.anthropic.com').trim().replace(/\/+$/, '');
     cleanBase = cleanBase.replace(/\/+(v1(\/(messages|models))?)?$/, '');
@@ -34,7 +47,8 @@ function callAnthropicStream(options) {
     const parsed = new URL(targetUrl);
     const transport = parsed.protocol === 'https:' ? https : http;
 
-    const useAdaptiveThinking = options.thinkingType === 'adaptive' ||
+    const useAdaptiveThinking = options.useAdaptiveThinking ||
+        options.thinkingType === 'adaptive' ||
         (options.thinkingType !== 'enabled' && isAdaptiveThinkingModel(model));
 
     const payload = {
@@ -47,9 +61,11 @@ function callAnthropicStream(options) {
         if (useAdaptiveThinking) {
             payload.thinking = { type: 'adaptive' };
         } else {
-            payload.thinking = { type: 'enabled', budget_tokens: 2048 };
+            const level = (options.thinkingLevel || options.effort || '').toLowerCase();
+            const budgetTokens = options.thinkingBudget || options.budgetTokens || (THINKING_BUDGETS && THINKING_BUDGETS[level]) || 2048;
+            payload.thinking = { type: 'enabled', budget_tokens: budgetTokens };
+            payload.max_tokens = Math.max(maxTokens, budgetTokens + 4096);
         }
-        payload.max_tokens = Math.max(maxTokens, 4096);
     }
     if (system) payload.system = system;
     if (tools && tools.length > 0) payload.tools = tools;
@@ -280,6 +296,10 @@ function callOpenAIResponsesStream(options) {
     };
     if (respTools && respTools.length > 0) payload.tools = respTools;
     if (maxTokens) payload.max_output_tokens = maxTokens;
+    const level = (options.thinkingLevel || '').toLowerCase();
+    if (options.supportsThinking && ['low', 'medium', 'high'].includes(level)) {
+        payload.reasoning = { effort: level };
+    }
 
     const body = JSON.stringify(payload);
     const headers = {
@@ -450,6 +470,12 @@ function callOpenAIStream(options) {
         stream: true
     };
     if (tools && tools.length > 0) payload.tools = tools;
+    if (maxTokens) payload.max_tokens = maxTokens;
+
+    const level = (options.thinkingLevel || '').toLowerCase();
+    if (options.supportsThinking && ['low', 'medium', 'high'].includes(level) && !options.omitReasoningEffort) {
+        payload.reasoning_effort = level;
+    }
 
     const body = JSON.stringify(payload);
     const headers = {
@@ -468,6 +494,10 @@ function callOpenAIStream(options) {
                     if (res.statusCode === 400 && errBody.includes('/v1/responses')) {
                         if (model) RESPONSES_API_MODELS.add(model.toLowerCase());
                         return resolve(callOpenAIResponsesStream(options));
+                    }
+                    // Retry without reasoning_effort if rejected by endpoint (HTTP 400 or 422)
+                    if ((res.statusCode === 400 || res.statusCode === 422) && errBody.includes('reasoning_effort') && !options._reasoningRetried) {
+                        return resolve(callOpenAIStream({ ...options, _reasoningRetried: true, omitReasoningEffort: true }));
                     }
                     reject(new Error(`OpenAI error (${res.statusCode}): ${errBody}`));
                 });

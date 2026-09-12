@@ -11,7 +11,7 @@ const {
     geminiContentsToOpenAI,
     geminiToolsToOpenAI
 } = require('./lib/transcoder.js');
-const { CUSTOM_PLACEHOLDER_REGEX } = require('./lib/models-manager.js');
+const { CUSTOM_PLACEHOLDER_REGEX, THINKING_BUDGETS } = require('./lib/models-manager.js');
 
 const DEFAULT_PORT = parseInt(process.env.TRANSLATION_PORT || '4405', 10);
 const DEFAULT_UPSTREAM = process.env.CLOUDCODE_UPSTREAM_URL || 'https://daily-cloudcode-pa.googleapis.com';
@@ -40,14 +40,20 @@ function isStreamGenerateContent(url) {
     return url.includes(':streamGenerateContent') || url.includes('/streamGenerateContent');
 }
 
+/**
+ * Checks whether an incoming HTTP request is targeting the fetchAvailableModels endpoint.
+ */
 function isFetchAvailableModels(url) {
     if (!url) return false;
-    return url.includes(':fetchAvailableModels') || url.includes('/fetchAvailableModels');
+    return url.includes('fetchAvailableModels');
 }
 
+/**
+ * Injects custom models configured in modelsManager into the fetchAvailableModels JSON response.
+ */
 function injectAvailableModels(data, modelsManager) {
-    if (!data || typeof data !== 'object' || !modelsManager) return data;
-    if (typeof modelsManager.getInjectedModels !== 'function') return data;
+    if (!data || typeof data !== 'object') return data;
+    if (!modelsManager) return data;
 
     const injected = modelsManager.getInjectedModels();
     if (!injected || injected.length === 0) return data;
@@ -58,11 +64,15 @@ function injectAvailableModels(data, modelsManager) {
         const placeholderEnum = m.modelOrAlias?.model;
         if (!placeholderEnum) continue;
 
+        const budget = m.supportsThinking
+            ? (m.thinkingBudget || (THINKING_BUDGETS && THINKING_BUDGETS[m.thinkingLevel]) || 2048)
+            : 2048;
+
         data.models[placeholderEnum] = {
             displayName: m.label,
             supportsImages: Boolean(m.supportsImages),
             supportsThinking: Boolean(m.supportsThinking),
-            thinkingBudget: 2048,
+            thinkingBudget: budget,
             minThinkingBudget: 1024,
             recommended: true,
             maxTokens: 128000,
@@ -364,6 +374,8 @@ class TranslationProxy {
                     system,
                     tools: anthropicTools,
                     supportsThinking: Boolean(customModel.supportsThinking),
+                    thinkingLevel: customModel.thinkingLevel,
+                    thinkingBudget: customModel.thinkingBudget,
                     maxTokens,
                     signal: abortController.signal,
                     onEvent
@@ -379,6 +391,8 @@ class TranslationProxy {
                     model: customModel.rawModelId,
                     messages,
                     tools: openAiTools,
+                    supportsThinking: Boolean(customModel.supportsThinking),
+                    thinkingLevel: customModel.thinkingLevel,
                     maxTokens,
                     signal: abortController.signal,
                     onEvent

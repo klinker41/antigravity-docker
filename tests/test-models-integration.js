@@ -400,16 +400,22 @@ test('Multi-Model Integration - HTTP Proxy, Models API, & Upstream Interception'
             // Original Gemini model is preserved
             assert.ok(rpcData.clientModelConfigs.some(m => m.label === 'Gemini 3.8 Flash'));
 
-            // Injected Claude 3.7 model is added
-            const injectedModel = rpcData.clientModelConfigs.find(m => m.modelId === 'custom-anthropic-claude-3-7-sonnet');
-            assert.ok(injectedModel, 'Custom model should be present in clientModelConfigs');
-            assert.equal(injectedModel.label, 'Claude 3.7 Sonnet');
-            assert.equal(injectedModel.tagTitle, 'Anthropic Production');
+            // Injected Claude 3.7 thinking variants are added
+            const injectedModelLow = rpcData.clientModelConfigs.find(m => m.modelId === 'custom-anthropic-claude-3-7-sonnet-low');
+            const injectedModelMed = rpcData.clientModelConfigs.find(m => m.modelId === 'custom-anthropic-claude-3-7-sonnet-medium');
+            const injectedModelHigh = rpcData.clientModelConfigs.find(m => m.modelId === 'custom-anthropic-claude-3-7-sonnet-high');
+            assert.ok(injectedModelLow, 'Custom model Low variant should be present in clientModelConfigs');
+            assert.ok(injectedModelMed, 'Custom model Medium variant should be present in clientModelConfigs');
+            assert.ok(injectedModelHigh, 'Custom model High variant should be present in clientModelConfigs');
+            assert.equal(injectedModelMed.label, 'Claude 3.7 Sonnet (Medium)');
+            assert.equal(injectedModelMed.tagTitle, 'Anthropic Production');
 
             // Injected into model sorting labels
             const group = rpcData.clientModelSorts[0].groups[0];
             assert.ok(group.modelLabels.includes('Gemini 3.8 Flash'));
-            assert.ok(group.modelLabels.includes('Claude 3.7 Sonnet'));
+            assert.ok(group.modelLabels.includes('Claude 3.7 Sonnet (Low)'));
+            assert.ok(group.modelLabels.includes('Claude 3.7 Sonnet (Medium)'));
+            assert.ok(group.modelLabels.includes('Claude 3.7 Sonnet (High)'));
         });
 
         await t.test('intercepts GetUserStatus and injects external models into userStatus.cascadeModelConfigData', async () => {
@@ -428,14 +434,14 @@ test('Multi-Model Integration - HTTP Proxy, Models API, & Upstream Interception'
             // Original Gemini model is preserved
             assert.ok(configData.clientModelConfigs.some(m => m.label === 'Gemini 3.8 Flash'));
 
-            // Injected Claude 3.7 model is added
-            const injectedModel = configData.clientModelConfigs.find(m => m.modelId === 'custom-anthropic-claude-3-7-sonnet');
+            // Injected Claude 3.7 model variants are added
+            const injectedModel = configData.clientModelConfigs.find(m => m.modelId === 'custom-anthropic-claude-3-7-sonnet-medium');
             assert.ok(injectedModel, 'Custom model should be present in clientModelConfigs');
-            assert.equal(injectedModel.label, 'Claude 3.7 Sonnet');
+            assert.equal(injectedModel.label, 'Claude 3.7 Sonnet (Medium)');
 
             // Injected into model sorting labels
             const group = configData.clientModelSorts[0].groups[0];
-            assert.ok(group.modelLabels.includes('Claude 3.7 Sonnet'));
+            assert.ok(group.modelLabels.includes('Claude 3.7 Sonnet (Medium)'));
         });
 
         await t.test('intercepts GetCascadeModelConfigs and injects models into cascadeModelConfigData', async () => {
@@ -454,9 +460,9 @@ test('Multi-Model Integration - HTTP Proxy, Models API, & Upstream Interception'
             assert.ok(configData.clientModelConfigs.some(m => m.label === 'Gemini 3.8 Flash'));
 
             // Injected model added
-            const injectedModel = configData.clientModelConfigs.find(m => m.modelId === 'custom-anthropic-claude-3-7-sonnet');
+            const injectedModel = configData.clientModelConfigs.find(m => m.modelId === 'custom-anthropic-claude-3-7-sonnet-medium');
             assert.ok(injectedModel, 'Custom model should be present');
-            assert.equal(injectedModel.label, 'Claude 3.7 Sonnet');
+            assert.equal(injectedModel.label, 'Claude 3.7 Sonnet (Medium)');
         });
 
         await t.test('intercepts GetUserStatus over WebSocket and injects custom models with valid placeholder enums', async () => {
@@ -509,13 +515,13 @@ test('Multi-Model Integration - HTTP Proxy, Models API, & Upstream Interception'
             const configs = receivedData.userStatus?.cascadeModelConfigData?.clientModelConfigs || [];
             assert.ok(configs.some(m => m.label === 'Gemini 3.8 Flash'), 'Upstream model present');
 
-            const injected = configs.find(m => m.modelId === 'custom-anthropic-claude-3-7-sonnet');
+            const injected = configs.find(m => m.modelId === 'custom-anthropic-claude-3-7-sonnet-medium');
             assert.ok(injected, 'Custom Anthropic model must be injected over WebSocket');
-            assert.equal(injected.label, 'Claude 3.7 Sonnet');
+            assert.equal(injected.label, 'Claude 3.7 Sonnet (Medium)');
             assert.match(injected.modelOrAlias.model, /^MODEL_PLACEHOLDER_M\d+$/, 'Enum must be valid MODEL_PLACEHOLDER');
 
             const sorts = receivedData.userStatus?.cascadeModelConfigData?.clientModelSorts?.[0]?.groups?.[0]?.modelLabels || [];
-            assert.ok(sorts.includes('Claude 3.7 Sonnet'), 'Custom model label must be in sort group');
+            assert.ok(sorts.includes('Claude 3.7 Sonnet (Medium)'), 'Custom model label must be in sort group');
         });
 
         await t.test('preserves custom model placeholder enum over WebSocket', async () => {

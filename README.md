@@ -177,6 +177,11 @@ navigation pane of the Antigravity UI or navigating directly to `/models`.
 - **Dynamic Dropdown Injection**: Enabled external models are automatically
   injected into Antigravity's model selector without DOM scraping or browser
   extensions.
+- **Thinking Level Expansion**: Models configured with thinking capability
+  automatically expand into **Low**, **Medium**, and **High** thinking levels
+  in the UI model picker. Antigravity groups them under the base model name
+  with an interactive effort flyout, mapping the selection to Anthropic token
+  budgets or OpenAI reasoning effort.
 - **Transparent Reverse Proxy**: Standard Gemini models pass directly through
   to Google CloudCode with zero translation overhead or latency penalty.
 - **Instant Fallback**: If an external provider key expires or rate limits,

@@ -16,6 +16,73 @@ const PLACEHOLDER_COUNT = 150;
 const CUSTOM_PLACEHOLDER_REGEX = /^MODEL_PLACEHOLDER_M(5\d\d|6[0-4]\d)$/;
 const CUSTOM_PLACEHOLDER_REGEX_GLOBAL = /MODEL_PLACEHOLDER_M(5\d\d|6[0-4]\d)/g;
 
+const THINKING_LEVELS = ['Low', 'Medium', 'High'];
+const EFFORT_REGEX = /^(.*?)\s*\((low|medium|high)(?:\s+thinking)?\)\s*$/i;
+
+const THINKING_BUDGETS = {
+    low: 2048,
+    medium: 8192,
+    high: 32768
+};
+
+const DEFAULT_ALLOWED_TIERS = [
+    'TEAMS_TIER_PRO',
+    'TEAMS_TIER_TEAMS',
+    'TEAMS_TIER_ENTERPRISE_SELF_HOSTED',
+    'TEAMS_TIER_ENTERPRISE_SAAS',
+    'TEAMS_TIER_HYBRID',
+    'TEAMS_TIER_PRO_ULTIMATE'
+];
+
+const DEFAULT_SUPPORTED_MIME_TYPES = {
+    'application/json': true,
+    'application/pdf': true,
+    'application/x-javascript': true,
+    'application/x-python-code': true,
+    'application/x-typescript': true,
+    'image/jpeg': true,
+    'image/png': true,
+    'image/webp': true,
+    'text/css': true,
+    'text/html': true,
+    'text/javascript': true,
+    'text/markdown': true,
+    'text/plain': true
+};
+
+/**
+ * Returns the array of variants (low, medium, high or single) for a given model definition.
+ */
+function getModelVariants(model) {
+    const baseLabel = String(model.label || '').trim() || String(model.id || '').trim();
+    if (!model.supportsThinking) {
+        return [{
+            label: baseLabel,
+            variantSuffix: '',
+            supportsThinking: false
+        }];
+    }
+    const match = EFFORT_REGEX.exec(baseLabel);
+    if (match) {
+        const effort = match[2].toLowerCase();
+        return [{
+            label: baseLabel,
+            variantSuffix: `-${effort}`,
+            supportsThinking: true,
+            thinkingLevel: effort,
+            thinkingBudget: THINKING_BUDGETS[effort] || 2048
+        }];
+    }
+    return THINKING_LEVELS.map(effort => ({
+        label: `${baseLabel} (${effort})`,
+        variantSuffix: `-${effort.toLowerCase()}`,
+        supportsThinking: true,
+        thinkingLevel: effort.toLowerCase(),
+        thinkingBudget: THINKING_BUDGETS[effort.toLowerCase()]
+    }));
+}
+
+
 /**
  * Checks whether an enum string belongs to the custom placeholder range (MODEL_PLACEHOLDER_M500..M649).
  */
@@ -238,6 +305,7 @@ class ModelsManager {
         return enumName;
     }
 
+
     /**
      * Looks up an enabled model definition by its assigned placeholder enum,
      * returning complete provider credentials for server-side translation.
@@ -250,19 +318,22 @@ class ModelsManager {
             if (!provider.enabled) continue;
             for (const model of provider.models) {
                 if (!model.enabled) continue;
-                const modelId = `custom-${provider.type}-${model.id}`;
-                const enumName = this.getPlaceholderEnum(modelId, usedEnums);
-                if (enumName === placeholderEnum) {
-                    return {
-                        label: String(model.label || '').trim() || String(model.id || '').trim(),
-                        modelId,
-                        placeholder: enumName,
-                        providerType: provider.type,
-                        endpoint: provider.endpoint,
-                        apiKey: provider.apiKey,
-                        rawModelId: model.id,
-                        supportsThinking: Boolean(model.supportsThinking)
-                    };
+                for (const v of getModelVariants(model)) {
+                    const variantModelId = `custom-${provider.type}-${model.id}${v.variantSuffix}`;
+                    const enumName = this.getPlaceholderEnum(variantModelId, usedEnums);
+                    if (enumName === placeholderEnum) {
+                        return {
+                            label: v.label,
+                            modelId: variantModelId,
+                            placeholder: enumName,
+                            providerType: provider.type,
+                            endpoint: provider.endpoint,
+                            apiKey: provider.apiKey,
+                            rawModelId: model.id,
+                            supportsThinking: v.supportsThinking,
+                            ...(v.supportsThinking ? { thinkingLevel: v.thinkingLevel, thinkingBudget: v.thinkingBudget } : {})
+                        };
+                    }
                 }
             }
         }
@@ -285,45 +356,27 @@ class ModelsManager {
             for (const model of provider.models) {
                 if (!model.enabled) continue;
 
-                const modelId = `custom-${provider.type}-${model.id}`;
-                const placeholderEnum = this.getPlaceholderEnum(modelId, usedEnums);
-                results.push({
-                    label: String(model.label || '').trim() || String(model.id || '').trim(),
-                    modelOrAlias: { model: placeholderEnum },
-                    supportsImages: true,
-                    supportsThinking: Boolean(model.supportsThinking),
-                    isRecommended: true,
-                    allowedTiers: [
-                        'TEAMS_TIER_PRO',
-                        'TEAMS_TIER_TEAMS',
-                        'TEAMS_TIER_ENTERPRISE_SELF_HOSTED',
-                        'TEAMS_TIER_ENTERPRISE_SAAS',
-                        'TEAMS_TIER_HYBRID',
-                        'TEAMS_TIER_PRO_ULTIMATE'
-                    ],
-                    quotaInfo: {
-                        remainingFraction: 1.0,
-                        resetTime: new Date(Date.now() + 86400000).toISOString()
-                    },
-                    tagTitle: providerTag,
-                    tagDescription: providerTag,
-                    supportedMimeTypes: {
-                        'application/json': true,
-                        'application/pdf': true,
-                        'application/x-javascript': true,
-                        'application/x-python-code': true,
-                        'application/x-typescript': true,
-                        'image/jpeg': true,
-                        'image/png': true,
-                        'image/webp': true,
-                        'text/css': true,
-                        'text/html': true,
-                        'text/javascript': true,
-                        'text/markdown': true,
-                        'text/plain': true
-                    },
-                    modelId
-                });
+                for (const v of getModelVariants(model)) {
+                    const variantModelId = `custom-${provider.type}-${model.id}${v.variantSuffix}`;
+                    const placeholderEnum = this.getPlaceholderEnum(variantModelId, usedEnums);
+                    results.push({
+                        label: v.label,
+                        modelOrAlias: { model: placeholderEnum },
+                        supportsImages: true,
+                        supportsThinking: v.supportsThinking,
+                        ...(v.supportsThinking ? { thinkingLevel: v.thinkingLevel, thinkingBudget: v.thinkingBudget } : {}),
+                        isRecommended: true,
+                        allowedTiers: DEFAULT_ALLOWED_TIERS,
+                        quotaInfo: {
+                            remainingFraction: 1.0,
+                            resetTime: new Date(Date.now() + 86400000).toISOString()
+                        },
+                        tagTitle: providerTag,
+                        tagDescription: providerTag,
+                        supportedMimeTypes: DEFAULT_SUPPORTED_MIME_TYPES,
+                        modelId: variantModelId
+                    });
+                }
             }
         }
         return results;
@@ -450,5 +503,9 @@ module.exports = {
     isCustomPlaceholder,
     matchCustomPlaceholders,
     CUSTOM_PLACEHOLDER_REGEX,
-    CUSTOM_PLACEHOLDER_REGEX_GLOBAL
+    CUSTOM_PLACEHOLDER_REGEX_GLOBAL,
+    THINKING_LEVELS,
+    THINKING_BUDGETS,
+    EFFORT_REGEX,
+    getModelVariants
 };
