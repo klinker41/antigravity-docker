@@ -104,14 +104,16 @@ test('Models Manager - Configuration, CRUD & Provider Connectivity', async (t) =
 
         const claude = injected.find(m => m.modelId.includes('claude-3-7-sonnet'));
         assert.ok(claude);
-        assert.equal(claude.label, 'Claude 3.7 Sonnet (Anthropic)');
+        assert.equal(claude.label, 'Claude 3.7 Sonnet');
+        assert.equal(claude.tagTitle, 'Anthropic Cloud Updated');
         assert.equal(claude.supportsImages, true);
         assert.equal(claude.isRecommended, true);
         assert.match(claude.modelOrAlias.model, /^MODEL_PLACEHOLDER_M\d+$/);
 
         const llama = injected.find(m => m.modelId.includes('llama3.3'));
         assert.ok(llama);
-        assert.equal(llama.label, 'Llama 3.3 (OpenAI)');
+        assert.equal(llama.label, 'Llama 3.3');
+        assert.equal(llama.tagTitle, 'Local Ollama');
         assert.match(llama.modelOrAlias.model, /^MODEL_PLACEHOLDER_M\d+$/);
         assert.notEqual(claude.modelOrAlias.model, llama.modelOrAlias.model);
 
@@ -211,5 +213,28 @@ test('Models Manager - Configuration, CRUD & Provider Connectivity', async (t) =
         const deleted = manager.deleteProvider(list[0].id);
         assert.equal(deleted, true);
         assert.equal(manager.listProviders().length, 1);
+    });
+
+    await t.test('correctly sets tagTitle to provider name for Ollama and keeps model label clean', () => {
+        const ollamaProvider = manager.saveProvider({
+            name: 'ollama',
+            type: 'openai',
+            endpoint: 'https://ollama.example.com',
+            apiKey: 'test-key',
+            enabled: true,
+            models: [
+                { id: 'gemma4:e2b', label: 'gemma4:e2b', enabled: true },
+                { id: 'gemma4:12b', label: 'gemma4:12b', enabled: true }
+            ]
+        });
+
+        const injected = manager.getInjectedModels();
+        const gemma2b = injected.find(m => m.modelId.includes('gemma4:e2b'));
+        assert.ok(gemma2b);
+        assert.equal(gemma2b.label, 'gemma4:e2b');
+        assert.equal(gemma2b.tagTitle, 'ollama');
+        assert.equal(gemma2b.tagDescription, 'ollama');
+
+        manager.deleteProvider(ollamaProvider.id);
     });
 });

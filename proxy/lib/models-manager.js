@@ -239,14 +239,14 @@ class ModelsManager {
         for (const provider of config.providers) {
             if (!provider.enabled) continue;
 
-            const providerTag = provider.type === 'anthropic' ? 'Anthropic' : 'OpenAI';
+            const providerTag = String(provider.name || '').trim() || (provider.type === 'anthropic' ? 'Anthropic' : 'OpenAI');
             for (const model of provider.models) {
                 if (!model.enabled) continue;
 
                 const modelId = `custom-${provider.type}-${model.id}`;
                 const placeholderEnum = this.getPlaceholderEnum(modelId, usedEnums);
                 results.push({
-                    label: `${model.label} (${providerTag})`,
+                    label: String(model.label || '').trim() || String(model.id || '').trim(),
                     modelOrAlias: { model: placeholderEnum },
                     supportsImages: true,
                     isRecommended: true,
@@ -263,7 +263,7 @@ class ModelsManager {
                         resetTime: new Date(Date.now() + 86400000).toISOString()
                     },
                     tagTitle: providerTag,
-                    tagDescription: provider.name,
+                    tagDescription: providerTag,
                     supportedMimeTypes: {
                         'application/json': true,
                         'application/pdf': true,
