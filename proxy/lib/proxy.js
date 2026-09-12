@@ -64,9 +64,7 @@ async function proxyWebRequest(c, targetPort, targetPath, options = {}) {
     }
 
     const parsedUrl = new URL(c.req.raw.url);
-    const isModelEndpoint = parsedUrl.pathname.endsWith('/GetCascadeModelConfigData') ||
-                            parsedUrl.pathname.endsWith('/GetUserStatus') ||
-                            parsedUrl.pathname.endsWith('/GetCascadeModelConfigs');
+    const isModelEndpoint = isModelProcedure(parsedUrl.pathname);
     const shouldInterceptModels = Boolean(
         isUpstream &&
         modelsManager &&
@@ -171,38 +169,7 @@ async function proxyWebRequest(c, targetPort, targetPath, options = {}) {
             try {
                 const data = JSON.parse(rawText);
                 if (data && typeof data === 'object') {
-                    const injected = modelsManager.getInjectedModels();
-                    if (injected && injected.length > 0) {
-                        let targetConfigData = data;
-                        if (data.userStatus) {
-                            data.userStatus.cascadeModelConfigData = data.userStatus.cascadeModelConfigData || {};
-                            targetConfigData = data.userStatus.cascadeModelConfigData;
-                        } else if (data.cascadeModelConfigData) {
-                            targetConfigData = data.cascadeModelConfigData;
-                        }
-
-                        targetConfigData.clientModelConfigs = targetConfigData.clientModelConfigs || [];
-                        for (const m of injected) {
-                            const alreadyExists = targetConfigData.clientModelConfigs.some(existing =>
-                                (existing.modelId && existing.modelId === m.modelId) ||
-                                (existing.modelOrAlias?.model && existing.modelOrAlias.model === m.modelOrAlias?.model)
-                            );
-                            if (!alreadyExists) {
-                                targetConfigData.clientModelConfigs.push(m);
-                            }
-                        }
-
-                        if (Array.isArray(targetConfigData.clientModelSorts) && targetConfigData.clientModelSorts.length > 0) {
-                            const group = targetConfigData.clientModelSorts[0].groups?.[0];
-                            if (group && Array.isArray(group.modelLabels)) {
-                                for (const m of injected) {
-                                    if (!group.modelLabels.includes(m.label)) {
-                                        group.modelLabels.push(m.label);
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    injectCustomModels(data, modelsManager);
                     resHeaders.delete('content-length');
                     return c.json(data, upstreamRes.status, Object.fromEntries(resHeaders.entries()));
                 }
@@ -232,8 +199,172 @@ async function proxyWebRequest(c, targetPort, targetPath, options = {}) {
     }
 }
 
+const MODEL_PROCEDURE_ENDPOINTS = [
+    '/GetUserStatus',
+    '/GetCascadeModelConfigData',
+    '/GetCascadeModelConfigs'
+];
+
+/**
+ * Checks if an RPC procedure name or request path corresponds to a model configuration endpoint.
+ */
+function isModelProcedure(pathOrName) {
+    if (typeof pathOrName !== 'string') return false;
+    return MODEL_PROCEDURE_ENDPOINTS.some(endpoint => pathOrName.endsWith(endpoint));
+}
+
+const MAX_CONCURRENT_STREAMS = 500;
+
+/**
+ * Inspects outgoing client messages on /connect-websocket and tracks active stream IDs.
+ */
+function handleWebSocketClientMessage(ws, message) {
+    if (!ws.data || !ws.data.activeStreams) return;
+
+    let isJsonCandidate = false;
+    let text = null;
+
+    if (typeof message === 'string') {
+        if (message.startsWith('{')) {
+            isJsonCandidate = true;
+            text = message;
+        }
+    } else if (message && typeof message === 'object') {
+        const u8 = new Uint8Array(message);
+        if (u8.length > 0 && u8[0] === 0x7b /* '{' */) {
+            isJsonCandidate = true;
+            text = Buffer.from(message).toString('utf8');
+        }
+    }
+
+    if (!isJsonCandidate || !text) return;
+
+    try {
+        const parsed = JSON.parse(text);
+        if (parsed && typeof parsed === 'object') {
+            if (parsed.type === 'start' && parsed.streamId && typeof parsed.procedure === 'string') {
+                if (ws.data.activeStreams.size >= MAX_CONCURRENT_STREAMS) {
+                    const oldest = ws.data.activeStreams.keys().next().value;
+                    if (oldest !== undefined) ws.data.activeStreams.delete(oldest);
+                }
+                ws.data.activeStreams.set(parsed.streamId, parsed.procedure);
+            } else if (parsed.type === 'cancel' && parsed.streamId) {
+                ws.data.activeStreams.delete(parsed.streamId);
+            }
+        }
+    } catch (e) {}
+}
+
+/**
+ * Inspects incoming upstream messages on /connect-websocket and injects custom models on model RPCs.
+ */
+function handleWebSocketUpstreamMessage(ws, event, modelsManager) {
+    let dataToSend = event.data;
+    if (!ws.data || !ws.data.activeStreams || ws.data.activeStreams.size === 0) {
+        return dataToSend;
+    }
+
+    let isJsonCandidate = false;
+    let text = null;
+
+    if (typeof event.data === 'string') {
+        if (event.data.startsWith('{')) {
+            isJsonCandidate = true;
+            text = event.data;
+        }
+    } else if (event.data && typeof event.data === 'object') {
+        const u8 = new Uint8Array(event.data);
+        if (u8.length > 0 && u8[0] === 0x7b /* '{' */) {
+            isJsonCandidate = true;
+            text = Buffer.from(event.data).toString('utf8');
+        }
+    }
+
+    if (!isJsonCandidate || !text) return dataToSend;
+
+    try {
+        const parsed = JSON.parse(text);
+        if (parsed && typeof parsed === 'object') {
+            if (parsed.type === 'data' && parsed.streamId && ws.data.activeStreams.has(parsed.streamId)) {
+                const procedure = ws.data.activeStreams.get(parsed.streamId);
+                if (isModelProcedure(procedure) && modelsManager && typeof modelsManager.hasEnabledModels === 'function' && modelsManager.hasEnabledModels()) {
+                    if (parsed.payload) {
+                        injectCustomModels(parsed.payload, modelsManager);
+                        dataToSend = JSON.stringify(parsed);
+                    }
+                }
+            } else if (parsed.type === 'end' && parsed.streamId) {
+                ws.data.activeStreams.delete(parsed.streamId);
+            }
+        }
+    } catch (e) {}
+
+    return dataToSend;
+}
+
+/**
+ * Injects custom models from ModelsManager into a Connect-RPC response data payload in-place.
+ * Supports GetUserStatus, GetCascadeModelConfigData, and GetCascadeModelConfigs schemas.
+ * Returns the mutated data payload.
+ */
+function injectCustomModels(data, modelsManager) {
+    if (!data || typeof data !== 'object' || !modelsManager) return data;
+    if (typeof modelsManager.getInjectedModels !== 'function') return data;
+
+    let targetConfigData = data;
+    if (data.userStatus) {
+        data.userStatus.cascadeModelConfigData = data.userStatus.cascadeModelConfigData || {};
+        targetConfigData = data.userStatus.cascadeModelConfigData;
+    } else if (data.cascadeModelConfigData) {
+        targetConfigData = data.cascadeModelConfigData;
+    }
+
+    targetConfigData.clientModelConfigs = targetConfigData.clientModelConfigs || [];
+
+    const existingEnums = new Set();
+    for (const existing of targetConfigData.clientModelConfigs) {
+        if (existing.modelOrAlias?.model) {
+            existingEnums.add(existing.modelOrAlias.model);
+        }
+    }
+
+    const injected = modelsManager.getInjectedModels(existingEnums);
+    if (!injected || injected.length === 0) return data;
+
+    for (const m of injected) {
+        const alreadyExists = targetConfigData.clientModelConfigs.some(existing =>
+            (existing.modelId && existing.modelId === m.modelId) ||
+            (existing.modelOrAlias?.model && existing.modelOrAlias.model === m.modelOrAlias?.model)
+        );
+        if (!alreadyExists) {
+            targetConfigData.clientModelConfigs.push(m);
+        }
+    }
+
+    if (Array.isArray(targetConfigData.clientModelSorts) && targetConfigData.clientModelSorts.length > 0) {
+        const recommendedSort = targetConfigData.clientModelSorts.find(s =>
+            s.name && s.name.toLowerCase() === 'recommended'
+        ) || targetConfigData.clientModelSorts[0];
+
+        const group = recommendedSort.groups?.[0];
+        if (group && Array.isArray(group.modelLabels)) {
+            for (const m of injected) {
+                if (!group.modelLabels.includes(m.label)) {
+                    group.modelLabels.push(m.label);
+                }
+            }
+        }
+    }
+
+    return data;
+}
+
 module.exports = {
     isSpaRoute,
+    isModelProcedure,
+    handleWebSocketClientMessage,
+    handleWebSocketUpstreamMessage,
     proxyWebRequest,
     replaceFaviconInHtml,
+    injectCustomModels,
 };

@@ -36,58 +36,93 @@ test('Multi-Model Integration - HTTP Proxy, Models API, & Upstream Interception'
     });
     await new Promise((resolve) => mockProviderServer.listen(MOCK_PROVIDER_PORT, '127.0.0.1', resolve));
 
-    // 2. Setup Mock Agy Upstream Server
-    const mockAgyServer = http.createServer((req, res) => {
-        const parsed = new URL(req.url, `http://127.0.0.1:${MOCK_AGY_PORT}`);
+    // 2. Setup Mock Agy Upstream Server (supporting both HTTP and WebSocket)
+    const mockAgyServer = Bun.serve({
+        port: MOCK_AGY_PORT,
+        hostname: '127.0.0.1',
+        fetch(req, server) {
+            if (req.headers.get('upgrade')?.toLowerCase() === 'websocket') {
+                const success = server.upgrade(req);
+                if (success) return;
+                return new Response('WebSocket upgrade failed', { status: 400 });
+            }
 
-        // Root HTML with sidebar markup
-        if (parsed.pathname === '/') {
-            res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-            res.end('<!DOCTYPE html><html><head><title>Antigravity</title></head><body><div class="workspace-tools-nav"></div><div id="root"></div></body></html>');
-            return;
-        }
+            const parsed = new URL(req.url);
 
-        // Connect-RPC GetCascadeModelConfigData endpoint
-        if (parsed.pathname.endsWith('/GetCascadeModelConfigData')) {
-            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-            res.end(JSON.stringify({
-                clientModelConfigs: [
-                    {
-                        label: 'Gemini 3.8 Flash',
-                        modelOrAlias: { model: 'gemini-3.8-flash' },
-                        isRecommended: true
+            // Root HTML with sidebar markup
+            if (parsed.pathname === '/') {
+                return new Response('<!DOCTYPE html><html><head><title>Antigravity</title></head><body><div class="workspace-tools-nav"></div><div id="root"></div></body></html>', {
+                    headers: { 'Content-Type': 'text/html; charset=utf-8' }
+                });
+            }
+
+            // Connect-RPC GetCascadeModelConfigData endpoint
+            if (parsed.pathname.endsWith('/GetCascadeModelConfigData')) {
+                return Response.json({
+                    clientModelConfigs: [
+                        {
+                            label: 'Gemini 3.8 Flash',
+                            modelOrAlias: { model: 'MODEL_PLACEHOLDER_M318' },
+                            isRecommended: true
+                        }
+                    ],
+                    clientModelSorts: [
+                        {
+                            name: 'Recommended',
+                            groups: [
+                                {
+                                    groupName: 'Standard',
+                                    modelLabels: ['Gemini 3.8 Flash']
+                                }
+                            ]
+                        }
+                    ]
+                });
+            }
+
+            // Connect-RPC GetUserStatus endpoint (used by Antigravity web UI)
+            if (parsed.pathname.endsWith('/GetUserStatus')) {
+                return Response.json({
+                    userStatus: {
+                        name: 'Test Developer',
+                        cascadeModelConfigData: {
+                            clientModelConfigs: [
+                                {
+                                    label: 'Gemini 3.8 Flash',
+                                    modelOrAlias: { model: 'MODEL_PLACEHOLDER_M318' },
+                                    isRecommended: true
+                                }
+                            ],
+                            clientModelSorts: [
+                                {
+                                    name: 'Recommended',
+                                    groups: [
+                                        {
+                                            groupName: 'Standard',
+                                            modelLabels: ['Gemini 3.8 Flash']
+                                        }
+                                    ]
+                                }
+                            ]
+                        }
                     }
-                ],
-                clientModelSorts: [
-                    {
-                        groups: [
-                            {
-                                groupName: 'Standard',
-                                modelLabels: ['Gemini 3.8 Flash']
-                            }
-                        ]
-                    }
-                ]
-            }));
-            return;
-        }
+                });
+            }
 
-        // Connect-RPC GetUserStatus endpoint (used by Antigravity web UI)
-        if (parsed.pathname.endsWith('/GetUserStatus')) {
-            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-            res.end(JSON.stringify({
-                userStatus: {
-                    name: 'Test Developer',
+            // Connect-RPC GetCascadeModelConfigs endpoint (alternative model endpoint)
+            if (parsed.pathname.endsWith('/GetCascadeModelConfigs')) {
+                return Response.json({
                     cascadeModelConfigData: {
                         clientModelConfigs: [
                             {
                                 label: 'Gemini 3.8 Flash',
-                                modelOrAlias: { model: 'gemini-3.8-flash' },
+                                modelOrAlias: { model: 'MODEL_PLACEHOLDER_M318' },
                                 isRecommended: true
                             }
                         ],
                         clientModelSorts: [
                             {
+                                name: 'Recommended',
                                 groups: [
                                     {
                                         groupName: 'Standard',
@@ -97,49 +132,61 @@ test('Multi-Model Integration - HTTP Proxy, Models API, & Upstream Interception'
                             }
                         ]
                     }
-                }
-            }));
-            return;
-        }
+                });
+            }
 
-        // Connect-RPC GetCascadeModelConfigs endpoint (alternative model endpoint)
-        if (parsed.pathname.endsWith('/GetCascadeModelConfigs')) {
-            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-            res.end(JSON.stringify({
-                cascadeModelConfigData: {
-                    clientModelConfigs: [
-                        {
-                            label: 'Gemini 3.8 Flash',
-                            modelOrAlias: { model: 'gemini-3.8-flash' },
-                            isRecommended: true
-                        }
-                    ],
-                    clientModelSorts: [
-                        {
-                            groups: [
-                                {
-                                    groupName: 'Standard',
-                                    modelLabels: ['Gemini 3.8 Flash']
+            // Upstream error endpoint to verify non-200 / non-JSON responses don't throw stream lock errors
+            if (parsed.pathname.endsWith('/GetCascadeModelConfigDataError')) {
+                return new Response('Internal Server Error from upstream', { status: 500 });
+            }
+
+            return new Response('Mock Agy OK', { status: 200 });
+        },
+        websocket: {
+            message(ws, message) {
+                const text = typeof message === 'string' ? message : Buffer.from(message).toString('utf8');
+                try {
+                    const parsed = JSON.parse(text);
+                    if (parsed.type === 'start' && parsed.procedure?.endsWith('/GetUserStatus')) {
+                        ws.send(JSON.stringify({
+                            streamId: parsed.streamId,
+                            type: 'data',
+                            payload: {
+                                userStatus: {
+                                    name: 'Test Developer',
+                                    cascadeModelConfigData: {
+                                        clientModelConfigs: [
+                                            {
+                                                label: 'Gemini 3.8 Flash',
+                                                modelOrAlias: { model: 'MODEL_PLACEHOLDER_M318' },
+                                                isRecommended: true
+                                            }
+                                        ],
+                                        clientModelSorts: [
+                                            {
+                                                name: 'Recommended',
+                                                groups: [
+                                                    {
+                                                        groupName: 'Standard',
+                                                        modelLabels: ['Gemini 3.8 Flash']
+                                                    }
+                                                ]
+                                            }
+                                        ]
+                                    }
                                 }
-                            ]
-                        }
-                    ]
-                }
-            }));
-            return;
+                            }
+                        }));
+                        ws.send(JSON.stringify({
+                            streamId: parsed.streamId,
+                            type: 'end',
+                            statusCode: 0
+                        }));
+                    }
+                } catch (e) {}
+            }
         }
-
-        // Upstream error endpoint to verify non-200 / non-JSON responses don't throw stream lock errors
-        if (parsed.pathname.endsWith('/GetCascadeModelConfigDataError')) {
-            res.writeHead(500, { 'Content-Type': 'text/plain' });
-            res.end('Internal Server Error from upstream');
-            return;
-        }
-
-        res.writeHead(200, { 'Content-Type': 'text/plain' });
-        res.end('Mock Agy OK');
     });
-    await new Promise((resolve) => mockAgyServer.listen(MOCK_AGY_PORT, '127.0.0.1', resolve));
 
     // 3. Spawn auth-proxy.js
     const proxyProc = spawn(process.execPath, [path.join(__dirname, '../proxy/auth-proxy.js')], {
@@ -392,6 +439,65 @@ test('Multi-Model Integration - HTTP Proxy, Models API, & Upstream Interception'
             assert.equal(injectedModel.label, 'Claude 3.7 Sonnet (Anthropic)');
         });
 
+        await t.test('intercepts GetUserStatus over WebSocket and injects custom models with valid placeholder enums', async () => {
+            const ws = new WebSocket(`ws://127.0.0.1:${TEST_PORT}/connect-websocket`, {
+                headers: {
+                    Cookie: authCookie,
+                    Origin: `http://127.0.0.1:${TEST_PORT}`
+                }
+            });
+
+            const receivedData = await new Promise((resolve, reject) => {
+                const timeout = setTimeout(() => {
+                    ws.close();
+                    reject(new Error('WebSocket GetUserStatus timed out'));
+                }, 4000);
+
+                let payloadData = null;
+
+                ws.onopen = () => {
+                    ws.send(JSON.stringify({
+                        streamId: 'test-ws-stream-1',
+                        type: 'start',
+                        procedure: '/exa.language_server_pb.LanguageServerService/GetUserStatus',
+                        stream: false,
+                        payload: {}
+                    }));
+                };
+
+                ws.onmessage = (event) => {
+                    const text = typeof event.data === 'string' ? event.data : Buffer.from(event.data).toString('utf8');
+                    try {
+                        const data = JSON.parse(text);
+                        if (data.type === 'data') {
+                            payloadData = data.payload;
+                        } else if (data.type === 'end') {
+                            clearTimeout(timeout);
+                            ws.close();
+                            resolve(payloadData);
+                        }
+                    } catch (e) {}
+                };
+
+                ws.onerror = (err) => {
+                    clearTimeout(timeout);
+                    reject(err);
+                };
+            });
+
+            assert.ok(receivedData, 'Must receive WebSocket payload data');
+            const configs = receivedData.userStatus?.cascadeModelConfigData?.clientModelConfigs || [];
+            assert.ok(configs.some(m => m.label === 'Gemini 3.8 Flash'), 'Upstream model present');
+
+            const injected = configs.find(m => m.modelId === 'custom-anthropic-claude-3-7-sonnet');
+            assert.ok(injected, 'Custom Anthropic model must be injected over WebSocket');
+            assert.equal(injected.label, 'Claude 3.7 Sonnet (Anthropic)');
+            assert.match(injected.modelOrAlias.model, /^MODEL_PLACEHOLDER_M\d+$/, 'Enum must be valid MODEL_PLACEHOLDER');
+
+            const sorts = receivedData.userStatus?.cascadeModelConfigData?.clientModelSorts?.[0]?.groups?.[0]?.modelLabels || [];
+            assert.ok(sorts.includes('Claude 3.7 Sonnet (Anthropic)'), 'Custom model label must be in sort group');
+        });
+
         await t.test('safely passes through upstream non-ok responses without stream lock errors', async () => {
             const errRes = await makeRequest('/exa.language_server_pb.LanguageServerService/GetCascadeModelConfigDataError', {
                 method: 'POST',
@@ -424,7 +530,11 @@ test('Multi-Model Integration - HTTP Proxy, Models API, & Upstream Interception'
 
     } finally {
         proxyProc.kill('SIGKILL');
-        mockAgyServer.close();
+        if (typeof mockAgyServer.stop === 'function') {
+            mockAgyServer.stop();
+        } else {
+            mockAgyServer.close();
+        }
         mockProviderServer.close();
         try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch (e) {}
     }

@@ -40,7 +40,12 @@ const {
     renderModelsPage,
     checkUpstreamHealth
 } = require('./lib/pages.js');
-const { isSpaRoute, proxyWebRequest } = require('./lib/proxy.js');
+const {
+    isSpaRoute,
+    proxyWebRequest,
+    handleWebSocketClientMessage,
+    handleWebSocketUpstreamMessage
+} = require('./lib/proxy.js');
 const { defaultManager: modelsManager, maskApiKey } = require('./lib/models-manager.js');
 
 let TranslationProxy;
@@ -517,6 +522,8 @@ const server = Bun.serve({
                 upstreamHeaders['referer'] = upstreamHeaders['referer'].replace(/^https?:\/\/[^/]+/, `http://localhost:${wsTargetPort}`);
             }
 
+            const isConnectWs = wsTargetPort === TARGET_PORT && typeof wsTargetPath === 'string' && wsTargetPath.startsWith('/connect-websocket');
+
             const subprotocols = headers['sec-websocket-protocol']
                 ? headers['sec-websocket-protocol'].split(',').map(s => s.trim())
                 : undefined;
@@ -529,6 +536,9 @@ const server = Bun.serve({
                 upstreamWs.binaryType = 'arraybuffer';
                 ws.data.upstreamWs = upstreamWs;
                 ws.data.pendingMessages = [];
+                if (isConnectWs) {
+                    ws.data.activeStreams = new Map();
+                }
 
                 upstreamWs.onopen = () => {
                     if (ws.data.pendingMessages && ws.data.pendingMessages.length > 0) {
@@ -541,15 +551,23 @@ const server = Bun.serve({
 
                 upstreamWs.onmessage = (event) => {
                     try {
-                        ws.send(event.data);
-                    } catch (e) {}
+                        let dataToSend = event.data;
+                        if (isConnectWs) {
+                            dataToSend = handleWebSocketUpstreamMessage(ws, event, modelsManager);
+                        }
+                        ws.send(dataToSend);
+                    } catch (e) {
+                        try { ws.send(event.data); } catch (err) {}
+                    }
                 };
 
                 upstreamWs.onclose = () => {
+                    ws.data?.activeStreams?.clear();
                     try { ws.close(); } catch (e) {}
                 };
 
                 upstreamWs.onerror = () => {
+                    ws.data?.activeStreams?.clear();
                     try { ws.close(); } catch (e) {}
                 };
             } catch (err) {
@@ -558,6 +576,10 @@ const server = Bun.serve({
             }
         },
         message(ws, message) {
+            if (ws.data?.activeStreams) {
+                handleWebSocketClientMessage(ws, message);
+            }
+
             const upstreamWs = ws.data?.upstreamWs;
             if (upstreamWs && upstreamWs.readyState === WebSocket.OPEN) {
                 upstreamWs.send(message);
@@ -566,6 +588,7 @@ const server = Bun.serve({
             }
         },
         close(ws) {
+            ws.data?.activeStreams?.clear();
             if (ws.data?.upstreamWs) {
                 try { ws.data.upstreamWs.close(); } catch (e) {}
             }

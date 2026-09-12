@@ -107,11 +107,28 @@ test('Models Manager - Configuration, CRUD & Provider Connectivity', async (t) =
         assert.equal(claude.label, 'Claude 3.7 Sonnet (Anthropic)');
         assert.equal(claude.supportsImages, true);
         assert.equal(claude.isRecommended, true);
-        assert.ok(claude.modelOrAlias.model);
+        assert.match(claude.modelOrAlias.model, /^MODEL_PLACEHOLDER_M\d+$/);
 
         const llama = injected.find(m => m.modelId.includes('llama3.3'));
         assert.ok(llama);
         assert.equal(llama.label, 'Llama 3.3 (OpenAI)');
+        assert.match(llama.modelOrAlias.model, /^MODEL_PLACEHOLDER_M\d+$/);
+        assert.notEqual(claude.modelOrAlias.model, llama.modelOrAlias.model);
+
+        // Verify inverse lookup
+        const lookedUp = manager.getModelByPlaceholder(claude.modelOrAlias.model);
+        assert.ok(lookedUp);
+        assert.equal(lookedUp.modelId, claude.modelId);
+
+        // Verify collision handling and capacity limit
+        const used = new Set();
+        for (let i = 0; i < 150; i++) {
+            const assigned = manager.getPlaceholderEnum(`test-model-${i}`, used);
+            assert.match(assigned, /^MODEL_PLACEHOLDER_M(5\d\d|6[0-4]\d)$/);
+        }
+        assert.throws(() => {
+            manager.getPlaceholderEnum('overflow-model', used);
+        }, /capacity/);
 
         assert.equal(manager.hasEnabledModels(), true);
     });

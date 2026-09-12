@@ -10,6 +10,9 @@ const HOME_DIR = process.env.HOME || '/home/developer';
 const GEMINI_CONFIG_DIR = process.env.GEMINI_CONFIG_DIR || path.join(HOME_DIR, '.gemini/config');
 const DEFAULT_CONFIG_PATH = path.join(GEMINI_CONFIG_DIR, 'custom_models.json');
 
+const PLACEHOLDER_START = 500;
+const PLACEHOLDER_COUNT = 150;
+
 /**
  * Masks an API key for safe UI display (e.g. sk-••••••••1234).
  */
@@ -194,11 +197,44 @@ class ModelsManager {
     }
 
     /**
+     * Maps a model ID to a valid protobuf enum string in the MODEL_PLACEHOLDER_M500..M649 range.
+     */
+    getPlaceholderEnum(modelId, usedEnums = new Set()) {
+        if (usedEnums.size >= PLACEHOLDER_COUNT) {
+            throw new Error(`Maximum custom models capacity (${PLACEHOLDER_COUNT}) reached`);
+        }
+        let hash = 0;
+        for (let i = 0; i < modelId.length; i++) {
+            hash = ((hash << 5) - hash) + modelId.charCodeAt(i);
+            hash |= 0;
+        }
+        let offset = PLACEHOLDER_START + (Math.abs(hash) % PLACEHOLDER_COUNT);
+        let iterations = 0;
+        while (usedEnums.has(`MODEL_PLACEHOLDER_M${offset}`) && iterations < PLACEHOLDER_COUNT) {
+            offset = PLACEHOLDER_START + ((offset - PLACEHOLDER_START + 1) % PLACEHOLDER_COUNT);
+            iterations++;
+        }
+        const enumName = `MODEL_PLACEHOLDER_M${offset}`;
+        usedEnums.add(enumName);
+        return enumName;
+    }
+
+    /**
+     * Looks up an enabled model definition by its assigned placeholder enum.
+     */
+    getModelByPlaceholder(placeholderEnum) {
+        if (!placeholderEnum || typeof placeholderEnum !== 'string') return null;
+        const injected = this.getInjectedModels();
+        return injected.find(m => m.modelOrAlias?.model === placeholderEnum) || null;
+    }
+
+    /**
      * Formats all enabled custom models into Antigravity clientModelConfigs entries.
      */
-    getInjectedModels() {
+    getInjectedModels(existingEnums = null) {
         const config = this.getConfig();
         const results = [];
+        const usedEnums = new Set(existingEnums || []);
 
         for (const provider of config.providers) {
             if (!provider.enabled) continue;
@@ -208,9 +244,10 @@ class ModelsManager {
                 if (!model.enabled) continue;
 
                 const modelId = `custom-${provider.type}-${model.id}`;
+                const placeholderEnum = this.getPlaceholderEnum(modelId, usedEnums);
                 results.push({
                     label: `${model.label} (${providerTag})`,
-                    modelOrAlias: { model: modelId },
+                    modelOrAlias: { model: placeholderEnum },
                     supportsImages: true,
                     isRecommended: true,
                     allowedTiers: [
