@@ -949,10 +949,79 @@ function isEffectivelyEmpty(v) {
 }
 
 /**
+ * Recursively unpacks protobuf Struct and Value wrappers (fields, stringValue, numberValue,
+ * boolValue, listValue, structValue) into standard JavaScript objects, primitives, or strings.
+ */
+function unpackProtobufValue(val) {
+    if (val === null || val === undefined || typeof val !== 'object') return val;
+    if (Array.isArray(val)) return val.map(unpackProtobufValue);
+
+    const keys = Object.keys(val);
+    if (keys.length === 1) {
+        const k = keys[0];
+        if (k === 'stringValue') return val.stringValue;
+        if (k === 'numberValue') return val.numberValue;
+        if (k === 'boolValue') return val.boolValue;
+        if (k === 'nullValue') return null;
+        if (k === 'structValue') return unpackProtobufValue(val.structValue);
+        if (k === 'listValue') {
+            const list = Array.isArray(val.listValue?.values)
+                ? val.listValue.values
+                : (Array.isArray(val.listValue) ? val.listValue : []);
+            return list.map(unpackProtobufValue);
+        }
+        if (k === 'fields' && typeof val.fields === 'object' && val.fields !== null && !Array.isArray(val.fields)) {
+            const res = {};
+            for (const [fk, fv] of Object.entries(val.fields)) {
+                res[fk] = unpackProtobufValue(fv);
+            }
+            return res;
+        }
+    }
+
+    // Standard object: recursively unpack child properties
+    const res = {};
+    for (const [k, v] of Object.entries(val)) {
+        res[k] = unpackProtobufValue(v);
+    }
+    return res;
+}
+
+/**
+ * Provides a sensible, human-readable confirmation string when a tool executes successfully
+ * but returns an empty output or payload, preventing models from interpreting {} as a failure.
+ */
+function formatToolSuccessFallback(toolName) {
+    if (!toolName || typeof toolName !== 'string') {
+        return 'Tool executed successfully with no additional output.';
+    }
+    const name = toolName.toLowerCase();
+    if (name.includes('write')) return 'File written successfully.';
+    if (name.includes('edit') || name.includes('replace')) return 'File content updated successfully.';
+    if (name.startsWith('save_memory') || name === 'record_memory') return 'Memory recorded successfully.';
+    if (name.startsWith('lookup_memory') || name.startsWith('search_memory') || name.startsWith('find_memory')) {
+        return 'No matching memories found.';
+    }
+    if (name.includes('memory')) return 'Memory operation completed successfully.';
+    if (name.includes('subagent') || name.includes('agent')) return 'Subagent operation completed successfully.';
+    if (name.includes('notify')) return 'Notification sent successfully.';
+    if (name === 'read_url_content' || name.includes('fetch_url')) return 'Web page content is empty.';
+    if (name.includes('url') || name.includes('browser') || name.includes('web')) {
+        return 'Web content retrieved with no additional output.';
+    }
+    if (name === 'view_file' || name.startsWith('read_file')) return 'File is empty (0 lines).';
+    if (name.includes('list_dir') || name === 'list_directory') return 'Directory is empty (0 entries).';
+    if (name.includes('search') || name.includes('grep') || name.includes('find')) return 'No matches found.';
+    if (name.includes('run_command') || name.includes('execute')) return 'Command executed with no output.';
+    return 'Tool executed successfully with no additional output.';
+}
+
+
+/**
  * Safely extracts the response payload from a function response or part,
  * resolving nested parts (including base64 decoded data), output fields, and error details.
  */
-function extractResponseValue(resp, part) {
+function extractResponseValue(resp, part, fallbackToolName) {
     if (!resp && !part) return {};
 
     // 1. Direct response / output / content / result from resp, then fallback to part
@@ -966,6 +1035,11 @@ function extractResponseValue(resp, part) {
               (part.output !== undefined ? part.output :
               (part.content !== undefined ? part.content :
               (part.result !== undefined ? part.result : undefined)));
+    }
+
+    // Recursively unpack protobuf Struct and Value wrappers (e.g. { fields: { output: { stringValue: '...' } } })
+    if (val !== undefined && typeof val === 'object' && val !== null) {
+        val = unpackProtobufValue(val);
     }
 
     // Unpack string from object if present (output, result, content, or text)
@@ -1010,16 +1084,29 @@ function extractResponseValue(resp, part) {
                         } catch {}
                         textParts.push(decoded || p.data);
                     } else if (typeof p.data === 'object' && p.data !== null) {
-                        if (typeof p.data.output === 'string') {
-                            textParts.push(p.data.output);
-                        } else if (typeof p.data.result === 'string') {
-                            textParts.push(p.data.result);
-                        } else if (typeof p.data.content === 'string') {
-                            textParts.push(p.data.content);
-                        } else if (typeof p.data.text === 'string') {
-                            textParts.push(p.data.text);
+                        const unpackedData = unpackProtobufValue(p.data);
+                        if (typeof unpackedData === 'string') {
+                            textParts.push(unpackedData);
+                        } else if (typeof p.data.data === 'string') {
+                            let decoded = null;
+                            try {
+                                const buf = Buffer.from(p.data.data, 'base64');
+                                const utf8 = buf.toString('utf8');
+                                if (!utf8.includes('\ufffd') && utf8.length > 0) {
+                                    decoded = utf8;
+                                }
+                            } catch {}
+                            textParts.push(decoded || p.data.data);
+                        } else if (typeof unpackedData.output === 'string') {
+                            textParts.push(unpackedData.output);
+                        } else if (typeof unpackedData.result === 'string') {
+                            textParts.push(unpackedData.result);
+                        } else if (typeof unpackedData.content === 'string') {
+                            textParts.push(unpackedData.content);
+                        } else if (typeof unpackedData.text === 'string') {
+                            textParts.push(unpackedData.text);
                         } else {
-                            textParts.push(JSON.stringify(p.data));
+                            textParts.push(JSON.stringify(unpackedData));
                         }
                     } else {
                         textParts.push(String(p.data));
@@ -1037,6 +1124,10 @@ function extractResponseValue(resp, part) {
                         } catch {}
                     }
                     textParts.push(decoded || rawData);
+                } else if (p.retrievalResult || p.retrieval_result) {
+                    const rr = p.retrievalResult || p.retrieval_result;
+                    const rrContent = rr.content || rr.display_content || rr.displayContent || JSON.stringify(rr);
+                    textParts.push(typeof rrContent === 'string' ? rrContent : JSON.stringify(rrContent));
                 } else if (p.fileData || p.file_data) {
                     textParts.push(JSON.stringify(p.fileData || p.file_data));
                 } else if (p.output !== undefined) {
@@ -1088,7 +1179,11 @@ function extractResponseValue(resp, part) {
 
     let finalVal = val !== undefined ? val : {};
     if (isEffectivelyEmpty(finalVal)) {
-        finalVal = {};
+        if (fallbackToolName) {
+            finalVal = formatToolSuccessFallback(fallbackToolName);
+        } else {
+            finalVal = {};
+        }
     }
 
     // Debug: log when extraction returns empty so we can identify the wire format
@@ -1107,10 +1202,11 @@ function getFunctionResponse(part) {
     if (!part || typeof part !== 'object') return null;
     const resp = part.functionResponse || part.function_response || part.toolResponse || part.tool_response;
     const id = resp?.id || resp?.call_id || resp?.callId || part.id || part.call_id || part.callId || null;
+    const name = resp?.name || part?.name || '';
     if (!resp || typeof resp !== 'object') {
         if (part.name && (part.response !== undefined || part.output !== undefined || part.parts !== undefined || part.content !== undefined || part.result !== undefined)) {
             return {
-                name: part.name || '',
+                name,
                 response: extractResponseValue(part, part),
                 id
             };
@@ -1118,7 +1214,7 @@ function getFunctionResponse(part) {
         return null;
     }
     return {
-        name: resp.name || '',
+        name,
         response: extractResponseValue(resp, part),
         id
     };
@@ -1154,6 +1250,51 @@ function resolveToolCallId(fnResp, pendingCalls, knownCallIds, fallbackPrefix) {
 }
 
 /**
+ * Pre-processes an array of parts to associate empty tool responses with any unconsumed
+ * sibling text parts in the same turn, or apply a sensible fallback message.
+ * Returns a Set of consumed parts and a Map of part -> fnResp.
+ */
+function prepareToolResponses(parts) {
+    const consumedParts = new Set();
+    const fnRespMap = new Map();
+    if (!Array.isArray(parts)) {
+        return { consumedParts, fnRespMap };
+    }
+
+    const fnResps = [];
+    for (const part of parts) {
+        const fnResp = getFunctionResponse(part);
+        if (fnResp) {
+            const clonedResp = { ...fnResp };
+            fnRespMap.set(part, clonedResp);
+            fnResps.push({ part, fnResp: clonedResp });
+        }
+    }
+
+    for (const { part, fnResp } of fnResps) {
+        if (isEffectivelyEmpty(fnResp.response)) {
+            const textSibling = parts.find(p =>
+                p !== part &&
+                !consumedParts.has(p) &&
+                typeof p.text === 'string' &&
+                p.text.trim().length > 0 &&
+                !p.thought &&
+                !getFunctionCall(p) &&
+                !fnRespMap.has(p)
+            );
+            if (textSibling) {
+                consumedParts.add(textSibling);
+                fnResp.response = textSibling.text;
+            } else {
+                fnResp.response = formatToolSuccessFallback(fnResp.name);
+            }
+        }
+    }
+
+    return { consumedParts, fnRespMap };
+}
+
+/**
  * Converts Gemini contents and systemInstruction into Anthropic Messages format.
  */
 function geminiContentsToAnthropic(contents, systemInstruction) {
@@ -1176,9 +1317,12 @@ function geminiContentsToAnthropic(contents, systemInstruction) {
             const blocks = [];
 
             if (Array.isArray(item.parts)) {
+                const { consumedParts, fnRespMap } = prepareToolResponses(item.parts);
+
                 for (const part of item.parts) {
+                    if (consumedParts.has(part)) continue;
                     const fnCall = getFunctionCall(part);
-                    const fnResp = getFunctionResponse(part);
+                    const fnResp = fnRespMap.get(part);
 
                     if (part.text && !part.thought && !fnCall && !fnResp) {
                         blocks.push({ type: 'text', text: part.text });
@@ -1207,11 +1351,12 @@ function geminiContentsToAnthropic(contents, systemInstruction) {
                     if (fnResp) {
                         const callId = resolveToolCallId(fnResp, pendingCalls, knownToolCallIds, 'toolu');
 
+                        let respVal = fnResp.response;
                         let contentStr = '';
-                        if (typeof fnResp.response === 'string') {
-                            contentStr = fnResp.response;
+                        if (typeof respVal === 'string') {
+                            contentStr = respVal;
                         } else {
-                            contentStr = JSON.stringify(fnResp.response !== undefined ? fnResp.response : {});
+                            contentStr = JSON.stringify(respVal !== undefined ? respVal : {});
                         }
                         rawMessages.push({
                             role: 'user',
@@ -1307,17 +1452,21 @@ function geminiContentsToOpenAI(contents, systemInstruction) {
                     const userTextParts = [];
                     const userImageParts = [];
 
+                    const { consumedParts, fnRespMap } = prepareToolResponses(item.parts);
+
                     for (const part of item.parts) {
-                        const fnResp = getFunctionResponse(part);
+                        if (consumedParts.has(part)) continue;
+                        const fnResp = fnRespMap.get(part);
                         if (fnResp) {
                             const callId = resolveToolCallId(fnResp, pendingCalls, knownToolCallIds, 'call');
 
+                            let respVal = fnResp.response;
                             toolMessages.push({
                                 role: 'tool',
                                 tool_call_id: callId,
-                                content: typeof fnResp.response === 'string'
-                                    ? fnResp.response
-                                    : JSON.stringify(fnResp.response !== undefined ? fnResp.response : {})
+                                content: typeof respVal === 'string'
+                                    ? respVal
+                                    : JSON.stringify(respVal !== undefined ? respVal : {})
                             });
                         } else if (part.text) {
                             userTextParts.push(part.text);
@@ -1381,5 +1530,8 @@ module.exports = {
     extractResponseValue,
     getFunctionResponse,
     resolveToolCallId,
-    sanitizeToolCallArgs
+    sanitizeToolCallArgs,
+    unpackProtobufValue,
+    formatToolSuccessFallback,
+    prepareToolResponses
 };

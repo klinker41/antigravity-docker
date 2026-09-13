@@ -20,7 +20,10 @@ const {
     extractResponseValue,
     isEffectivelyEmpty,
     resolveToolCallId,
-    sanitizeToolCallArgs
+    sanitizeToolCallArgs,
+    unpackProtobufValue,
+    formatToolSuccessFallback,
+    prepareToolResponses
 } = require('../proxy/lib/transcoder');
 
 test('Stream Transcoder - Anthropic & OpenAI Event Normalization', async (t) => {
@@ -1627,5 +1630,338 @@ test('Stream Transcoder - Anthropic & OpenAI Event Normalization', async (t) => 
         assert.ok(fnResp3);
         assert.equal(fnResp3.id, 'resp_id_preferred');
     });
+
+    await t.test('unpackProtobufValue recursively unwraps protobuf Struct and Value wrappers', () => {
+        // Primitives
+        assert.equal(unpackProtobufValue({ stringValue: 'hello world' }), 'hello world');
+        assert.equal(unpackProtobufValue({ numberValue: 42 }), 42);
+        assert.equal(unpackProtobufValue({ boolValue: true }), true);
+        assert.equal(unpackProtobufValue({ nullValue: null }), null);
+
+        // List value
+        assert.deepEqual(
+            unpackProtobufValue({ listValue: { values: [{ stringValue: 'first' }, { numberValue: 2 }] } }),
+            ['first', 2]
+        );
+
+        // Struct value with fields
+        const pbStruct = {
+            fields: {
+                output: { stringValue: 'Created file /workspace/file.txt with requested content.' },
+                exitCode: { numberValue: 0 },
+                success: { boolValue: true }
+            }
+        };
+        assert.deepEqual(unpackProtobufValue(pbStruct), {
+            output: 'Created file /workspace/file.txt with requested content.',
+            exitCode: 0,
+            success: true
+        });
+
+        // Nested structValue
+        const nestedStruct = {
+            structValue: {
+                fields: {
+                    nestedKey: { stringValue: 'nestedVal' }
+                }
+            }
+        };
+        assert.deepEqual(unpackProtobufValue(nestedStruct), {
+            nestedKey: 'nestedVal'
+        });
+
+        // Pass-through for standard primitives
+        assert.equal(unpackProtobufValue('plain string'), 'plain string');
+        assert.equal(unpackProtobufValue(123), 123);
+        assert.equal(unpackProtobufValue(null), null);
+    });
+
+    await t.test('formatToolSuccessFallback returns descriptive confirmation strings', () => {
+        assert.equal(formatToolSuccessFallback('write_to_file'), 'File written successfully.');
+        assert.equal(formatToolSuccessFallback('Write_To_File'), 'File written successfully.');
+        assert.equal(formatToolSuccessFallback('replace_file_content'), 'File content updated successfully.');
+        assert.equal(formatToolSuccessFallback('edit_file'), 'File content updated successfully.');
+        assert.equal(formatToolSuccessFallback('save_memory'), 'Memory recorded successfully.');
+        assert.equal(formatToolSuccessFallback('lookup_memory'), 'No matching memories found.');
+        assert.equal(formatToolSuccessFallback('manage_subagents'), 'Subagent operation completed successfully.');
+        assert.equal(formatToolSuccessFallback('notify_the_user'), 'Notification sent successfully.');
+        assert.equal(formatToolSuccessFallback('read_url_content'), 'Web page content is empty.');
+        assert.equal(formatToolSuccessFallback('view_file'), 'File is empty (0 lines).');
+        assert.equal(formatToolSuccessFallback('list_dir'), 'Directory is empty (0 entries).');
+        assert.equal(formatToolSuccessFallback('grep_search'), 'No matches found.');
+        assert.equal(formatToolSuccessFallback('run_command'), 'Command executed with no output.');
+        assert.equal(formatToolSuccessFallback('custom_tool'), 'Tool executed successfully with no additional output.');
+        assert.equal(formatToolSuccessFallback(''), 'Tool executed successfully with no additional output.');
+        assert.equal(formatToolSuccessFallback(null), 'Tool executed successfully with no additional output.');
+    });
+
+    await t.test('extractResponseValue unpacks protobuf Struct { fields: ... } from response', () => {
+        // Wire format from agy protobuf struct: { response: { fields: { output: { stringValue: '...' } } } }
+        const respFromWire = {
+            name: 'write_to_file',
+            response: {
+                fields: {
+                    output: {
+                        stringValue: 'Created file file:///workspace/test.txt with requested content.'
+                    }
+                }
+            }
+        };
+        assert.equal(
+            extractResponseValue(respFromWire, respFromWire),
+            'Created file file:///workspace/test.txt with requested content.'
+        );
+
+        // With result field
+        const respWithResult = {
+            name: 'run_command',
+            response: {
+                fields: {
+                    result: {
+                        stringValue: 'test command execution output'
+                    }
+                }
+            }
+        };
+        assert.equal(
+            extractResponseValue(respWithResult, respWithResult),
+            'test command execution output'
+        );
+    });
+
+    await t.test('extractResponseValue decodes base64 FunctionResponseBlob inside parts data', () => {
+        const testText = 'Created file file:///workspace/llm-plays-pokemon/test.txt with requested content.';
+        const base64Data = Buffer.from(testText, 'utf8').toString('base64');
+        const respWithBlob = {
+            name: 'write_to_file',
+            response: { fields: {} },
+            parts: [
+                {
+                    data: {
+                        mimeType: 'text/plain',
+                        data: base64Data
+                    }
+                }
+            ]
+        };
+        assert.equal(extractResponseValue(respWithBlob, respWithBlob), testText);
+
+        // RetrievalResult in parts
+        const respWithRetrieval = {
+            name: 'search_docs',
+            response: {},
+            parts: [
+                {
+                    retrievalResult: {
+                        content: 'Documentation page content here'
+                    }
+                }
+            ]
+        };
+        assert.equal(extractResponseValue(respWithRetrieval, respWithRetrieval), 'Documentation page content here');
+    });
+
+    await t.test('extractResponseValue uses tool-specific fallback when response is empty', () => {
+        const respEmpty = { response: { fields: {} } };
+        assert.equal(extractResponseValue(respEmpty, respEmpty, 'write_to_file'), 'File written successfully.');
+        assert.equal(extractResponseValue(respEmpty, respEmpty, 'manage_subagents'), 'Subagent operation completed successfully.');
+        // If no tool name is provided, retains backwards compatibility returning {}
+        assert.deepEqual(extractResponseValue(respEmpty, respEmpty), {});
+    });
+
+    await t.test('getFunctionResponse preserves empty response as {} so callers can bind sibling text or fallback', () => {
+        const partEmpty = {
+            functionResponse: {
+                name: 'write_to_file',
+                id: 'call_w1',
+                response: {}
+            }
+        };
+        const fnResp = getFunctionResponse(partEmpty);
+        assert.ok(fnResp);
+        assert.equal(fnResp.name, 'write_to_file');
+        assert.deepEqual(fnResp.response, {});
+    });
+
+    await t.test('prepareToolResponses binds unconsumed sibling text and falls back correctly', () => {
+        const partsWithSibling = [
+            { functionResponse: { name: 'write_to_file', id: 'c1', response: {} } },
+            { text: 'File written to disk' }
+        ];
+        const res1 = prepareToolResponses(partsWithSibling);
+        assert.equal(res1.consumedParts.size, 1);
+        const boundResp = res1.fnRespMap.get(partsWithSibling[0]);
+        assert.ok(boundResp);
+        assert.equal(boundResp.response, 'File written to disk');
+
+        const partsWithoutSibling = [
+            { functionResponse: { name: 'write_to_file', id: 'c2', response: {} } }
+        ];
+        const res2 = prepareToolResponses(partsWithoutSibling);
+        assert.equal(res2.consumedParts.size, 0);
+        const fallbackResp = res2.fnRespMap.get(partsWithoutSibling[0]);
+        assert.ok(fallbackResp);
+        assert.equal(fallbackResp.response, 'File written successfully.');
+    });
+
+    await t.test('geminiContentsToAnthropic binds sibling text parts to empty tool responses', () => {
+        const contents = [
+            {
+                role: 'model',
+                parts: [
+                    {
+                        functionCall: {
+                            name: 'write_to_file',
+                            id: 'call_write_1',
+                            args: { TargetFile: '/workspace/test.txt', CodeContent: 'hello' }
+                        }
+                    }
+                ]
+            },
+            {
+                role: 'user',
+                parts: [
+                    {
+                        functionResponse: {
+                            name: 'write_to_file',
+                            id: 'call_write_1',
+                            response: {}
+                        }
+                    },
+                    {
+                        text: 'Created file file:///workspace/test.txt with requested content.'
+                    }
+                ]
+            }
+        ];
+
+        const { messages } = geminiContentsToAnthropic(contents);
+        assert.equal(messages.length, 3); // Prepends Proceed. user turn, assistant tool_use, user tool_result
+        assert.equal(messages[0].role, 'user');
+        assert.equal(messages[1].role, 'assistant');
+        assert.equal(messages[2].role, 'user');
+
+        // Verify tool_result contains the sibling text rather than {}
+        const toolResult = messages[2].content.find(c => c.type === 'tool_result');
+        assert.ok(toolResult);
+        assert.equal(toolResult.tool_use_id, 'call_write_1');
+        assert.equal(toolResult.content, 'Created file file:///workspace/test.txt with requested content.');
+
+        // Sibling text must NOT be emitted as a separate redundant text block
+        const separateText = messages[2].content.filter(c => c.type === 'text');
+        assert.equal(separateText.length, 0, 'Sibling text part must be consumed by tool_result and not duplicated');
+    });
+
+    await t.test('geminiContentsToAnthropic falls back to descriptive confirmation when tool response is empty with no sibling text', () => {
+        const contents = [
+            {
+                role: 'model',
+                parts: [
+                    {
+                        functionCall: {
+                            name: 'write_to_file',
+                            id: 'call_write_2',
+                            args: { TargetFile: '/workspace/test2.txt' }
+                        }
+                    }
+                ]
+            },
+            {
+                role: 'user',
+                parts: [
+                    {
+                        functionResponse: {
+                            name: 'write_to_file',
+                            id: 'call_write_2',
+                            response: {}
+                        }
+                    }
+                ]
+            }
+        ];
+
+        const { messages } = geminiContentsToAnthropic(contents);
+        const toolResult = messages[messages.length - 1].content.find(c => c.type === 'tool_result');
+        assert.ok(toolResult);
+        assert.equal(toolResult.content, 'File written successfully.');
+    });
+
+
+    await t.test('geminiContentsToOpenAI binds sibling text parts to empty tool responses', () => {
+        const contents = [
+            {
+                role: 'model',
+                parts: [
+                    {
+                        functionCall: {
+                            name: 'write_to_file',
+                            id: 'call_oai_1',
+                            args: { TargetFile: '/workspace/oai.txt' }
+                        }
+                    }
+                ]
+            },
+            {
+                role: 'user',
+                parts: [
+                    {
+                        functionResponse: {
+                            name: 'write_to_file',
+                            id: 'call_oai_1',
+                            response: {}
+                        }
+                    },
+                    {
+                        text: 'Created file file:///workspace/oai.txt with requested content.'
+                    }
+                ]
+            }
+        ];
+
+        const messages = geminiContentsToOpenAI(contents);
+        const toolMsg = messages.find(m => m.role === 'tool');
+        assert.ok(toolMsg);
+        assert.equal(toolMsg.tool_call_id, 'call_oai_1');
+        assert.equal(toolMsg.content, 'Created file file:///workspace/oai.txt with requested content.');
+
+        // No trailing user message duplicating the text
+        const userMsgs = messages.filter(m => m.role === 'user');
+        assert.equal(userMsgs.length, 0, 'Sibling text must not be duplicated into user messages');
+    });
+
+    await t.test('geminiContentsToOpenAI falls back to descriptive confirmation when tool response is empty with no sibling text', () => {
+        const contents = [
+            {
+                role: 'model',
+                parts: [
+                    {
+                        functionCall: {
+                            name: 'manage_subagents',
+                            id: 'call_subagent_1',
+                            args: { Action: 'list' }
+                        }
+                    }
+                ]
+            },
+            {
+                role: 'user',
+                parts: [
+                    {
+                        functionResponse: {
+                            name: 'manage_subagents',
+                            id: 'call_subagent_1',
+                            response: {}
+                        }
+                    }
+                ]
+            }
+        ];
+
+        const messages = geminiContentsToOpenAI(contents);
+        const toolMsg = messages.find(m => m.role === 'tool');
+        assert.ok(toolMsg);
+        assert.equal(toolMsg.content, 'Subagent operation completed successfully.');
+    });
 });
+
 
