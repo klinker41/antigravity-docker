@@ -23,7 +23,8 @@ const {
     sanitizeToolCallArgs,
     unpackProtobufValue,
     formatToolSuccessFallback,
-    prepareToolResponses
+    prepareToolResponses,
+    isToolExecutionOutput
 } = require('../proxy/lib/transcoder');
 
 test('Stream Transcoder - Anthropic & OpenAI Event Normalization', async (t) => {
@@ -1961,6 +1962,240 @@ test('Stream Transcoder - Anthropic & OpenAI Event Normalization', async (t) => 
         const toolMsg = messages.find(m => m.role === 'tool');
         assert.ok(toolMsg);
         assert.equal(toolMsg.content, 'Subagent operation completed successfully.');
+    });
+
+    await t.test('geminiContentsToOpenAI converts user turn with tool execution text following functionCall into role: tool', () => {
+        const contents = [
+            {
+                role: 'model',
+                parts: [
+                    {
+                        functionCall: {
+                            name: 'run_command',
+                            id: 'call_cmd_1',
+                            args: { CommandLine: 'ls -l' }
+                        }
+                    }
+                ]
+            },
+            {
+                role: 'user',
+                parts: [
+                    {
+                        text: 'Created At: 2026-09-13T01:52:07Z\nCompleted At: 2026-09-13T01:52:08Z\n\nThe command exited with code 0.\nOutput:\nfile1.txt\n'
+                    }
+                ]
+            }
+        ];
+
+        const messages = geminiContentsToOpenAI(contents);
+        const toolMsg = messages.find(m => m.role === 'tool');
+        assert.ok(toolMsg, 'Expected a role: tool message for the tool execution text');
+        assert.equal(toolMsg.tool_call_id, 'call_cmd_1');
+        assert.ok(toolMsg.content.includes('The command exited with code 0.'));
+
+        // Verify it was not duplicated into an accompanying user message
+        const userMsgs = messages.filter(m => m.role === 'user');
+        assert.equal(userMsgs.length, 0, 'Tool output must not remain as a user message');
+    });
+
+    await t.test('geminiContentsToAnthropic converts user turn with tool execution text following functionCall into tool_result', () => {
+        const contents = [
+            {
+                role: 'model',
+                parts: [
+                    {
+                        functionCall: {
+                            name: 'write_to_file',
+                            id: 'call_w_1',
+                            args: { TargetFile: '/workspace/test.txt', CodeContent: 'abc' }
+                        }
+                    }
+                ]
+            },
+            {
+                role: 'user',
+                parts: [
+                    {
+                        text: 'Created At: 2026-09-13T01:52:00Z\nCompleted At: 2026-09-13T01:52:00Z\nCreated file file:///workspace/test.txt with requested content.'
+                    }
+                ]
+            }
+        ];
+
+        const { messages } = geminiContentsToAnthropic(contents);
+        const userTurn = messages[messages.length - 1];
+        assert.equal(userTurn.role, 'user');
+        const toolResult = userTurn.content.find(c => c.type === 'tool_result');
+        assert.ok(toolResult, 'Expected tool_result content block');
+        assert.equal(toolResult.tool_use_id, 'call_w_1');
+        assert.ok(toolResult.content.includes('Created file file:///workspace/test.txt with requested content.'));
+    });
+
+    await t.test('geminiContentsToOpenAI binds cross-item tool output text when functionResponse is empty in preceding turn', () => {
+        const contents = [
+            {
+                role: 'model',
+                parts: [
+                    {
+                        functionCall: {
+                            name: 'write_to_file',
+                            id: 'call_lookahead_1',
+                            args: { TargetFile: '/workspace/lookahead.txt' }
+                        }
+                    }
+                ]
+            },
+            {
+                role: 'user',
+                parts: [
+                    {
+                        functionResponse: {
+                            name: 'write_to_file',
+                            id: 'call_lookahead_1',
+                            response: {}
+                        }
+                    }
+                ]
+            },
+            {
+                role: 'user',
+                parts: [
+                    {
+                        text: 'Created file file:///workspace/lookahead.txt with requested content.'
+                    }
+                ]
+            }
+        ];
+
+        const messages = geminiContentsToOpenAI(contents);
+        const toolMsg = messages.find(m => m.role === 'tool');
+        assert.ok(toolMsg);
+        assert.equal(toolMsg.tool_call_id, 'call_lookahead_1');
+        assert.equal(toolMsg.content, 'Created file file:///workspace/lookahead.txt with requested content.');
+    });
+
+    await t.test('chatMessagesToResponsesInput binds user turn with tool execution output to function_call_output', () => {
+        const messages = [
+            {
+                role: 'assistant',
+                content: 'Running command',
+                tool_calls: [{ id: 'call_resp_1', function: { name: 'run_command', arguments: '{"CommandLine":"ls"}' } }]
+            },
+            {
+                role: 'user',
+                content: 'Created At: 2026-09-13T01:52:07Z\nCompleted At: 2026-09-13T01:52:08Z\n\nThe command exited with code 0.\nOutput:\nfoo.txt'
+            }
+        ];
+
+        const input = chatMessagesToResponsesInput(messages);
+        const fnOutput = input.find(item => item.type === 'function_call_output');
+        assert.ok(fnOutput, 'Expected function_call_output');
+        assert.equal(fnOutput.call_id, 'call_resp_1');
+        assert.ok(fnOutput.output.includes('The command exited with code 0.'));
+        assert.notEqual(fnOutput.output, '{}');
+    });
+
+    await t.test('isToolExecutionOutput accurately distinguishes tool execution output from user prompts', () => {
+        assert.equal(isToolExecutionOutput('Created At: 2026-09-13T01:52:00Z\nOutput:\nok'), true);
+        assert.equal(isToolExecutionOutput('The command exited with code 0.'), true);
+        assert.equal(isToolExecutionOutput('Created file file:///workspace/test.txt with requested content.'), true);
+        assert.equal(isToolExecutionOutput('You have 4 active subagent(s): [...]'), true);
+        assert.equal(isToolExecutionOutput('Message sent to "agent-123".'), true);
+        assert.equal(isToolExecutionOutput('Error: permission check failed: user denied permission'), true);
+        assert.equal(isToolExecutionOutput('Command failed with exit code 1'), true);
+        assert.equal(isToolExecutionOutput('<USER_REQUEST>Please run ls</USER_REQUEST>'), false);
+        assert.equal(isToolExecutionOutput('<SYSTEM_MESSAGE>[Notice] restart</SYSTEM_MESSAGE>'), false);
+        assert.equal(isToolExecutionOutput('Second prompt'), false);
+        assert.equal(isToolExecutionOutput('How are you today?'), false);
+    });
+
+    await t.test('chatMessagesToResponsesInput handles array content blocks and matches call ID out-of-order', () => {
+        const messages = [
+            {
+                role: 'assistant',
+                content: 'Running commands',
+                tool_calls: [
+                    { id: 'call_cmd_A', function: { name: 'run_command', arguments: '{"CommandLine":"ls"}' } },
+                    { id: 'call_cmd_B', function: { name: 'view_file', arguments: '{"AbsolutePath":"/a.txt"}' } }
+                ]
+            },
+            {
+                role: 'user',
+                tool_call_id: 'call_cmd_B',
+                content: [
+                    { type: 'text', text: 'Created At: 2026-09-13T01:52:00Z\nOutput:\nfile content B' }
+                ]
+            },
+            {
+                role: 'user',
+                tool_call_id: 'call_cmd_A',
+                content: 'Created At: 2026-09-13T01:52:01Z\nOutput:\ncommand output A'
+            }
+        ];
+
+        const input = chatMessagesToResponsesInput(messages);
+        const outA = input.find(item => item.type === 'function_call_output' && item.call_id === 'call_cmd_A');
+        const outB = input.find(item => item.type === 'function_call_output' && item.call_id === 'call_cmd_B');
+        assert.ok(outA);
+        assert.ok(outB);
+        assert.ok(outA.output.includes('command output A'));
+        assert.ok(outB.output.includes('file content B'));
+    });
+
+    await t.test('prepareToolResponses does not leak lookahead across user turn boundaries', () => {
+        const contents = [
+            {
+                role: 'model',
+                parts: [
+                    { functionCall: { name: 'run_command', id: 'c_leak', args: { CommandLine: 'pwd' } } }
+                ]
+            },
+            {
+                role: 'user',
+                parts: [
+                    { functionResponse: { name: 'run_command', id: 'c_leak', response: {} } }
+                ]
+            },
+            {
+                role: 'user',
+                parts: [
+                    { text: '<USER_REQUEST>What is the current time?</USER_REQUEST>' }
+                ]
+            }
+        ];
+
+        const messages = geminiContentsToOpenAI(contents);
+        const toolMsg = messages.find(m => m.role === 'tool');
+        assert.ok(toolMsg);
+        // Function fallback used, user prompt NOT consumed as tool output
+        assert.equal(toolMsg.content, 'Command executed with no output.');
+        const userMsg = messages.find(m => m.role === 'user');
+        assert.ok(userMsg);
+        assert.equal(userMsg.content, '<USER_REQUEST>What is the current time?</USER_REQUEST>');
+    });
+
+    await t.test('geminiContentsToOpenAI preserves target tool name when tool output is effectively empty', () => {
+        const contents = [
+            {
+                role: 'model',
+                parts: [
+                    { functionCall: { name: 'write_to_file', id: 'call_write_empty', args: {} } }
+                ]
+            },
+            {
+                role: 'user',
+                call_id: 'call_write_empty',
+                parts: [
+                    { text: '   ' } // effectively empty whitespace
+                ]
+            }
+        ];
+
+        const messages = geminiContentsToOpenAI(contents);
+        const toolMsg = messages.find(m => m.role === 'tool');
+        assert.ok(toolMsg);
+        assert.equal(toolMsg.content, 'File written successfully.');
     });
 });
 
