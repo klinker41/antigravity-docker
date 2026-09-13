@@ -242,6 +242,39 @@ class TranslationProxy {
         return null;
     }
 
+    _resolveToolOutputs(parsedData, contents) {
+        const cascadeId = parsedData?.cascadeId || parsedData?.request?.cascadeId;
+        const convoId = parsedData?.conversationId || parsedData?.request?.conversationId || parsedData?.request?.sessionId;
+
+        const candidateIds = [];
+        if (this.activeConversationModels) {
+            const latestConvo = this.activeConversationModels.get('latestConvoId');
+            if (latestConvo) candidateIds.push(latestConvo);
+            for (const k of this.activeConversationModels.keys()) {
+                if (k !== 'latest' && k !== 'latestConvoId' && typeof k === 'string' && !candidateIds.includes(k)) {
+                    candidateIds.push(k);
+                }
+            }
+        }
+
+        const callIds = [];
+        if (Array.isArray(contents)) {
+            for (const item of contents) {
+                if (!Array.isArray(item?.parts)) continue;
+                for (const p of item.parts) {
+                    const call = p?.functionCall || p?.function_call;
+                    const resp = p?.functionResponse || p?.function_response;
+                    const cid = call?.id || call?.call_id || call?.callId || resp?.id || resp?.call_id || resp?.callId || p?.id || p?.call_id || p?.callId;
+                    if (cid && typeof cid === 'string' && (cid.startsWith('call_') || cid.startsWith('toolu_')) && !callIds.includes(cid)) {
+                        callIds.push(cid);
+                    }
+                }
+            }
+        }
+
+        return resolveConversationToolOutputs(convoId, cascadeId, this.baseDir, { candidateIds, callIds });
+    }
+
     handleStreamGenerateContent(req, res) {
         const chunks = [];
         req.on('data', chunk => chunks.push(chunk));
@@ -380,9 +413,7 @@ class TranslationProxy {
             }
         };
 
-        const cascadeId = parsedData?.cascadeId || parsedData?.request?.cascadeId;
-        const convoId = parsedData?.conversationId || parsedData?.request?.conversationId || parsedData?.request?.sessionId;
-        const toolOutputs = resolveConversationToolOutputs(convoId, cascadeId, this.baseDir);
+        const toolOutputs = this._resolveToolOutputs(parsedData, contents);
 
         try {
             await this._callProviderStream({
@@ -541,9 +572,7 @@ class TranslationProxy {
             }
         };
 
-        const cascadeId = parsedData?.cascadeId || parsedData?.request?.cascadeId;
-        const convoId = parsedData?.conversationId || parsedData?.request?.conversationId || parsedData?.request?.sessionId;
-        const toolOutputs = resolveConversationToolOutputs(convoId, cascadeId, this.baseDir);
+        const toolOutputs = this._resolveToolOutputs(parsedData, contents);
 
         try {
             await this._callProviderStream({

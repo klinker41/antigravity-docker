@@ -55,7 +55,7 @@ function setTrackedModel(key, modelConfig, map = activeConversationModels) {
     if (!key) return;
     if (map.size >= MAX_ACTIVE_CONVERSATIONS && !map.has(key)) {
         for (const k of map.keys()) {
-            if (k !== 'latest') {
+            if (k !== 'latest' && k !== 'latestConvoId') {
                 map.delete(k);
                 break;
             }
@@ -120,6 +120,7 @@ async function proxyWebRequest(c, targetPort, targetPath, options = {}) {
                         if (modelConfig) {
                             if (cascadeId) setTrackedModel(cascadeId, modelConfig);
                             if (convoId) setTrackedModel(convoId, modelConfig);
+                            if (convoId || cascadeId) activeConversationModels.set('latestConvoId', convoId || cascadeId);
                             setTrackedModel('latest', modelConfig);
                         }
                     }
@@ -316,6 +317,7 @@ function handleWebSocketClientMessage(ws, message, modelsManager, activeModelsMa
                         if (modelConfig) {
                             if (cascadeId) setTrackedModel(cascadeId, modelConfig, activeModelsMap);
                             if (convoId) setTrackedModel(convoId, modelConfig, activeModelsMap);
+                            if (convoId || cascadeId) activeModelsMap.set('latestConvoId', convoId || cascadeId);
                             setTrackedModel('latest', modelConfig, activeModelsMap);
                         }
                     }

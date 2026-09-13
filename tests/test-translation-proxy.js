@@ -876,3 +876,105 @@ test('Translation Proxy - resolves conversation tool outputs and passes to provi
     }
 });
 
+test('Translation Proxy - auto-resolves conversation tool outputs when conversationId is missing in parsedData', async (t) => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ag-proxy-autodiscover-test-'));
+    try {
+        const convoId = '40660fc3-bf63-4238-b3e1-ea7328967118';
+        const brainDir = path.join(tmpDir, 'brain', convoId);
+        fs.mkdirSync(brainDir, { recursive: true });
+
+        const stepDir = path.join(brainDir, '.system_generated', 'steps', '1');
+        fs.mkdirSync(stepDir, { recursive: true });
+        fs.writeFileSync(path.join(stepDir, 'output.txt'), 'Autodiscovered tool command output\n');
+
+        const convosDir = path.join(tmpDir, 'conversations');
+        fs.mkdirSync(convosDir, { recursive: true });
+        const dbPath = path.join(convosDir, `${convoId}.db`);
+
+        const Database = require('bun:sqlite').Database;
+        const db = new Database(dbPath);
+        db.query('CREATE TABLE steps (idx INTEGER PRIMARY KEY, step_type INTEGER, metadata BLOB)').run();
+
+        const toolName = 'run_command';
+        const callId = 'call_autodiscover_1';
+        const metaBuf = Buffer.concat([
+            Buffer.from(callId),
+            Buffer.from([0x12, toolName.length]),
+            Buffer.from(toolName)
+        ]);
+        db.query('INSERT INTO steps (idx, step_type, metadata) VALUES (?, ?, ?)').run(1, 132, metaBuf);
+        db.close();
+
+        const proxy = new TranslationProxy({
+            port: 19995,
+            upstreamUrl: 'http://127.0.0.1:19994',
+            baseDir: tmpDir
+        });
+
+        // Register active conversation model mapping
+        proxy.activeConversationModels.set(convoId, 'custom-model');
+        proxy.activeConversationModels.set('latest', convoId);
+
+        let passedOptions = null;
+        proxy._callProviderStream = async (opts) => {
+            passedOptions = opts;
+        };
+
+        const mockRes = {
+            writeHead: () => {},
+            write: () => {},
+            end: () => {},
+            on: () => {},
+            removeListener: () => {},
+            writableEnded: true
+        };
+
+        const customModel = {
+            providerType: 'openai',
+            endpoint: 'http://127.0.0.1:12345',
+            apiKey: 'key',
+            rawModelId: 'gpt-6'
+        };
+
+        // Note: parsedData has NO conversationId and NO cascadeId, typical of Cloud Code API
+        const parsedData = {
+            sessionId: '123456789012345678',
+            contents: [
+                {
+                    role: 'user',
+                    parts: [{ text: 'Check files' }]
+                },
+                {
+                    role: 'model',
+                    parts: [{
+                        functionCall: {
+                            name: 'run_command',
+                            id: callId,
+                            args: { command: 'ls' }
+                        }
+                    }]
+                },
+                {
+                    role: 'user',
+                    parts: [{
+                        functionResponse: {
+                            name: 'run_command',
+                            id: callId,
+                            response: {}
+                        }
+                    }]
+                }
+            ]
+        };
+
+        await proxy.translateAndStream(parsedData, customModel, mockRes);
+
+        assert.ok(passedOptions, 'Must call _callProviderStream');
+        assert.ok(passedOptions.toolOutputs, 'Must resolve toolOutputs');
+        assert.equal(passedOptions.toolOutputs.targetConvoId, convoId);
+        assert.ok(passedOptions.toolOutputs.outputsByCallId.has(callId));
+    } finally {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+});
+

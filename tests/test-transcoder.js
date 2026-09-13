@@ -969,10 +969,10 @@ test('Stream Transcoder - Anthropic & OpenAI Event Normalization', async (t) => 
         assert.ok(firstOutput, 'First output must be remapped to call_foo_999');
         assert.equal(firstOutput.output, 'dir contents');
 
-        // Verify call_bar_888 received a synthesized empty output
+        // Verify call_bar_888 received a synthesized fallback output (never '{}')
         const secondOutput = callOutputs.find(o => o.call_id === 'call_bar_888');
         assert.ok(secondOutput, 'Second orphaned output must be synthesized for call_bar_888');
-        assert.equal(secondOutput.output, '{}');
+        assert.equal(secondOutput.output, 'Web content retrieved with no additional output.');
     });
 
     await t.test('callOpenAIResponsesStream guarantees all function_call items have matching function_call_output items', async () => {
@@ -1146,7 +1146,7 @@ test('Stream Transcoder - Anthropic & OpenAI Event Normalization', async (t) => 
         assert.equal(input[2].call_id, 'call_orphan_1');
         assert.equal(input[3].type, 'function_call_output');
         assert.equal(input[3].call_id, 'call_orphan_1');
-        assert.equal(input[3].output, '{}');
+        assert.equal(input[3].output, 'Tool executed successfully with no additional output.');
         assert.equal(input[4].role, 'user');
         assert.equal(input[4].content, 'Second prompt');
     });
@@ -1371,7 +1371,7 @@ test('Stream Transcoder - Anthropic & OpenAI Event Normalization', async (t) => 
 
         assert.equal(input[3].type, 'function_call_output');
         assert.equal(input[3].call_id, 'call_orphaned');
-        assert.equal(input[3].output, '{}');
+        assert.equal(input[3].output, 'Command executed.');
     });
 
     await t.test('geminiToolsToOpenAI and geminiToolsToAnthropic support snake_case function_declarations', () => {
@@ -2300,6 +2300,242 @@ test('Stream Transcoder - Anthropic & OpenAI Event Normalization', async (t) => 
         const toolMsg = messages.find(m => m.role === 'tool');
         assert.ok(toolMsg);
         assert.equal(toolMsg.content, 'File written successfully.');
+    });
+
+    await t.test('geminiContentsToAnthropic guarantees tool_result follows every tool_use even across consecutive model turns and empty responses', () => {
+        const contents = [
+            {
+                role: 'user',
+                parts: [{ text: 'Please execute step 1' }]
+            },
+            {
+                role: 'model',
+                parts: [{
+                    functionCall: {
+                        name: 'run_command',
+                        id: 'toolu_multi_1',
+                        args: { CommandLine: 'cat test.txt' }
+                    }
+                }]
+            },
+            // Note: Consecutive model turn without intervening user tool response!
+            {
+                role: 'model',
+                parts: [{
+                    text: 'Now let me write the file'
+                }, {
+                    functionCall: {
+                        name: 'write_to_file',
+                        id: 'toolu_multi_2',
+                        args: { TargetFile: '/workspace/test.txt' }
+                    }
+                }]
+            },
+            // User turn with empty response
+            {
+                role: 'user',
+                parts: [{
+                    functionResponse: {
+                        name: 'write_to_file',
+                        id: 'toolu_multi_2',
+                        response: {}
+                    }
+                }]
+            }
+        ];
+
+        const { messages } = geminiContentsToAnthropic(contents);
+
+        // Verify strict alternating sequence
+        for (let i = 0; i < messages.length; i++) {
+            const expectedRole = i % 2 === 0 ? 'user' : 'assistant';
+            assert.equal(messages[i].role, expectedRole, `Message at index ${i} must have role ${expectedRole}`);
+        }
+
+        // Verify tool_use at message 1 is immediately followed by tool_result in message 2
+        const assistant1 = messages[1];
+        const toolUse1 = assistant1.content.find(c => c.type === 'tool_use');
+        assert.ok(toolUse1, 'Assistant 1 must contain tool_use');
+        assert.equal(toolUse1.id, 'toolu_multi_1');
+
+        const user1 = messages[2];
+        assert.equal(user1.role, 'user');
+        const toolResult1 = user1.content.find(c => c.type === 'tool_result');
+        assert.ok(toolResult1, 'User 1 must contain tool_result for toolu_multi_1');
+        assert.equal(toolResult1.tool_use_id, 'toolu_multi_1');
+        assert.notEqual(toolResult1.content, '{}', 'tool_result must never be empty {}');
+        assert.ok(toolResult1.content.includes('Command executed') || toolResult1.content.includes('executed successfully'));
+
+        // Verify tool_use at message 3 is immediately followed by tool_result in message 4
+        const assistant2 = messages[3];
+        const toolUse2 = assistant2.content.find(c => c.type === 'tool_use');
+        assert.ok(toolUse2, 'Assistant 2 must contain tool_use');
+        assert.equal(toolUse2.id, 'toolu_multi_2');
+
+        const user2 = messages[4];
+        assert.equal(user2.role, 'user');
+        const toolResult2 = user2.content.find(c => c.type === 'tool_result');
+        assert.ok(toolResult2, 'User 2 must contain tool_result for toolu_multi_2');
+        assert.equal(toolResult2.tool_use_id, 'toolu_multi_2');
+        assert.equal(toolResult2.content, 'File written successfully.');
+    });
+
+    await t.test('resolveConversationToolOutputs auto-discovers conversation via candidateIds or latest directory when convoId is missing', () => {
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ag-autodiscover-test-'));
+        try {
+            const convoOld = 'convo-old-111';
+            const convoNew = 'convo-new-222';
+
+            const brainOld = path.join(tmpDir, 'brain', convoOld);
+            const brainNew = path.join(tmpDir, 'brain', convoNew);
+            fs.mkdirSync(brainOld, { recursive: true });
+            fs.mkdirSync(brainNew, { recursive: true });
+
+            // Ensure brainNew has later mtime
+            const now = Date.now();
+            fs.utimesSync(brainOld, (now - 5000) / 1000, (now - 5000) / 1000);
+            fs.utimesSync(brainNew, now / 1000, now / 1000);
+
+            // Test 1: Auto-discover via candidateIds
+            const resCandidates = resolveConversationToolOutputs(null, null, tmpDir, {
+                candidateIds: [convoOld]
+            });
+            assert.equal(resCandidates.targetConvoId, convoOld);
+
+            // Test 2: Fall back to latest brain directory when candidateIds is empty
+            const resLatest = resolveConversationToolOutputs(null, null, tmpDir, {});
+            assert.equal(resLatest.targetConvoId, convoNew);
+        } finally {
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+        }
+    });
+
+    await t.test('geminiContentsToAnthropic flushes all sibling pending calls in same user turn when receiving synthetic tool output', () => {
+        const contents = [
+            {
+                role: 'user',
+                parts: [{ text: 'Please execute both commands.' }]
+            },
+            {
+                role: 'model',
+                parts: [
+                    {
+                        functionCall: {
+                            id: 'toolu_cmd_1',
+                            name: 'run_command',
+                            args: { CommandLine: 'echo 1' }
+                        }
+                    },
+                    {
+                        functionCall: {
+                            id: 'toolu_cmd_2',
+                            name: 'view_file',
+                            args: { AbsolutePath: '/workspace/file.txt' }
+                        }
+                    }
+                ]
+            },
+            // Next turn is synthetic text output for the first command
+            {
+                role: 'model',
+                id: 'toolu_cmd_1',
+                parts: [{ text: 'Tool call output: Command exited with code 0. 1' }]
+            }
+        ];
+
+        const { messages } = geminiContentsToAnthropic(contents, null);
+        // messages[0] = user
+        // messages[1] = assistant with 2 tool_use blocks
+        // messages[2] = user with 2 tool_result blocks!
+        assert.equal(messages.length, 3);
+        assert.equal(messages[1].role, 'assistant');
+        assert.equal(messages[1].content.filter(c => c.type === 'tool_use').length, 2);
+
+        assert.equal(messages[2].role, 'user');
+        assert.equal(messages[2].content.length, 2);
+        assert.equal(messages[2].content[0].type, 'tool_result');
+        assert.equal(messages[2].content[0].tool_use_id, 'toolu_cmd_1');
+        assert.ok(messages[2].content[0].content.includes('Command exited with code 0'));
+
+        assert.equal(messages[2].content[1].type, 'tool_result');
+        assert.equal(messages[2].content[1].tool_use_id, 'toolu_cmd_2');
+        assert.ok(messages[2].content[1].content.includes('File read completed.'));
+    });
+
+    await t.test('geminiContentsToOpenAI flushes all sibling pending calls immediately when receiving synthetic tool output', () => {
+        const contents = [
+            {
+                role: 'user',
+                parts: [{ text: 'Execute commands' }]
+            },
+            {
+                role: 'model',
+                parts: [
+                    {
+                        functionCall: {
+                            id: 'call_cmd_1',
+                            name: 'run_command',
+                            args: { CommandLine: 'pwd' }
+                        }
+                    },
+                    {
+                        functionCall: {
+                            id: 'call_cmd_2',
+                            name: 'view_file',
+                            args: { AbsolutePath: '/workspace/test.txt' }
+                        }
+                    }
+                ]
+            },
+            {
+                role: 'model',
+                id: 'call_cmd_1',
+                parts: [{ text: 'Tool call output: /workspace' }]
+            }
+        ];
+
+        const messages = geminiContentsToOpenAI(contents, null);
+        // messages[0] = user
+        // messages[1] = assistant with 2 tool_calls
+        // messages[2] = tool for call_cmd_1
+        // messages[3] = tool for call_cmd_2
+        assert.equal(messages.length, 4);
+        assert.equal(messages[1].role, 'assistant');
+        assert.equal(messages[1].tool_calls.length, 2);
+
+        assert.equal(messages[2].role, 'tool');
+        assert.equal(messages[2].tool_call_id, 'call_cmd_1');
+        assert.ok(messages[2].content.includes('/workspace'));
+
+        assert.equal(messages[3].role, 'tool');
+        assert.equal(messages[3].tool_call_id, 'call_cmd_2');
+        assert.ok(messages[3].content.includes('File read completed.'));
+    });
+
+    await t.test('geminiContentsToAnthropic does not mutate original parts text when media is present', () => {
+        const originalText = 'Tool execution output for toolu_media_1: success';
+        const contents = [
+            {
+                role: 'user',
+                parts: [{
+                    functionResponse: {
+                        name: 'generate_image',
+                        id: 'toolu_media_1',
+                        response: {}
+                    }
+                }]
+            },
+            {
+                role: 'user',
+                parts: [
+                    { text: originalText },
+                    { inlineData: { mimeType: 'image/png', data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==' } }
+                ]
+            }
+        ];
+
+        geminiContentsToAnthropic(contents, null);
+        assert.equal(contents[1].parts[0].text, originalText, 'Must not mutate original parts text in place');
     });
 });
 
