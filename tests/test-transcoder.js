@@ -2537,6 +2537,134 @@ test('Stream Transcoder - Anthropic & OpenAI Event Normalization', async (t) => 
         geminiContentsToAnthropic(contents, null);
         assert.equal(contents[1].parts[0].text, originalText, 'Must not mutate original parts text in place');
     });
+
+    await t.test('resolveConversationToolOutputs prioritizes matching call IDs over candidateIds when multiple conversations exist', () => {
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ag-multi-convo-test-'));
+        try {
+            const convoStale = 'convo-stale-prev';
+            const convoActive = 'convo-active-current';
+
+            const brainStale = path.join(tmpDir, 'brain', convoStale);
+            const brainActive = path.join(tmpDir, 'brain', convoActive);
+            fs.mkdirSync(brainStale, { recursive: true });
+            fs.mkdirSync(brainActive, { recursive: true });
+
+            // Create step output in active convo
+            const stepDir = path.join(brainActive, '.system_generated', 'steps', '2');
+            fs.mkdirSync(stepDir, { recursive: true });
+            fs.writeFileSync(path.join(stepDir, 'output.txt'), 'Directory listing: /workspace\n');
+
+            // Record step in active convo SQLite DB
+            const convosDir = path.join(tmpDir, 'conversations');
+            fs.mkdirSync(convosDir, { recursive: true });
+            const dbPath = path.join(convosDir, `${convoActive}.db`);
+
+            const Database = require('bun:sqlite').Database;
+            const db = new Database(dbPath);
+            db.query('CREATE TABLE steps (idx INTEGER PRIMARY KEY, step_type INTEGER, metadata BLOB)').run();
+
+            const targetCallId = 'call_ls_workspace_99';
+            const toolName = 'run_command';
+            const metaBuf = Buffer.concat([
+                Buffer.from(targetCallId),
+                Buffer.from([0x12, toolName.length]),
+                Buffer.from(toolName)
+            ]);
+            db.query('INSERT INTO steps (idx, step_type, metadata) VALUES (?, ?, ?)').run(2, 132, metaBuf);
+            db.close();
+
+            // Candidate IDs has convoStale as first element (e.g. from previous session)
+            const result = resolveConversationToolOutputs(null, null, tmpDir, {
+                candidateIds: [convoStale],
+                callIds: [targetCallId]
+            });
+
+            // Must NOT pick convoStale; must match convoActive via callId
+            assert.equal(result.targetConvoId, convoActive);
+            assert.ok(result.outputsByCallId.has(targetCallId));
+            assert.equal(result.outputsByCallId.get(targetCallId), 'Directory listing: /workspace\n');
+        } finally {
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+        }
+    });
+
+    await t.test('resolveConversationToolOutputs sorts candidates by transcript activity mtime', () => {
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ag-mtime-convo-test-'));
+        try {
+            const convo1 = 'convo-one';
+            const convo2 = 'convo-two';
+
+            const brain1 = path.join(tmpDir, 'brain', convo1);
+            const brain2 = path.join(tmpDir, 'brain', convo2);
+            fs.mkdirSync(brain1, { recursive: true });
+            fs.mkdirSync(brain2, { recursive: true });
+
+            // Create transcripts with different timestamps
+            const logs1 = path.join(brain1, '.system_generated', 'logs');
+            const logs2 = path.join(brain2, '.system_generated', 'logs');
+            fs.mkdirSync(logs1, { recursive: true });
+            fs.mkdirSync(logs2, { recursive: true });
+
+            const tFile1 = path.join(logs1, 'transcript.jsonl');
+            const tFile2 = path.join(logs2, 'transcript.jsonl');
+            fs.writeFileSync(tFile1, '{"step_index":0}\n');
+            fs.writeFileSync(tFile2, '{"step_index":0}\n');
+
+            const now = Date.now();
+            fs.utimesSync(tFile1, (now - 10000) / 1000, (now - 10000) / 1000);
+            fs.utimesSync(tFile2, now / 1000, now / 1000);
+
+            // Pass both as candidate IDs in reverse order
+            const result = resolveConversationToolOutputs(null, null, tmpDir, {
+                candidateIds: [convo1, convo2]
+            });
+
+            // convo2 was modified more recently, so it should win
+            assert.equal(result.targetConvoId, convo2);
+        } finally {
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+        }
+    });
+
+    await t.test('resolveConversationToolOutputs matches multi-turn SQLite tool calls on step 2 or later', () => {
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ag-multiturn-sqlite-test-'));
+        try {
+            const convoId = 'convo-multiturn-123';
+            const brainDir = path.join(tmpDir, 'brain', convoId);
+            fs.mkdirSync(path.join(brainDir, '.system_generated', 'steps', '4'), { recursive: true });
+            fs.writeFileSync(path.join(brainDir, '.system_generated', 'steps', '4', 'output.txt'), 'step 4 output content\n');
+
+            const convosDir = path.join(tmpDir, 'conversations');
+            fs.mkdirSync(convosDir, { recursive: true });
+            const dbPath = path.join(convosDir, `${convoId}.db`);
+
+            const Database = require('bun:sqlite').Database;
+            const db = new Database(dbPath);
+            db.query('CREATE TABLE steps (idx INTEGER PRIMARY KEY, step_type INTEGER, metadata BLOB)').run();
+
+            // Turn 1
+            const call1 = 'call_step1_turn1';
+            const meta1 = Buffer.concat([Buffer.from(call1), Buffer.from([0x12, 11]), Buffer.from('run_command')]);
+            db.query('INSERT INTO steps (idx, step_type, metadata) VALUES (?, ?, ?)').run(2, 132, meta1);
+
+            // Turn 2
+            const call2 = 'call_step2_turn2';
+            const meta2 = Buffer.concat([Buffer.from(call2), Buffer.from([0x12, 11]), Buffer.from('run_command')]);
+            db.query('INSERT INTO steps (idx, step_type, metadata) VALUES (?, ?, ?)').run(4, 132, meta2);
+            db.close();
+
+            const result = resolveConversationToolOutputs(null, null, tmpDir, {
+                candidateIds: [convoId],
+                callIds: [call2]
+            });
+
+            assert.equal(result.targetConvoId, convoId);
+            assert.ok(result.outputsByCallId.has(call2));
+            assert.equal(result.outputsByCallId.get(call2), 'step 4 output content\n');
+        } finally {
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+        }
+    });
 });
 
 

@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 'use strict';
 
+const fs = require('node:fs');
 const http = require('node:http');
 const https = require('node:https');
 const path = require('node:path');
@@ -242,9 +243,50 @@ class TranslationProxy {
         return null;
     }
 
-    _resolveToolOutputs(parsedData, contents) {
-        const cascadeId = parsedData?.cascadeId || parsedData?.request?.cascadeId;
-        const convoId = parsedData?.conversationId || parsedData?.request?.conversationId || parsedData?.request?.sessionId;
+    _resolveToolOutputs(parsedData, contents, systemInstruction) {
+        let cascadeId = parsedData?.cascadeId || parsedData?.request?.cascadeId;
+        let convoId = parsedData?.conversationId || parsedData?.request?.conversationId;
+        if (!convoId && parsedData?.request?.sessionId && typeof parsedData.request.sessionId === 'string' && fs.existsSync(path.join(this.baseDir, 'brain', parsedData.request.sessionId))) {
+            convoId = parsedData.request.sessionId;
+        }
+
+        // Try extracting conversation ID from systemInstruction or contents if not explicitly given
+        if (!convoId && !cascadeId) {
+            const extractFromText = (str) => {
+                if (!str || typeof str !== 'string') return null;
+                const mConvo = str.match(/Conversation ID:\s*([0-9a-fA-F-]{36})/i);
+                if (mConvo) return mConvo[1];
+                const mBrain = str.match(/(?:brain|conversations)\/([0-9a-fA-F-]{36})/i);
+                if (mBrain) return mBrain[1];
+                return null;
+            };
+
+            if (typeof systemInstruction === 'string') {
+                convoId = extractFromText(systemInstruction);
+            } else if (Array.isArray(systemInstruction?.parts)) {
+                for (const p of systemInstruction.parts) {
+                    convoId = extractFromText(p?.text);
+                    if (convoId) break;
+                }
+            }
+
+            if (!convoId && Array.isArray(contents)) {
+                for (const item of contents) {
+                    if (Array.isArray(item?.parts)) {
+                        for (const p of item.parts) {
+                            convoId = extractFromText(p?.text);
+                            if (convoId) break;
+                        }
+                    }
+                    if (convoId) break;
+                }
+            }
+
+            // Verify that extracted convoId actually exists on disk
+            if (convoId && !fs.existsSync(path.join(this.baseDir, 'brain', convoId))) {
+                convoId = null;
+            }
+        }
 
         const candidateIds = [];
         if (this.activeConversationModels) {
@@ -413,7 +455,7 @@ class TranslationProxy {
             }
         };
 
-        const toolOutputs = this._resolveToolOutputs(parsedData, contents);
+        const toolOutputs = this._resolveToolOutputs(parsedData, contents, systemInstruction);
 
         try {
             await this._callProviderStream({
@@ -572,7 +614,7 @@ class TranslationProxy {
             }
         };
 
-        const toolOutputs = this._resolveToolOutputs(parsedData, contents);
+        const toolOutputs = this._resolveToolOutputs(parsedData, contents, systemInstruction);
 
         try {
             await this._callProviderStream({

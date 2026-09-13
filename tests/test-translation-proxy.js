@@ -978,3 +978,87 @@ test('Translation Proxy - auto-resolves conversation tool outputs when conversat
     }
 });
 
+test('Translation Proxy - extracts conversation ID from systemInstruction when missing in parsedData', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ag-proxy-sys-inst-test-'));
+    try {
+        const convoId = 'e7a830af-9d4b-4127-bd60-55a1e62a9104';
+        const brainDir = path.join(tmpDir, 'brain', convoId);
+        fs.mkdirSync(brainDir, { recursive: true });
+
+        const stepDir = path.join(brainDir, '.system_generated', 'steps', '2');
+        fs.mkdirSync(stepDir, { recursive: true });
+        fs.writeFileSync(path.join(stepDir, 'output.txt'), 'directory files list\n');
+
+        const proxy = new TranslationProxy({
+            port: 19997,
+            upstreamUrl: 'http://127.0.0.1:19996',
+            baseDir: tmpDir
+        });
+
+        let passedOptions = null;
+        proxy._callProviderStream = async (opts) => {
+            passedOptions = opts;
+        };
+
+        const mockRes = {
+            writeHead: () => {},
+            write: () => {},
+            end: () => {},
+            on: () => {},
+            removeListener: () => {},
+            writableEnded: true
+        };
+
+        const customModel = {
+            providerType: 'openai',
+            endpoint: 'http://127.0.0.1:12345',
+            apiKey: 'key',
+            rawModelId: 'gpt-6-astra'
+        };
+
+        const parsedData = {
+            request: {
+                sessionId: '1741234567890'
+            },
+            systemInstruction: {
+                parts: [{
+                    text: `You are Antigravity.\nArtifact Directory Path: /home/developer/.gemini/antigravity-cli/brain/${convoId}\nConversation ID: ${convoId}`
+                }]
+            },
+            contents: [
+                {
+                    role: 'user',
+                    parts: [{ text: 'List workspace' }]
+                },
+                {
+                    role: 'model',
+                    parts: [{
+                        functionCall: {
+                            name: 'run_command',
+                            args: { CommandLine: 'ls /workspace' }
+                        }
+                    }]
+                },
+                {
+                    role: 'user',
+                    parts: [{
+                        functionResponse: {
+                            name: 'run_command',
+                            response: {}
+                        }
+                    }]
+                }
+            ]
+        };
+
+        await proxy.translateAndStream(parsedData, customModel, mockRes);
+
+        assert.ok(passedOptions);
+        assert.ok(passedOptions.toolOutputs);
+        assert.equal(passedOptions.toolOutputs.targetConvoId, convoId);
+    } finally {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+});
+
+

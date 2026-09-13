@@ -7,6 +7,65 @@ const https = require('node:https');
 const crypto = require('node:crypto');
 const { THINKING_BUDGETS } = require('./models-manager');
 
+function isValidConversationId(id) {
+    return typeof id === 'string' && id.length > 0 && id.length < 128 && !id.includes('/') && !id.includes('\\') && !id.includes('..') && /^[a-zA-Z0-9_-]+$/.test(id);
+}
+
+function checkConversationForCallIds(candId, callIds, brainDir, rootDir) {
+    if (!candId || !Array.isArray(callIds) || callIds.length === 0) return false;
+
+    // Check transcript.jsonl first (lightweight text file)
+    const transcriptPath = path.join(brainDir, candId, '.system_generated', 'logs', 'transcript.jsonl');
+    try {
+        const stat = fs.statSync(transcriptPath);
+        if (stat.size < 5 * 1024 * 1024) {
+            const text = fs.readFileSync(transcriptPath, 'utf8');
+            if (callIds.some(cid => text.includes(cid))) {
+                return true;
+            }
+        }
+    } catch {}
+
+    // Query conversation SQLite DB
+    const candDbPath = path.join(rootDir, 'conversations', `${candId}.db`);
+    try {
+        let Database;
+        try {
+            Database = require('bun:sqlite').Database;
+        } catch {
+            try { Database = require('node:sqlite').DatabaseSync; } catch {}
+        }
+        if (Database) {
+            const db = new Database(candDbPath, { readonly: true });
+            try {
+                const queryFn = db.query ? (sql) => db.query(sql).all() : (sql) => db.prepare(sql).all();
+                const rows = queryFn('SELECT metadata FROM steps WHERE step_type = 132');
+                for (const row of rows) {
+                    const meta = row?.metadata;
+                    const metaStr = Buffer.isBuffer(meta)
+                        ? meta.toString('utf8')
+                        : (meta instanceof Uint8Array ? Buffer.from(meta).toString('utf8') : String(meta || ''));
+                    if (callIds.some(cid => metaStr.includes(cid))) {
+                        return true;
+                    }
+                }
+            } finally {
+                if (db.close) db.close();
+            }
+        } else {
+            const stat = fs.statSync(candDbPath);
+            if (stat.size < 2 * 1024 * 1024) {
+                const content = fs.readFileSync(candDbPath, 'utf8');
+                if (callIds.some(cid => content.includes(cid))) {
+                    return true;
+                }
+            }
+        }
+    } catch {}
+
+    return false;
+}
+
 /**
  * Reads the authentic tool outputs from the local conversation trajectory and database.
  * Antigravity (agy) records full tool output into transcript_full.jsonl / transcript.jsonl
@@ -28,102 +87,80 @@ function resolveConversationToolOutputs(convoId, cascadeId, baseDir, options = {
     // Auto-discovery kicks in only if no specific convoId/cascadeId was requested (to avoid cross-pollution)
     const hasExplicitRequestedId = Boolean(convoId || cascadeId);
     if (!targetConvoId && !hasExplicitRequestedId) {
-        // 1. Check candidate IDs (e.g. tracked active conversation models)
-        if (Array.isArray(options.candidateIds)) {
-            for (const cid of options.candidateIds) {
-                if (cid && typeof cid === 'string' && fs.existsSync(path.join(brainDir, cid))) {
-                    targetConvoId = cid;
+        const validCandidates = (options.candidateIds || [])
+            .filter(cid => isValidConversationId(cid) && fs.existsSync(path.join(brainDir, cid)));
+
+        // 1. If call IDs are provided, test candidate IDs first (instant check, avoids scanning 500+ directories!)
+        if (Array.isArray(options.callIds) && options.callIds.length > 0) {
+            for (const candId of validCandidates) {
+                if (checkConversationForCallIds(candId, options.callIds, brainDir, rootDir)) {
+                    targetConvoId = candId;
                     break;
                 }
             }
         }
 
+        // 2. If still not matched, scan recent conversations from brainDir
         let sorted = null;
         if (!targetConvoId && fs.existsSync(brainDir)) {
             try {
                 const entries = fs.readdirSync(brainDir, { withFileTypes: true });
                 sorted = entries
-                    .filter(e => e.isDirectory() && !e.name.startsWith('.'))
+                    .filter(e => e.isDirectory() && !e.name.startsWith('.') && isValidConversationId(e.name))
                     .map(e => {
-                        try { return { name: e.name, mtime: fs.statSync(path.join(brainDir, e.name)).mtimeMs }; }
-                        catch { return null; }
+                        try {
+                            const dirPath = path.join(brainDir, e.name);
+                            let mtime = 0;
+                            const dbPath = path.join(rootDir, 'conversations', `${e.name}.db`);
+                            try {
+                                mtime = fs.statSync(dbPath).mtimeMs;
+                            } catch {}
+                            const transcriptPath = path.join(dirPath, '.system_generated', 'logs', 'transcript.jsonl');
+                            try {
+                                mtime = Math.max(mtime, fs.statSync(transcriptPath).mtimeMs);
+                            } catch {}
+                            if (mtime === 0) {
+                                mtime = fs.statSync(dirPath).mtimeMs;
+                            }
+                            return { name: e.name, mtime };
+                        } catch {
+                            return null;
+                        }
                     })
                     .filter(Boolean)
                     .sort((a, b) => b.mtime - a.mtime);
             } catch {}
         }
 
-        // 2. Search recent conversations if call IDs are provided
+        // 3. Search recent conversations if call IDs are provided and candidates did not match
         if (!targetConvoId && Array.isArray(options.callIds) && options.callIds.length > 0 && Array.isArray(sorted)) {
-            for (const item of sorted.slice(0, 10)) {
-                let matched = false;
-
-                // Check transcript.jsonl first (lightweight text file)
-                const transcriptPath = path.join(brainDir, item.name, '.system_generated', 'logs', 'transcript.jsonl');
-                if (fs.existsSync(transcriptPath)) {
-                    try {
-                        const stat = fs.statSync(transcriptPath);
-                        if (stat.size < 5 * 1024 * 1024) {
-                            const text = fs.readFileSync(transcriptPath, 'utf8');
-                            if (options.callIds.some(cid => text.includes(cid))) {
-                                targetConvoId = item.name;
-                                matched = true;
-                                break;
-                            }
-                        }
-                    } catch {}
+            for (const item of sorted.slice(0, 30)) {
+                if (validCandidates.includes(item.name)) continue;
+                if (checkConversationForCallIds(item.name, options.callIds, brainDir, rootDir)) {
+                    targetConvoId = item.name;
+                    break;
                 }
-
-                // If not matched, query conversation SQLite DB
-                if (!matched) {
-                    const candDbPath = path.join(rootDir, 'conversations', `${item.name}.db`);
-                    if (fs.existsSync(candDbPath)) {
-                        try {
-                            let Database;
-                            try {
-                                Database = require('bun:sqlite').Database;
-                            } catch {
-                                try { Database = require('node:sqlite').DatabaseSync; } catch {}
-                            }
-                            if (Database) {
-                                const db = new Database(candDbPath, { readonly: true });
-                                try {
-                                    const queryFn = db.query ? (sql) => db.query(sql).all() : (sql) => db.prepare(sql).all();
-                                    const rows = queryFn('SELECT metadata FROM steps WHERE step_type = 132');
-                                    for (const row of rows) {
-                                        const meta = row?.metadata;
-                                        const metaStr = Buffer.isBuffer(meta)
-                                            ? meta.toString('utf8')
-                                            : (meta instanceof Uint8Array ? Buffer.from(meta).toString('utf8') : String(meta || ''));
-                                        if (options.callIds.some(cid => metaStr.includes(cid))) {
-                                            targetConvoId = item.name;
-                                            matched = true;
-                                            break;
-                                        }
-                                    }
-                                } finally {
-                                    if (db.close) db.close();
-                                }
-                            } else {
-                                const stat = fs.statSync(candDbPath);
-                                if (stat.size < 2 * 1024 * 1024) {
-                                    const content = fs.readFileSync(candDbPath, 'utf8');
-                                    if (options.callIds.some(cid => content.includes(cid))) {
-                                        targetConvoId = item.name;
-                                        matched = true;
-                                        break;
-                                    }
-                                }
-                            }
-                        } catch {}
-                    }
-                }
-
-                if (matched) break;
             }
         }
 
-        // 3. Fall back to the most recently modified conversation in brainDir
+        // 4. Fall back to candidate IDs (sorted by recency if multiple)
+        if (!targetConvoId && validCandidates.length > 0) {
+            if (validCandidates.length === 1) {
+                targetConvoId = validCandidates[0];
+            } else if (Array.isArray(sorted)) {
+                for (const item of sorted) {
+                    if (validCandidates.includes(item.name)) {
+                        targetConvoId = item.name;
+                        break;
+                    }
+                }
+                if (!targetConvoId) targetConvoId = validCandidates[0];
+            } else {
+                targetConvoId = validCandidates[0];
+            }
+        }
+
+        // 5. Fall back to the most recently modified conversation in brainDir
         if (!targetConvoId && Array.isArray(sorted) && sorted.length > 0) {
             targetConvoId = sorted[0].name;
         }

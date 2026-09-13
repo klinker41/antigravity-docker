@@ -730,6 +730,48 @@ test('Multi-Model Integration - HTTP Proxy, Models API, & Upstream Interception'
                 "'latest' must survive a SendUserCascadeMessage tool result — wiping it broke sub-agent communication");
         });
 
+        await t.test('standard conversation without custom placeholder does not inherit custom model from latest', () => {
+            const { handleWebSocketClientMessage } = require('../proxy/lib/proxy');
+            const testMap = new Map();
+            const fakeWs = { data: { activeStreams: new Map() } };
+            const customModel = { rawModelId: 'custom-model', providerType: 'openai' };
+            const mockManager = {
+                getModelByPlaceholder: (ph) => (ph === 'MODEL_PLACEHOLDER_M510' ? customModel : null)
+            };
+
+            // Custom model used in conversation 1
+            const msg1 = JSON.stringify({
+                streamId: 's1',
+                type: 'start',
+                procedure: '/SendUserCascadeMessage',
+                payload: {
+                    cascadeId: 'convo-1',
+                    conversationId: 'convo-1',
+                    model: 'MODEL_PLACEHOLDER_M510'
+                }
+            });
+            handleWebSocketClientMessage(fakeWs, msg1, mockManager, testMap);
+            assert.ok(testMap.has('latest'));
+            assert.equal(testMap.get('convo-1'), customModel);
+
+            // Message in standard conversation 2 (no custom model placeholder)
+            const msg2 = JSON.stringify({
+                streamId: 's2',
+                type: 'start',
+                procedure: '/SendUserCascadeMessage',
+                payload: {
+                    cascadeId: 'convo-2',
+                    conversationId: 'convo-2',
+                    model: 'DEFAULT_GEMINI'
+                }
+            });
+            handleWebSocketClientMessage(fakeWs, msg2, mockManager, testMap);
+
+            // convo-2 MUST NOT be bound to customModel
+            assert.equal(testMap.has('convo-2'), false);
+            assert.equal(testMap.get('latestConvoId'), 'convo-2');
+        });
+
     } finally {
         proxyProc.kill('SIGKILL');
         if (typeof mockAgyServer.stop === 'function') {

@@ -85,6 +85,16 @@ async function proxyWebRequest(c, targetPort, targetPath, options = {}) {
     }
 
     const parsedUrl = new URL(c.req.raw.url);
+    const convoMatch = parsedUrl.pathname.match(/\/c\/([0-9a-fA-F-]{36})/);
+    if (convoMatch) {
+        activeConversationModels.set('latestConvoId', convoMatch[1]);
+    } else if (referer) {
+        const refMatch = referer.match(/\/c\/([0-9a-fA-F-]{36})/);
+        if (refMatch) {
+            activeConversationModels.set('latestConvoId', refMatch[1]);
+        }
+    }
+
     const isModelEndpoint = isModelProcedure(parsedUrl.pathname);
     const shouldInterceptModels = Boolean(
         isUpstream &&
@@ -108,13 +118,16 @@ async function proxyWebRequest(c, targetPort, targetPath, options = {}) {
         if (isUpstream && parsedUrl.pathname.startsWith('/exa.language_server_pb.LanguageServerService/')) {
             try {
                 let textBody = await c.req.text();
+                let parsed = null;
+                try { parsed = JSON.parse(textBody); } catch (e) {}
+                const cascadeId = parsed?.cascadeId || parsed?.payload?.cascadeId;
+                const convoId = parsed?.conversationId || parsed?.payload?.conversationId;
+                if (convoId || cascadeId) {
+                    activeConversationModels.set('latestConvoId', convoId || cascadeId);
+                }
+
                 const matches = matchCustomPlaceholders(textBody);
                 if (matches.length > 0) {
-                    let parsed = null;
-                    try { parsed = JSON.parse(textBody); } catch (e) {}
-                    const cascadeId = parsed?.cascadeId || parsed?.payload?.cascadeId;
-                    const convoId = parsed?.conversationId || parsed?.payload?.conversationId;
-
                     for (const placeholder of matches) {
                         const modelConfig = modelsManager?.getModelByPlaceholder?.(placeholder);
                         if (modelConfig) {
@@ -307,11 +320,15 @@ function handleWebSocketClientMessage(ws, message, modelsManager, activeModelsMa
                 ws.data.activeStreams.delete(parsed.streamId);
             }
 
+            const cascadeId = parsed.payload?.cascadeId || parsed.cascadeId;
+            const convoId = parsed.payload?.conversationId || parsed.conversationId;
+            if (convoId || cascadeId) {
+                activeModelsMap.set('latestConvoId', convoId || cascadeId);
+            }
+
             const matches = matchCustomPlaceholders(text);
             if (matches.length > 0) {
                 if (modelsManager) {
-                    const cascadeId = parsed.payload?.cascadeId || parsed.cascadeId;
-                    const convoId = parsed.payload?.conversationId || parsed.conversationId;
                     for (const placeholder of matches) {
                         const modelConfig = modelsManager.getModelByPlaceholder(placeholder);
                         if (modelConfig) {
