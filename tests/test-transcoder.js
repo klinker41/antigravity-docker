@@ -18,6 +18,7 @@ const {
     getFunctionCall,
     getFunctionResponse,
     extractResponseValue,
+    isEffectivelyEmpty,
     resolveToolCallId,
     sanitizeToolCallArgs
 } = require('../proxy/lib/transcoder');
@@ -818,7 +819,7 @@ test('Stream Transcoder - Anthropic & OpenAI Event Normalization', async (t) => 
 
         // camelCase response
         const resp1 = getFunctionResponse({ functionResponse: { name: 'view_file', response: { content: 'ok' }, id: 'uuid-1' } });
-        assert.deepEqual(resp1, { name: 'view_file', response: { content: 'ok' }, id: 'uuid-1' });
+        assert.deepEqual(resp1, { name: 'view_file', response: 'ok', id: 'uuid-1' });
 
         // snake_case response
         const resp2 = getFunctionResponse({ function_response: { name: 'view_file', response: 'file content' } });
@@ -874,7 +875,7 @@ test('Stream Transcoder - Anthropic & OpenAI Event Normalization', async (t) => 
         assert.equal(openAiMessages[2].role, 'tool');
         // Critical invariant: tool_call_id MUST match the tool call's ID, not the step UUID
         assert.equal(openAiMessages[2].tool_call_id, 'call_77dmBdLVZtd0B6VabLNsPyKg');
-        assert.deepEqual(JSON.parse(openAiMessages[2].content), { content: 'File contents here' });
+        assert.equal(openAiMessages[2].content, 'File contents here');
 
         // 2. Test Anthropic conversion
         const { messages: anthropicMessages } = geminiContentsToAnthropic(contents);
@@ -1257,7 +1258,7 @@ test('Stream Transcoder - Anthropic & OpenAI Event Normalization', async (t) => 
         assert.equal(messages[0].role, 'assistant');
         assert.equal(messages[1].role, 'tool');
         assert.equal(messages[1].tool_call_id, 'call_view_1');
-        assert.equal(messages[1].content, JSON.stringify({ content: 'hello world file content' }));
+        assert.equal(messages[1].content, 'hello world file content');
         assert.equal(messages[2].role, 'user');
         assert.equal(messages[2].content, 'Intervening commentary before tool response');
     });
@@ -1408,7 +1409,7 @@ test('Stream Transcoder - Anthropic & OpenAI Event Normalization', async (t) => 
         });
 
         assert.equal(projectWrite.TargetFile, '/workspace/llm-plays-pokemon/write-access-test.txt');
-        assert.equal(projectWrite.Overwrite, false);
+        assert.equal(projectWrite.Overwrite, true);
         assert.equal(projectWrite.ArtifactMetadata, undefined);
         assert.equal(projectWrite.CodeContent, 'File write test successful.\n');
 
@@ -1423,7 +1424,7 @@ test('Stream Transcoder - Anthropic & OpenAI Event Normalization', async (t) => 
         assert.equal(artifactWrite.Overwrite, true);
         assert.ok(artifactWrite.ArtifactMetadata);
         assert.equal(artifactWrite.ArtifactMetadata.Summary, 'Summary walkthrough');
-        assert.equal(artifactWrite.ArtifactMetadata.UserFacing, true);
+        assert.equal(artifactWrite.ArtifactMetadata.UserFacing, false);
 
         // 3. view_file string numbers coercion
         const viewCall = sanitizeToolCallArgs('view_file', {
@@ -1474,6 +1475,157 @@ test('Stream Transcoder - Anthropic & OpenAI Event Normalization', async (t) => 
 
         const partWithMsg = { errorMessage: 'failed to read file: no such file or directory' };
         assert.equal(extractResponseValue({}, partWithMsg), 'Error: failed to read file: no such file or directory');
+    });
+
+    await t.test('extractResponseValue handles protobuf { fields: {} } and structValue fallback to parts', () => {
+        // 1. resp.parts fallback when response is empty protobuf Struct { fields: {} }
+        const respProtoFields = {
+            response: { fields: {} },
+            parts: [{ text: 'recovered from resp.parts' }]
+        };
+        assert.equal(extractResponseValue(respProtoFields, respProtoFields), 'recovered from resp.parts');
+
+        // 2. part.parts fallback when resp.response is { fields: {} }
+        const partWithParts = {
+            functionResponse: { response: { fields: {} } },
+            parts: ['recovered from part.parts']
+        };
+        assert.equal(extractResponseValue(partWithParts.functionResponse, partWithParts), 'recovered from part.parts');
+
+        // 3. resp.response.parts fallback
+        const respNestedParts = {
+            response: {
+                fields: {},
+                parts: [{ text: 'recovered from response.parts' }]
+            }
+        };
+        assert.equal(extractResponseValue(respNestedParts, respNestedParts), 'recovered from response.parts');
+
+        // 4. part.functionResponse.parts fallback
+        const fnRespParts = {
+            functionResponse: {
+                response: { fields: {} },
+                parts: [{ text: 'recovered from functionResponse.parts' }]
+            }
+        };
+        assert.equal(extractResponseValue(fnRespParts.functionResponse, fnRespParts), 'recovered from functionResponse.parts');
+
+        // 5. { structValue: {} } fallback
+        const respStructVal = {
+            response: { structValue: {} },
+            parts: [{ text: 'recovered from structValue' }]
+        };
+        assert.equal(extractResponseValue(respStructVal, respStructVal), 'recovered from structValue');
+
+        // 6. { fields: {} } with no parts returns {}
+        const respEmptyFieldsOnly = {
+            response: { fields: {} }
+        };
+        assert.deepEqual(extractResponseValue(respEmptyFieldsOnly, respEmptyFieldsOnly), {});
+
+        // 7. isEffectivelyEmpty handles empty shapes and '{ }' with whitespace
+        assert.equal(isEffectivelyEmpty(null), true);
+        assert.equal(isEffectivelyEmpty(undefined), true);
+        assert.equal(isEffectivelyEmpty(''), true);
+        assert.equal(isEffectivelyEmpty('   '), true);
+        assert.equal(isEffectivelyEmpty('{}'), true);
+        assert.equal(isEffectivelyEmpty('{ }'), true);
+        assert.equal(isEffectivelyEmpty('  {   }  '), true);
+        assert.equal(isEffectivelyEmpty({}), true);
+        assert.equal(isEffectivelyEmpty({ fields: {} }), true);
+        assert.equal(isEffectivelyEmpty({ structValue: {} }), true);
+        assert.equal(isEffectivelyEmpty('{"a": 1}'), false);
+        assert.equal(isEffectivelyEmpty({ fields: { a: 1 } }), false);
+    });
+
+    await t.test('extractResponseValue unpacks strings from output, result, content, or text', () => {
+        assert.equal(extractResponseValue({ response: { output: 'unpacked output' } }), 'unpacked output');
+        assert.equal(extractResponseValue({ response: { result: 'unpacked result' } }), 'unpacked result');
+        assert.equal(extractResponseValue({ response: { content: 'unpacked content' } }), 'unpacked content');
+        assert.equal(extractResponseValue({ response: { text: 'unpacked text' } }), 'unpacked text');
+
+        // Extraction from candParts with various formats
+        const candPartsResp = {
+            response: { fields: {} },
+            parts: [
+                { output: 'cand output' },
+                { result: 'cand result' },
+                { content: 'cand content' },
+                { data: { text: 'cand data text' } }
+            ]
+        };
+        assert.equal(
+            extractResponseValue(candPartsResp, candPartsResp),
+            'cand output\ncand result\ncand content\ncand data text'
+        );
+    });
+
+    await t.test('extractResponseValue inspects all error fields across sources', () => {
+        // Error inside resp.response.error
+        const nestedRespErr = {
+            response: {
+                error: 'status 7: file already exists'
+            }
+        };
+        assert.equal(extractResponseValue(nestedRespErr, nestedRespErr), 'Error: status 7: file already exists');
+
+        // Error inside part.functionResponse.error_details
+        const fnRespErr = {
+            functionResponse: {
+                error_details: 'permission check failed'
+            }
+        };
+        assert.equal(extractResponseValue({}, fnRespErr), 'Error: permission check failed');
+
+        // Error inside val itself
+        assert.equal(extractResponseValue({ response: { errorDetails: 'access denied' } }), 'Error: access denied');
+
+        // Combined output and error
+        const outputWithErr = {
+            response: {
+                output: 'some partial output',
+                error: 'operation timed out'
+            }
+        };
+        assert.equal(extractResponseValue(outputWithErr, outputWithErr), 'some partial output\nError: operation timed out');
+    });
+
+    await t.test('getFunctionResponse extracts call ID with fallback to part', () => {
+        const partWithIdOnPart = {
+            id: 'call_fallback_part_123',
+            functionResponse: {
+                name: 'write_to_file',
+                response: { output: 'success' }
+            }
+        };
+        const fnResp1 = getFunctionResponse(partWithIdOnPart);
+        assert.ok(fnResp1);
+        assert.equal(fnResp1.id, 'call_fallback_part_123');
+        assert.equal(fnResp1.name, 'write_to_file');
+        assert.equal(fnResp1.response, 'success');
+
+        const partWithCallIdOnPart = {
+            call_id: 'call_fallback_part_456',
+            functionResponse: {
+                name: 'run_command',
+                response: { output: 'echo done' }
+            }
+        };
+        const fnResp2 = getFunctionResponse(partWithCallIdOnPart);
+        assert.ok(fnResp2);
+        assert.equal(fnResp2.id, 'call_fallback_part_456');
+
+        const partWithRespId = {
+            id: 'part_id_ignored',
+            functionResponse: {
+                name: 'run_command',
+                id: 'resp_id_preferred',
+                response: { output: 'done' }
+            }
+        };
+        const fnResp3 = getFunctionResponse(partWithRespId);
+        assert.ok(fnResp3);
+        assert.equal(fnResp3.id, 'resp_id_preferred');
     });
 });
 

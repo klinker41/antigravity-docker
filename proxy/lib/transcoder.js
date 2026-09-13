@@ -71,14 +71,15 @@ function sanitizeToolCallArgs(name, args) {
     if (name === 'write_to_file') {
         const target = cleanArgs.TargetFile || cleanArgs.targetFile || cleanArgs.target_file;
         if (!isArtifactPath(target)) {
-            delete cleanArgs.ArtifactMetadata;
-            delete cleanArgs.artifactMetadata;
-            delete cleanArgs.artifact_metadata;
-            // Default Overwrite to true for non-artifact paths when not specified,
-            // so custom models don't fail with "file already exists" on repeat writes.
-            if (cleanArgs.Overwrite === undefined && cleanArgs.overwrite === undefined) {
-                cleanArgs.Overwrite = true;
+            for (const k of Object.keys(cleanArgs)) {
+                if (/^artifact_?metadata$/i.test(k)) {
+                    delete cleanArgs[k];
+                }
             }
+            // Always set Overwrite to true for non-artifact paths (coercing undefined, false, or 'false' to true),
+            // so custom models don't fail with "file already exists" on repeat writes.
+            cleanArgs.Overwrite = true;
+            delete cleanArgs.overwrite;
         } else {
             let meta = cleanArgs.ArtifactMetadata || cleanArgs.artifactMetadata || cleanArgs.artifact_metadata;
             if (typeof meta === 'string') {
@@ -923,6 +924,31 @@ function getFunctionCall(part) {
 }
 
 /**
+ * Helper to check if a value is effectively empty, including empty strings ('', '{}'),
+ * empty objects ({}), and protobuf Struct representations ({ fields: {} }, { structValue: {} }).
+ */
+function isEffectivelyEmpty(v) {
+    if (v === null || v === undefined) return true;
+    if (typeof v === 'string') {
+        const trimmed = v.trim();
+        return trimmed === '' || /^\{\s*\}$/.test(trimmed);
+    }
+    if (typeof v === 'object' && !Array.isArray(v)) {
+        const keys = Object.keys(v).filter(k => k !== 'parts');
+        if (keys.length === 0) return true;
+        if (keys.length === 1) {
+            if (keys[0] === 'fields') {
+                return isEffectivelyEmpty(v.fields);
+            }
+            if (keys[0] === 'structValue') {
+                return isEffectivelyEmpty(v.structValue);
+            }
+        }
+    }
+    return false;
+}
+
+/**
  * Safely extracts the response payload from a function response or part,
  * resolving nested parts (including base64 decoded data), output fields, and error details.
  */
@@ -942,14 +968,29 @@ function extractResponseValue(resp, part) {
               (part.result !== undefined ? part.result : undefined)));
     }
 
-    const isEmptyObj = val !== null && typeof val === 'object' && !Array.isArray(val) && Object.keys(val).length === 0;
+    // Unpack string from object if present (output, result, content, or text)
+    if (val && typeof val === 'object' && !Array.isArray(val)) {
+        if (typeof val.output === 'string') {
+            val = val.output;
+        } else if (typeof val.result === 'string') {
+            val = val.result;
+        } else if (typeof val.content === 'string') {
+            val = val.content;
+        } else if (typeof val.text === 'string') {
+            val = val.text;
+        }
+    }
 
-    // 2. If val is empty, null, or undefined, check parts (used by Go cortex/genai functionResponseFromString)
-    const candParts = (Array.isArray(resp?.parts) && resp.parts.length > 0)
-        ? resp.parts
-        : ((Array.isArray(part?.parts) && part.parts.length > 0) ? part.parts : null);
+    // 2. If val is effectively empty, check parts (used by Go cortex/genai functionResponseFromString)
+    const candParts = [
+        resp?.parts,
+        part?.parts,
+        resp?.response?.parts,
+        part?.functionResponse?.parts,
+        part?.function_response?.parts
+    ].find(p => Array.isArray(p) && p.length > 0) || null;
 
-    if ((val === undefined || val === null || isEmptyObj) && candParts) {
+    if (isEffectivelyEmpty(val) && candParts) {
         const textParts = [];
         for (const p of candParts) {
             if (typeof p === 'string') {
@@ -957,9 +998,9 @@ function extractResponseValue(resp, part) {
             } else if (p && typeof p === 'object') {
                 if (typeof p.text === 'string') {
                     textParts.push(p.text);
-                } else if (p.data) {
-                    let decoded = null;
+                } else if (p.data !== undefined) {
                     if (typeof p.data === 'string') {
+                        let decoded = null;
                         try {
                             const buf = Buffer.from(p.data, 'base64');
                             const utf8 = buf.toString('utf8');
@@ -967,8 +1008,22 @@ function extractResponseValue(resp, part) {
                                 decoded = utf8;
                             }
                         } catch {}
+                        textParts.push(decoded || p.data);
+                    } else if (typeof p.data === 'object' && p.data !== null) {
+                        if (typeof p.data.output === 'string') {
+                            textParts.push(p.data.output);
+                        } else if (typeof p.data.result === 'string') {
+                            textParts.push(p.data.result);
+                        } else if (typeof p.data.content === 'string') {
+                            textParts.push(p.data.content);
+                        } else if (typeof p.data.text === 'string') {
+                            textParts.push(p.data.text);
+                        } else {
+                            textParts.push(JSON.stringify(p.data));
+                        }
+                    } else {
+                        textParts.push(String(p.data));
                     }
-                    textParts.push(decoded || p.data);
                 } else if (p.inlineData?.data || p.inline_data?.data) {
                     const rawData = p.inlineData?.data || p.inline_data?.data;
                     let decoded = null;
@@ -984,6 +1039,12 @@ function extractResponseValue(resp, part) {
                     textParts.push(decoded || rawData);
                 } else if (p.fileData || p.file_data) {
                     textParts.push(JSON.stringify(p.fileData || p.file_data));
+                } else if (p.output !== undefined) {
+                    textParts.push(typeof p.output === 'string' ? p.output : JSON.stringify(p.output));
+                } else if (p.result !== undefined) {
+                    textParts.push(typeof p.result === 'string' ? p.result : JSON.stringify(p.result));
+                } else if (p.content !== undefined) {
+                    textParts.push(typeof p.content === 'string' ? p.content : JSON.stringify(p.content));
                 }
             }
         }
@@ -992,28 +1053,43 @@ function extractResponseValue(resp, part) {
         }
     }
 
-    // 3. Extract errors from resp or part if present
+    // 3. Extract errors across resp, part, resp?.response, part?.functionResponse, and val if present
     const errorKeys = ['error', 'error_details', 'errorDetails', 'errorMessage', 'error_message'];
+    const errorSources = [
+        resp,
+        part,
+        resp?.response,
+        part?.functionResponse,
+        part?.function_response,
+        val && typeof val === 'object' && !Array.isArray(val) ? val : null
+    ];
     let err = null;
-    for (const k of errorKeys) {
-        if (resp?.[k]) { err = resp[k]; break; }
-        if (part?.[k]) { err = part[k]; break; }
+    for (const src of errorSources) {
+        if (!src || typeof src !== 'object') continue;
+        for (const k of errorKeys) {
+            const candidate = src[k];
+            const isNonEmpty = candidate && (typeof candidate === 'object' ? Object.keys(candidate).length > 0 : Boolean(candidate));
+            if (isNonEmpty) {
+                err = candidate;
+                break;
+            }
+        }
+        if (err) break;
     }
-    const isNonEmptyErr = err && (typeof err === 'object' ? Object.keys(err).length > 0 : Boolean(err));
-    if (isNonEmptyErr) {
+
+    if (err) {
         const errStr = typeof err === 'string' ? err : JSON.stringify(err);
-        if (val === undefined || isEmptyObj) {
-            val = `Error: ${errStr}`;
-        } else if (typeof val === 'string') {
+        if (typeof val === 'string' && !isEffectivelyEmpty(val)) {
             val = `${val}\nError: ${errStr}`;
-        } else if (typeof val === 'object' && val !== null && !Array.isArray(val)) {
-            val = { ...val, error: errStr };
-        } else if (Array.isArray(val)) {
-            val = { result: val, error: errStr };
+        } else {
+            val = `Error: ${errStr}`;
         }
     }
 
-    const finalVal = val !== undefined ? val : {};
+    let finalVal = val !== undefined ? val : {};
+    if (isEffectivelyEmpty(finalVal)) {
+        finalVal = {};
+    }
 
     // Debug: log when extraction returns empty so we can identify the wire format
     if (!finalVal || (typeof finalVal === 'object' && !Array.isArray(finalVal) && Object.keys(finalVal).length === 0)) {
@@ -1030,12 +1106,13 @@ function extractResponseValue(resp, part) {
 function getFunctionResponse(part) {
     if (!part || typeof part !== 'object') return null;
     const resp = part.functionResponse || part.function_response || part.toolResponse || part.tool_response;
+    const id = resp?.id || resp?.call_id || resp?.callId || part.id || part.call_id || part.callId || null;
     if (!resp || typeof resp !== 'object') {
         if (part.name && (part.response !== undefined || part.output !== undefined || part.parts !== undefined || part.content !== undefined || part.result !== undefined)) {
             return {
                 name: part.name || '',
                 response: extractResponseValue(part, part),
-                id: part.id || part.call_id || part.callId || null
+                id
             };
         }
         return null;
@@ -1043,7 +1120,7 @@ function getFunctionResponse(part) {
     return {
         name: resp.name || '',
         response: extractResponseValue(resp, part),
-        id: resp.id || resp.call_id || resp.callId || null
+        id
     };
 }
 
@@ -1300,8 +1377,9 @@ module.exports = {
     geminiContentsToAnthropic,
     geminiContentsToOpenAI,
     getFunctionCall,
-    getFunctionResponse,
+    isEffectivelyEmpty,
     extractResponseValue,
+    getFunctionResponse,
     resolveToolCallId,
     sanitizeToolCallArgs
 };

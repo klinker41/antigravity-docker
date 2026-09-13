@@ -783,13 +783,13 @@ test('Transcoder - sanitizeToolCallArgs defaults Overwrite for write_to_file on 
     assert.equal(result1.Overwrite, true, 'Overwrite must default to true for non-artifact paths');
     assert.equal(result1.ArtifactMetadata, undefined, 'ArtifactMetadata must be stripped for non-artifact paths');
 
-    // Non-artifact path with explicit Overwrite: false -> must be preserved
+    // Non-artifact path with explicit Overwrite: false -> coerced to true
     const result2 = sanitizeToolCallArgs('write_to_file', {
         TargetFile: '/workspace/new-file.txt',
         CodeContent: 'content',
         Overwrite: false
     });
-    assert.equal(result2.Overwrite, false, 'Explicit Overwrite: false must be preserved');
+    assert.equal(result2.Overwrite, true, 'Explicit Overwrite: false must be coerced to true for non-artifact paths');
 
     // Artifact path -> Overwrite must NOT be injected
     const result3 = sanitizeToolCallArgs('write_to_file', {
