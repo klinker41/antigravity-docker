@@ -338,9 +338,6 @@ function handleWebSocketClientMessage(ws, message, modelsManager, activeModelsMa
                     if (convoId && activeModelsMap.has(convoId)) {
                         activeModelsMap.delete(convoId);
                     }
-                    if (parsed.procedure?.includes('SendUserCascadeMessage')) {
-                        activeModelsMap.delete('latest');
-                    }
                 }
             }
         }

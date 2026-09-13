@@ -685,7 +685,49 @@ test('Multi-Model Integration - HTTP Proxy, Models API, & Upstream Interception'
             handleWebSocketClientMessage(fakeWs, msg3, mockManager, testMap);
             assert.equal(testMap.has('casc-1'), false, 'Standard model selection must clear active model mapping');
             assert.equal(testMap.has('conv-1'), false, 'Standard model selection must clear active model mapping');
-            assert.equal(testMap.has('latest'), false, 'Standard model selection must clear latest mapping');
+            // 'latest' is intentionally NOT cleared — removing it mid-conversation based on procedure
+            // name caused the sub-agent communication bug (see proxy.js fix). A stale 'latest' entry
+            // is harmless; the cascadeId/convoId specific entries are what guard per-conversation routing.
+            assert.ok(testMap.has('latest'), "'latest' must NOT be cleared when switching cascade/convo to standard model");
+        });
+
+        await t.test('handleWebSocketClientMessage retains latest model when SendUserCascadeMessage is a sub-agent response', () => {
+            const { handleWebSocketClientMessage } = require('../proxy/lib/proxy');
+            const testMap = new Map();
+            const fakeWs = { data: { activeStreams: new Map() } };
+            const mockManager = {
+                getModelByPlaceholder: (ph) => (ph === 'MODEL_PLACEHOLDER_M510' ? { modelId: 'custom-astra' } : null)
+            };
+
+            // Main agent starts with a custom model (Astra)
+            const msg1 = JSON.stringify({
+                streamId: 's1',
+                type: 'start',
+                procedure: '/SendUserCascadeMessage',
+                payload: {
+                    cascadeId: 'main-casc',
+                    conversationId: 'main-conv',
+                    cascadeConfig: { plannerConfig: { planModel: 'MODEL_PLACEHOLDER_M510' } }
+                }
+            });
+            handleWebSocketClientMessage(fakeWs, msg1, mockManager, testMap);
+            assert.ok(testMap.has('latest'), 'Custom model must be set in latest after initial message');
+
+            // Sub-agent sends a response back — procedure is still SendUserCascadeMessage
+            // but there is NO model field (it's a tool result, not a model switch).
+            const subAgentToolResult = JSON.stringify({
+                streamId: 's2',
+                type: 'start',
+                procedure: '/SendUserCascadeMessage',
+                payload: {
+                    cascadeId: 'main-casc',
+                    conversationId: 'main-conv',
+                    // No planModel — this is a tool result coming back, not a model change
+                }
+            });
+            handleWebSocketClientMessage(fakeWs, subAgentToolResult, mockManager, testMap);
+            assert.ok(testMap.has('latest'),
+                "'latest' must survive a SendUserCascadeMessage tool result — wiping it broke sub-agent communication");
         });
 
     } finally {

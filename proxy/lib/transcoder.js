@@ -1013,7 +1013,14 @@ function extractResponseValue(resp, part) {
         }
     }
 
-    return val !== undefined ? val : {};
+    const finalVal = val !== undefined ? val : {};
+
+    // Debug: log when extraction returns empty so we can identify the wire format
+    if (!finalVal || (typeof finalVal === 'object' && !Array.isArray(finalVal) && Object.keys(finalVal).length === 0)) {
+        console.warn('[Proxy Debug] extractResponseValue returned empty result. Raw resp:', JSON.stringify(resp), '| Raw part:', JSON.stringify(part));
+    }
+
+    return finalVal;
 }
 
 /**
