@@ -382,4 +382,30 @@ test('Models Manager - Configuration, CRUD & Provider Connectivity', async (t) =
         assert.equal(extractSupportsThinking({ id: 'llama-3.3-70b' }, 'openai'), false);
         assert.equal(extractSupportsThinking(null, 'openai'), false);
     });
+
+    await t.test('persists provider and model timeouts and cascades in getModelByPlaceholder', () => {
+        manager.saveProvider({
+            name: 'Timeout Provider',
+            type: 'openai',
+            endpoint: 'http://127.0.0.1:11434',
+            timeout: 120000,
+            models: [
+                { id: 'm-default', label: 'Inherits Provider Timeout' },
+                { id: 'm-override', label: 'Custom Timeout', timeout: 300000 },
+                { id: 'm-invalid', label: 'Invalid Timeout', timeout: -50 }
+            ]
+        });
+
+        const placeholderDefault = manager.getPlaceholderEnum('custom-openai-m-default');
+        const modelDefault = manager.getModelByPlaceholder(placeholderDefault);
+        assert.equal(modelDefault.timeout, 120000);
+
+        const placeholderOverride = manager.getPlaceholderEnum('custom-openai-m-override');
+        const modelOverride = manager.getModelByPlaceholder(placeholderOverride);
+        assert.equal(modelOverride.timeout, 300000);
+
+        const placeholderInvalid = manager.getPlaceholderEnum('custom-openai-m-invalid');
+        const modelInvalid = manager.getModelByPlaceholder(placeholderInvalid);
+        assert.equal(modelInvalid.timeout, 120000); // Falls back to provider timeout
+    });
 });

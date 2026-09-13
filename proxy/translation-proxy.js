@@ -494,7 +494,8 @@ class TranslationProxy {
                 thinkingBudget: customModel.thinkingBudget,
                 maxTokens,
                 signal,
-                onEvent
+                onEvent,
+                timeout: customModel.timeout
             });
         } else {
             // OpenAI or Ollama-compatible
@@ -511,7 +512,8 @@ class TranslationProxy {
                 thinkingLevel: customModel.thinkingLevel,
                 maxTokens,
                 signal,
-                onEvent
+                onEvent,
+                timeout: customModel.timeout
             });
         }
     }

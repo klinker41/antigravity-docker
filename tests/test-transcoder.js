@@ -29,7 +29,10 @@ const {
     prepareToolResponses,
     isToolExecutionOutput,
     resolveConversationToolOutputs,
-    createToolOutputResolver
+    createToolOutputResolver,
+    DEFAULT_REQUEST_TIMEOUT_MS,
+    getRequestTimeout,
+    formatTimeoutError
 } = require('../proxy/lib/transcoder');
 
 test('Stream Transcoder - Anthropic & OpenAI Event Normalization', async (t) => {
@@ -2663,6 +2666,97 @@ test('Stream Transcoder - Anthropic & OpenAI Event Normalization', async (t) => 
             assert.equal(result.outputsByCallId.get(call2), 'step 4 output content\n');
         } finally {
             fs.rmSync(tmpDir, { recursive: true, force: true });
+        }
+    });
+
+    await t.test('Transcoder request timeout defaults to 10 minutes (600,000 ms) and is configurable', async () => {
+        assert.equal(DEFAULT_REQUEST_TIMEOUT_MS, 600000);
+
+        // Default with no options or env vars
+        const prevMs = process.env.CUSTOM_MODEL_TIMEOUT_MS;
+        const prevSecs = process.env.CUSTOM_MODEL_TIMEOUT_SECONDS;
+        delete process.env.CUSTOM_MODEL_TIMEOUT_MS;
+        delete process.env.CUSTOM_MODEL_TIMEOUT_SECONDS;
+
+        try {
+            assert.equal(getRequestTimeout(), 600000);
+            assert.equal(getRequestTimeout({}), 600000);
+
+            // options.timeout takes precedence
+            assert.equal(getRequestTimeout({ timeout: 120000 }), 120000);
+            assert.equal(getRequestTimeout({ timeout: '90000' }), 90000);
+
+            // Environment variable CUSTOM_MODEL_TIMEOUT_MS
+            process.env.CUSTOM_MODEL_TIMEOUT_MS = '300000';
+            assert.equal(getRequestTimeout(), 300000);
+            assert.equal(getRequestTimeout({ timeout: 150000 }), 150000); // options still overrides
+
+            delete process.env.CUSTOM_MODEL_TIMEOUT_MS;
+
+            // Environment variable CUSTOM_MODEL_TIMEOUT_SECONDS
+            process.env.CUSTOM_MODEL_TIMEOUT_SECONDS = '180';
+            assert.equal(getRequestTimeout(), 180000);
+
+            // formatTimeoutError formats minutes, seconds, and milliseconds cleanly
+            assert.equal(formatTimeoutError('OpenAI', 600000), 'OpenAI request timed out after 10 minutes');
+            assert.equal(formatTimeoutError('Anthropic', 60000), 'Anthropic request timed out after 1 minute');
+            assert.equal(formatTimeoutError('OpenAI Responses', 120000), 'OpenAI Responses request timed out after 2 minutes');
+            assert.equal(formatTimeoutError('OpenAI', 45000), 'OpenAI request timed out after 45 seconds');
+            assert.equal(formatTimeoutError('OpenAI', 50), 'OpenAI request timed out after 50ms');
+        } finally {
+            if (prevMs !== undefined) process.env.CUSTOM_MODEL_TIMEOUT_MS = prevMs;
+            else delete process.env.CUSTOM_MODEL_TIMEOUT_MS;
+            if (prevSecs !== undefined) process.env.CUSTOM_MODEL_TIMEOUT_SECONDS = prevSecs;
+            else delete process.env.CUSTOM_MODEL_TIMEOUT_SECONDS;
+        }
+
+        // Verify timeout triggering on actual socket call without hanging
+        const hangServer = http.createServer((req, res) => {
+            // Intentionally do not send any response to simulate slow model load
+        });
+
+        await new Promise(resolve => hangServer.listen(0, '127.0.0.1', resolve));
+        const port = hangServer.address().port;
+        const endpoint = `http://127.0.0.1:${port}`;
+
+        try {
+            // Test callOpenAIStream timeout with small timeout
+            await assert.rejects(
+                callOpenAIStream({
+                    endpoint,
+                    model: 'test-model',
+                    messages: [{ role: 'user', content: 'hi' }],
+                    timeout: 50,
+                    onEvent: () => {}
+                }),
+                /OpenAI request timed out after 50ms/
+            );
+
+            // Test callOpenAIResponsesStream timeout with small timeout
+            await assert.rejects(
+                callOpenAIResponsesStream({
+                    endpoint,
+                    model: 'test-model',
+                    messages: [{ role: 'user', content: 'hi' }],
+                    timeout: 50,
+                    onEvent: () => {}
+                }),
+                /OpenAI Responses request timed out after 50ms/
+            );
+
+            // Test callAnthropicStream timeout with small timeout
+            await assert.rejects(
+                callAnthropicStream({
+                    endpoint,
+                    model: 'claude-3-haiku',
+                    messages: [{ role: 'user', content: 'hi' }],
+                    timeout: 50,
+                    onEvent: () => {}
+                }),
+                /Anthropic request timed out after 50ms/
+            );
+        } finally {
+            hangServer.close();
         }
     });
 });

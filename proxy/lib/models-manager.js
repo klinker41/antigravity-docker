@@ -265,13 +265,18 @@ class ModelsManager {
             apiKey = existing.apiKey;
         }
 
-        const models = Array.isArray(providerData.models) ? providerData.models.map(m => ({
-            id: String(m.id || '').trim(),
-            label: String(m.label || m.id || '').trim(),
-            enabled: m.enabled !== false,
-            supportsThinking: m.supportsThinking !== undefined ? Boolean(m.supportsThinking) : isThinkingModel(m.id, m.label)
-        })).filter(m => m.id.length > 0) : [];
+        const models = Array.isArray(providerData.models) ? providerData.models.map(m => {
+            const modelTimeout = parseInt(m.timeout, 10);
+            return {
+                id: String(m.id || '').trim(),
+                label: String(m.label || m.id || '').trim(),
+                enabled: m.enabled !== false,
+                supportsThinking: m.supportsThinking !== undefined ? Boolean(m.supportsThinking) : isThinkingModel(m.id, m.label),
+                ...(Number.isInteger(modelTimeout) && modelTimeout > 0 ? { timeout: modelTimeout } : {})
+            };
+        }).filter(m => m.id.length > 0) : [];
 
+        const providerTimeout = parseInt(providerData.timeout, 10);
         const cleanProvider = {
             id,
             name: String(providerData.name || id).trim(),
@@ -279,6 +284,7 @@ class ModelsManager {
             endpoint: String(providerData.endpoint || '').trim().replace(/\/+$/, ''),
             apiKey,
             enabled: providerData.enabled !== false,
+            ...(Number.isInteger(providerTimeout) && providerTimeout > 0 ? { timeout: providerTimeout } : {}),
             models
         };
 
@@ -370,6 +376,8 @@ class ModelsManager {
                             apiKey: provider.apiKey,
                             rawModelId: model.id,
                             supportsThinking: v.supportsThinking,
+                            ...(typeof provider.timeout === 'number' && provider.timeout > 0 ? { timeout: provider.timeout } : {}),
+                            ...(typeof model.timeout === 'number' && model.timeout > 0 ? { timeout: model.timeout } : {}),
                             ...(v.supportsThinking ? { thinkingLevel: v.thinkingLevel, thinkingBudget: v.thinkingBudget } : {})
                         };
                     }

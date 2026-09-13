@@ -445,10 +445,37 @@ function sanitizeToolCallArgs(name, args) {
     return cleanArgs;
 }
 
+const DEFAULT_REQUEST_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes (600,000 ms)
+
+function getRequestTimeout(options = {}) {
+    const optTimeout = typeof options.timeout === 'string' ? parseInt(options.timeout, 10) : options.timeout;
+    if (typeof optTimeout === 'number' && !isNaN(optTimeout) && optTimeout > 0) {
+        return optTimeout;
+    }
+    const envMs = parseInt(process.env.CUSTOM_MODEL_TIMEOUT_MS || '', 10);
+    if (!isNaN(envMs) && envMs > 0) return envMs;
+    const envSecs = parseInt(process.env.CUSTOM_MODEL_TIMEOUT_SECONDS || '', 10);
+    if (!isNaN(envSecs) && envSecs > 0) return envSecs * 1000;
+    return DEFAULT_REQUEST_TIMEOUT_MS;
+}
+
+function formatTimeoutError(providerName, timeoutMs) {
+    if (timeoutMs < 1000) {
+        return `${providerName} request timed out after ${timeoutMs}ms`;
+    }
+    if (timeoutMs % 60000 === 0) {
+        const mins = timeoutMs / 60000;
+        return `${providerName} request timed out after ${mins} minute${mins === 1 ? '' : 's'}`;
+    }
+    const secs = Math.round(timeoutMs / 1000);
+    return `${providerName} request timed out after ${secs} second${secs === 1 ? '' : 's'}`;
+}
+
 /**
  * Streams chat completion from an Anthropic Messages endpoint and normalizes events.
  */
 function callAnthropicStream(options) {
+    const requestTimeout = getRequestTimeout(options);
     const {
         endpoint,
         apiKey,
@@ -502,7 +529,7 @@ function callAnthropicStream(options) {
     if (apiKey) headers['x-api-key'] = apiKey;
 
     return new Promise((resolve, reject) => {
-        const req = transport.request(parsed, { method: 'POST', headers, timeout: 60000 }, (res) => {
+        const req = transport.request(parsed, { method: 'POST', headers, timeout: requestTimeout }, (res) => {
             if (res.statusCode < 200 || res.statusCode >= 300) {
                 let errBody = '';
                 res.on('data', chunk => errBody += chunk);
@@ -596,7 +623,7 @@ function callAnthropicStream(options) {
         });
 
         req.on('timeout', () => {
-            req.destroy(new Error('Anthropic request timed out after 60 seconds'));
+            req.destroy(new Error(formatTimeoutError('Anthropic', requestTimeout)));
         });
         req.on('error', reject);
 
@@ -849,6 +876,7 @@ function chatToolsToResponsesTools(tools) {
  * Streams chat completion from an OpenAI Responses API endpoint (/v1/responses).
  */
 function callOpenAIResponsesStream(options) {
+    const requestTimeout = getRequestTimeout(options);
     const { endpoint, apiKey, model, messages, tools, maxTokens, onEvent } = options;
 
     let cleanBase = (endpoint || 'https://api.openai.com').trim().replace(/\/+$/, '');
@@ -881,7 +909,7 @@ function callOpenAIResponsesStream(options) {
     if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
 
     return new Promise((resolve, reject) => {
-        const req = transport.request(parsed, { method: 'POST', headers, timeout: 60000 }, (res) => {
+        const req = transport.request(parsed, { method: 'POST', headers, timeout: requestTimeout }, (res) => {
             if (res.statusCode < 200 || res.statusCode >= 300) {
                 let errBody = '';
                 res.on('data', chunk => errBody += chunk);
@@ -1000,7 +1028,7 @@ function callOpenAIResponsesStream(options) {
         });
 
         req.on('timeout', () => {
-            req.destroy(new Error('OpenAI Responses request timed out after 60 seconds'));
+            req.destroy(new Error(formatTimeoutError('OpenAI Responses', requestTimeout)));
         });
         req.on('error', reject);
 
@@ -1023,6 +1051,7 @@ function callOpenAIResponsesStream(options) {
  * Streams chat completion from an OpenAI-compatible endpoint and normalizes events.
  */
 function callOpenAIStream(options) {
+    const requestTimeout = getRequestTimeout(options);
     const { endpoint, apiKey, model, messages, tools, maxTokens, onEvent } = options;
 
     if (!options.forceChatCompletions && isOpenAIResponsesModel(model, endpoint)) {
@@ -1057,7 +1086,7 @@ function callOpenAIStream(options) {
     if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
 
     return new Promise((resolve, reject) => {
-        const req = transport.request(parsed, { method: 'POST', headers, timeout: 60000 }, (res) => {
+        const req = transport.request(parsed, { method: 'POST', headers, timeout: requestTimeout }, (res) => {
             if (res.statusCode < 200 || res.statusCode >= 300) {
                 let errBody = '';
                 res.on('data', chunk => errBody += chunk);
@@ -1158,7 +1187,7 @@ function callOpenAIStream(options) {
         });
 
         req.on('timeout', () => {
-            req.destroy(new Error('OpenAI request timed out after 60 seconds'));
+            req.destroy(new Error(formatTimeoutError('OpenAI', requestTimeout)));
         });
         req.on('error', reject);
 
@@ -2280,5 +2309,8 @@ module.exports = {
     prepareToolResponses,
     isToolExecutionOutput,
     resolveConversationToolOutputs,
-    createToolOutputResolver
+    createToolOutputResolver,
+    DEFAULT_REQUEST_TIMEOUT_MS,
+    getRequestTimeout,
+    formatTimeoutError
 };
