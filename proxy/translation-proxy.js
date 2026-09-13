@@ -3,6 +3,7 @@
 
 const http = require('node:http');
 const https = require('node:https');
+const path = require('node:path');
 const {
     callAnthropicStream,
     callOpenAIStream,
@@ -10,7 +11,8 @@ const {
     geminiToolsToAnthropic,
     geminiContentsToOpenAI,
     geminiToolsToOpenAI,
-    sanitizeToolCallArgs
+    sanitizeToolCallArgs,
+    resolveConversationToolOutputs
 } = require('./lib/transcoder.js');
 const { CUSTOM_PLACEHOLDER_REGEX, THINKING_BUDGETS } = require('./lib/models-manager.js');
 
@@ -127,6 +129,7 @@ class TranslationProxy {
         this.upstreamUrl = options.upstreamUrl || DEFAULT_UPSTREAM;
         this.modelsManager = options.modelsManager || null;
         this.activeConversationModels = options.activeConversationModels || new Map();
+        this.baseDir = options.baseDir || path.join(process.env.HOME || '/home/developer', '.gemini/antigravity-cli');
         this.server = null;
         this.isRunning = false;
     }
@@ -377,6 +380,10 @@ class TranslationProxy {
             }
         };
 
+        const cascadeId = parsedData?.cascadeId || parsedData?.request?.cascadeId;
+        const convoId = parsedData?.conversationId || parsedData?.request?.conversationId || parsedData?.request?.sessionId;
+        const toolOutputs = resolveConversationToolOutputs(convoId, cascadeId, this.baseDir);
+
         try {
             await this._callProviderStream({
                 customModel,
@@ -385,7 +392,8 @@ class TranslationProxy {
                 tools,
                 maxTokens,
                 signal: abortController.signal,
-                onEvent
+                onEvent,
+                toolOutputs
             });
         } finally {
             res.removeListener('close', onClose);
@@ -396,9 +404,9 @@ class TranslationProxy {
         }
     }
 
-    async _callProviderStream({ customModel, contents, systemInstruction, tools, maxTokens, signal, onEvent }) {
+    async _callProviderStream({ customModel, contents, systemInstruction, tools, maxTokens, signal, onEvent, toolOutputs }) {
         if (customModel.providerType === 'anthropic') {
-            const { system, messages } = geminiContentsToAnthropic(contents, systemInstruction);
+            const { system, messages } = geminiContentsToAnthropic(contents, systemInstruction, { toolOutputs });
             const anthropicTools = geminiToolsToAnthropic(tools);
 
             await callAnthropicStream({
@@ -417,7 +425,7 @@ class TranslationProxy {
             });
         } else {
             // OpenAI or Ollama-compatible
-            const messages = geminiContentsToOpenAI(contents, systemInstruction);
+            const messages = geminiContentsToOpenAI(contents, systemInstruction, { toolOutputs });
             const openAiTools = geminiToolsToOpenAI(tools);
 
             await callOpenAIStream({
@@ -533,6 +541,10 @@ class TranslationProxy {
             }
         };
 
+        const cascadeId = parsedData?.cascadeId || parsedData?.request?.cascadeId;
+        const convoId = parsedData?.conversationId || parsedData?.request?.conversationId || parsedData?.request?.sessionId;
+        const toolOutputs = resolveConversationToolOutputs(convoId, cascadeId, this.baseDir);
+
         try {
             await this._callProviderStream({
                 customModel,
@@ -541,7 +553,8 @@ class TranslationProxy {
                 tools,
                 maxTokens,
                 signal: abortController.signal,
-                onEvent
+                onEvent,
+                toolOutputs
             });
 
             if (res.writableEnded || res.destroyed) return;

@@ -1,6 +1,9 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
+const fs = require('node:fs');
+const path = require('node:path');
+const os = require('node:os');
 
 const {
     callAnthropicStream,
@@ -24,7 +27,9 @@ const {
     unpackProtobufValue,
     formatToolSuccessFallback,
     prepareToolResponses,
-    isToolExecutionOutput
+    isToolExecutionOutput,
+    resolveConversationToolOutputs,
+    createToolOutputResolver
 } = require('../proxy/lib/transcoder');
 
 test('Stream Transcoder - Anthropic & OpenAI Event Normalization', async (t) => {
@@ -1687,10 +1692,10 @@ test('Stream Transcoder - Anthropic & OpenAI Event Normalization', async (t) => 
         assert.equal(formatToolSuccessFallback('manage_subagents'), 'Subagent operation completed successfully.');
         assert.equal(formatToolSuccessFallback('notify_the_user'), 'Notification sent successfully.');
         assert.equal(formatToolSuccessFallback('read_url_content'), 'Web page content is empty.');
-        assert.equal(formatToolSuccessFallback('view_file'), 'File is empty (0 lines).');
-        assert.equal(formatToolSuccessFallback('list_dir'), 'Directory is empty (0 entries).');
-        assert.equal(formatToolSuccessFallback('grep_search'), 'No matches found.');
-        assert.equal(formatToolSuccessFallback('run_command'), 'Command executed with no output.');
+        assert.equal(formatToolSuccessFallback('view_file'), 'File read completed.');
+        assert.equal(formatToolSuccessFallback('list_dir'), 'Directory listing completed.');
+        assert.equal(formatToolSuccessFallback('grep_search'), 'Search completed.');
+        assert.equal(formatToolSuccessFallback('run_command'), 'Command executed.');
         assert.equal(formatToolSuccessFallback('custom_tool'), 'Tool executed successfully with no additional output.');
         assert.equal(formatToolSuccessFallback(''), 'Tool executed successfully with no additional output.');
         assert.equal(formatToolSuccessFallback(null), 'Tool executed successfully with no additional output.');
@@ -2032,7 +2037,7 @@ test('Stream Transcoder - Anthropic & OpenAI Event Normalization', async (t) => 
         assert.ok(toolResult.content.includes('Created file file:///workspace/test.txt with requested content.'));
     });
 
-    await t.test('geminiContentsToOpenAI binds cross-item tool output text when functionResponse is empty in preceding turn', () => {
+    await t.test('geminiContentsToOpenAI hydrates tool response via toolOutputs or falls back safely', () => {
         const contents = [
             {
                 role: 'model',
@@ -2062,17 +2067,33 @@ test('Stream Transcoder - Anthropic & OpenAI Event Normalization', async (t) => 
                 role: 'user',
                 parts: [
                     {
-                        text: 'Created file file:///workspace/lookahead.txt with requested content.'
+                        text: 'Next user turn text'
                     }
                 ]
             }
         ];
 
-        const messages = geminiContentsToOpenAI(contents);
-        const toolMsg = messages.find(m => m.role === 'tool');
-        assert.ok(toolMsg);
-        assert.equal(toolMsg.tool_call_id, 'call_lookahead_1');
-        assert.equal(toolMsg.content, 'Created file file:///workspace/lookahead.txt with requested content.');
+        // 1. Without toolOutputs, fallback is used and subsequent user message is preserved
+        const messagesNoOutputs = geminiContentsToOpenAI(contents);
+        const toolMsgNoOutputs = messagesNoOutputs.find(m => m.role === 'tool');
+        assert.ok(toolMsgNoOutputs);
+        assert.equal(toolMsgNoOutputs.tool_call_id, 'call_lookahead_1');
+        assert.equal(toolMsgNoOutputs.content, 'File written successfully.');
+        const userMsg = messagesNoOutputs.find(m => m.role === 'user');
+        assert.ok(userMsg);
+        assert.equal(userMsg.content, 'Next user turn text');
+
+        // 2. With toolOutputs, exact authentic content is hydrated
+        const toolOutputs = {
+            outputsByCallId: new Map([
+                ['call_lookahead_1', 'Created file file:///workspace/lookahead.txt with requested content.']
+            ])
+        };
+        const messagesHydrated = geminiContentsToOpenAI(contents, null, { toolOutputs });
+        const toolMsgHydrated = messagesHydrated.find(m => m.role === 'tool');
+        assert.ok(toolMsgHydrated);
+        assert.equal(toolMsgHydrated.tool_call_id, 'call_lookahead_1');
+        assert.equal(toolMsgHydrated.content, 'Created file file:///workspace/lookahead.txt with requested content.');
     });
 
     await t.test('chatMessagesToResponsesInput binds user turn with tool execution output to function_call_output', () => {
@@ -2169,10 +2190,93 @@ test('Stream Transcoder - Anthropic & OpenAI Event Normalization', async (t) => 
         const toolMsg = messages.find(m => m.role === 'tool');
         assert.ok(toolMsg);
         // Function fallback used, user prompt NOT consumed as tool output
-        assert.equal(toolMsg.content, 'Command executed with no output.');
+        assert.equal(toolMsg.content, 'Command executed.');
         const userMsg = messages.find(m => m.role === 'user');
         assert.ok(userMsg);
         assert.equal(userMsg.content, '<USER_REQUEST>What is the current time?</USER_REQUEST>');
+    });
+
+    await t.test('createToolOutputResolver resolves by callId first, then FIFO by toolName', () => {
+        const outputsByCallId = new Map([
+            ['call_123', 'output from call_123']
+        ]);
+        const outputsByToolName = new Map([
+            ['view_file', ['file content 1', 'file content 2']]
+        ]);
+        const resolver = createToolOutputResolver({ outputsByCallId, outputsByToolName });
+
+        // Match by callId
+        assert.equal(resolver('call_123', 'view_file'), 'output from call_123');
+
+        // Match by toolName FIFO
+        assert.equal(resolver('unknown_call', 'view_file'), 'file content 1');
+        assert.equal(resolver(null, 'view_file'), 'file content 2');
+        assert.equal(resolver('unknown_call', 'view_file'), null);
+    });
+
+    await t.test('resolveConversationToolOutputs parses conversation trajectory and DB hermetically', () => {
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'transcoder-test-'));
+        try {
+            const convoId = 'test-convo-123';
+            const convoBrainDir = path.join(tmpDir, 'brain', convoId);
+            const logsDir = path.join(convoBrainDir, '.system_generated', 'logs');
+            const stepDir = path.join(convoBrainDir, '.system_generated', 'steps', '2');
+            fs.mkdirSync(logsDir, { recursive: true });
+            fs.mkdirSync(stepDir, { recursive: true });
+
+            // Create step 2 output.txt
+            fs.writeFileSync(path.join(stepDir, 'output.txt'), 'Disk file content from step 2\n');
+
+            // Create transcript.jsonl
+            const lines = [
+                JSON.stringify({ step_index: 0, type: 'USER_INPUT', content: 'hello' }),
+                JSON.stringify({
+                    step_index: 1,
+                    type: 'PLANNER_RESPONSE',
+                    tool_calls: [{ name: 'run_command', id: 'call_cmd_hermetic' }]
+                }),
+                JSON.stringify({
+                    step_index: 2,
+                    type: 'STEP_TYPE_TOOL_OUTPUT',
+                    content: 'Transcript fallback output'
+                })
+            ];
+            fs.writeFileSync(path.join(logsDir, 'transcript.jsonl'), lines.join('\n'));
+
+            // Create conversations SQLite DB with protobuf metadata
+            const convosDir = path.join(tmpDir, 'conversations');
+            fs.mkdirSync(convosDir, { recursive: true });
+            const dbPath = path.join(convosDir, `${convoId}.db`);
+            const { Database } = require('bun:sqlite');
+            const db = new Database(dbPath);
+            db.run('CREATE TABLE steps (idx INTEGER, step_type INTEGER, metadata BLOB)');
+
+            // Construct protobuf-like metadata buffer: call_cmd_hermetic + 0x12 + length + "run_command"
+            const callId = 'call_cmd_hermetic';
+            const toolName = 'run_command';
+            const metaBuf = Buffer.concat([
+                Buffer.from(callId),
+                Buffer.from([0x12, toolName.length]),
+                Buffer.from(toolName)
+            ]);
+            db.query('INSERT INTO steps (idx, step_type, metadata) VALUES (?, ?, ?)').run(2, 132, metaBuf);
+            db.close();
+
+            const res = resolveConversationToolOutputs(convoId, null, tmpDir);
+            assert.ok(res);
+            assert.equal(res.targetConvoId, convoId);
+            assert.ok(res.outputsByCallId.has('call_cmd_hermetic'));
+            assert.equal(res.outputsByCallId.get('call_cmd_hermetic'), 'Disk file content from step 2\n');
+            assert.ok(res.outputsByToolName.has('run_command'));
+            assert.deepEqual(res.outputsByToolName.get('run_command'), ['Disk file content from step 2\n']);
+
+            // Verify unknown convo returns null targetConvoId and does not cross-pollute
+            const emptyRes = resolveConversationToolOutputs('unknown-convo-id', null, tmpDir);
+            assert.equal(emptyRes.targetConvoId, null);
+            assert.equal(emptyRes.outputsByCallId.size, 0);
+        } finally {
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+        }
     });
 
     await t.test('geminiContentsToOpenAI preserves target tool name when tool output is effectively empty', () => {

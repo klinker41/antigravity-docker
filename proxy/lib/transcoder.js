@@ -1,9 +1,195 @@
 'use strict';
 
+const fs = require('node:fs');
+const path = require('node:path');
 const http = require('node:http');
 const https = require('node:https');
 const crypto = require('node:crypto');
 const { THINKING_BUDGETS } = require('./models-manager');
+
+/**
+ * Reads the authentic tool outputs from the local conversation trajectory and database.
+ * Antigravity (agy) records full tool output into transcript_full.jsonl / transcript.jsonl
+ * and conversation step metadata into SQLite (~/.gemini/antigravity-cli/conversations/<convoId>.db).
+ */
+function resolveConversationToolOutputs(convoId, cascadeId, baseDir) {
+    const rootDir = baseDir || path.join(process.env.HOME || '/home/developer', '.gemini/antigravity-cli');
+    const brainDir = path.join(rootDir, 'brain');
+    let targetConvoId = convoId;
+
+    if (!targetConvoId || !fs.existsSync(path.join(brainDir, targetConvoId))) {
+        if (cascadeId && fs.existsSync(path.join(brainDir, cascadeId))) {
+            targetConvoId = cascadeId;
+        } else {
+            targetConvoId = null;
+        }
+    }
+
+    const outputsByCallId = new Map();
+    const outputsByToolName = new Map();
+    const stepIndexToCallId = new Map();
+    const stepIndexToToolName = new Map();
+
+    if (!targetConvoId) {
+        return { targetConvoId: null, outputsByCallId, outputsByToolName };
+    }
+
+    // 1. Try SQLite mapping if DB exists
+    const dbPath = path.join(rootDir, 'conversations', `${targetConvoId}.db`);
+    if (fs.existsSync(dbPath)) {
+        try {
+            let Database;
+            try {
+                Database = require('bun:sqlite').Database;
+            } catch {
+                try { Database = require('node:sqlite').DatabaseSync; } catch {}
+            }
+            if (Database) {
+                const db = new Database(dbPath, { readonly: true });
+                try {
+                    const queryFn = db.query ? (sql) => db.query(sql).all() : (sql) => db.prepare(sql).all();
+                    const rows = queryFn('SELECT idx, metadata FROM steps WHERE step_type = 132');
+                    for (const row of rows) {
+                        if (!row || row.idx === undefined) continue;
+                        const buf = Buffer.isBuffer(row.metadata)
+                            ? row.metadata
+                            : (row.metadata instanceof Uint8Array ? Buffer.from(row.metadata) : Buffer.from(String(row.metadata || '')));
+                        const rawStr = buf.toString('utf8');
+                        const callMatch = rawStr.match(/call_[a-zA-Z0-9_-]+/);
+                        if (callMatch) {
+                            const callId = callMatch[0];
+                            stepIndexToCallId.set(row.idx, callId);
+
+                            const callIdx = buf.indexOf(callId);
+                            if (callIdx !== -1) {
+                                const afterCallIdx = callIdx + callId.length;
+                                // In protobuf, field 2 (tag 0x12) is string tool_name: [0x12, length, ...nameBytes]
+                                if (afterCallIdx < buf.length && buf[afterCallIdx] === 0x12) {
+                                    const nameLen = buf[afterCallIdx + 1];
+                                    if (nameLen > 0 && afterCallIdx + 2 + nameLen <= buf.length) {
+                                        const toolName = buf.slice(afterCallIdx + 2, afterCallIdx + 2 + nameLen).toString('utf8');
+                                        if (/^[a-zA-Z0-9_.-]+$/.test(toolName)) {
+                                            stepIndexToToolName.set(row.idx, toolName);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } finally {
+                    if (typeof db.close === 'function') db.close();
+                }
+            }
+        } catch {}
+    }
+
+    // 2. Read transcript
+    const convoBrainDir = path.join(brainDir, targetConvoId);
+    const transcriptFull = path.join(convoBrainDir, '.system_generated', 'logs', 'transcript_full.jsonl');
+    const transcriptCompact = path.join(convoBrainDir, '.system_generated', 'logs', 'transcript.jsonl');
+    const transcriptFile = fs.existsSync(transcriptFull) ? transcriptFull : (fs.existsSync(transcriptCompact) ? transcriptCompact : null);
+
+    if (transcriptFile) {
+        try {
+            const content = fs.readFileSync(transcriptFile, 'utf8');
+            const lines = content.split('\n');
+            const pendingToolCalls = [];
+
+            for (const line of lines) {
+                const trimmed = line.trim();
+                if (!trimmed) continue;
+                let parsed;
+                try {
+                    parsed = JSON.parse(trimmed);
+                } catch { continue; }
+
+                if (Array.isArray(parsed.tool_calls) && parsed.tool_calls.length > 0) {
+                    for (const tc of parsed.tool_calls) {
+                        pendingToolCalls.push({
+                            name: tc.name,
+                            stepIndex: parsed.step_index
+                        });
+                    }
+                }
+
+                // Explicitly ignore user prompts and assistant/planner responses
+                if (parsed.type === 'USER_INPUT' || parsed.type === 'PLANNER_RESPONSE') {
+                    continue;
+                }
+
+                if (parsed.content && typeof parsed.content === 'string') {
+                    const stepIdx = parsed.step_index;
+                    let matchedCallId = stepIndexToCallId.get(stepIdx);
+                    let matchedToolName = stepIndexToToolName.get(stepIdx);
+
+                    if (!matchedToolName && pendingToolCalls.length > 0) {
+                        const nextCall = pendingToolCalls.shift();
+                        matchedToolName = nextCall.name;
+                    }
+
+                    // Check steps/<idx>/output.txt as authoritative file if present
+                    let finalOutput = parsed.content;
+                    const stepOutputFile = path.join(convoBrainDir, '.system_generated', 'steps', String(stepIdx), 'output.txt');
+                    if (fs.existsSync(stepOutputFile)) {
+                        try {
+                            const diskOutput = fs.readFileSync(stepOutputFile, 'utf8');
+                            if (diskOutput.trim()) finalOutput = diskOutput;
+                        } catch {}
+                    }
+
+                    if (matchedCallId) {
+                        outputsByCallId.set(matchedCallId, finalOutput);
+                    }
+                    if (matchedToolName) {
+                        if (!outputsByToolName.has(matchedToolName)) {
+                            outputsByToolName.set(matchedToolName, []);
+                        }
+                        outputsByToolName.get(matchedToolName).push(finalOutput);
+                    }
+                }
+            }
+        } catch {}
+    }
+
+    return { targetConvoId, outputsByCallId, outputsByToolName };
+}
+
+/**
+ * Creates a resolver function that matches tool calls by callId first, then falls back
+ * to FIFO order for matching tool names.
+ */
+function createToolOutputResolver(toolOutputs) {
+    if (!toolOutputs) return () => null;
+    if (typeof toolOutputs === 'function') return toolOutputs;
+
+    const outputsByCallId = toolOutputs.outputsByCallId instanceof Map
+        ? toolOutputs.outputsByCallId
+        : new Map(Object.entries(toolOutputs.outputsByCallId || {}));
+
+    const outputsByToolName = new Map();
+    if (toolOutputs.outputsByToolName instanceof Map) {
+        for (const [k, v] of toolOutputs.outputsByToolName) {
+            outputsByToolName.set(k, Array.isArray(v) ? [...v] : [v]);
+        }
+    } else if (toolOutputs.outputsByToolName && typeof toolOutputs.outputsByToolName === 'object') {
+        for (const [k, v] of Object.entries(toolOutputs.outputsByToolName)) {
+            outputsByToolName.set(k, Array.isArray(v) ? [...v] : [v]);
+        }
+    }
+
+    return (callId, toolName) => {
+        if (callId && outputsByCallId.has(callId)) {
+            return outputsByCallId.get(callId);
+        }
+        if (toolName && outputsByToolName.has(toolName)) {
+            const queue = outputsByToolName.get(toolName);
+            if (queue && queue.length > 0) {
+                return queue.shift();
+            }
+        }
+        return null;
+    };
+}
 
 /**
  * Determines whether an Anthropic model requires adaptive thinking (Claude 4.6+, 5+, Fable).
@@ -1072,10 +1258,10 @@ function formatToolSuccessFallback(toolName) {
     if (name.includes('url') || name.includes('browser') || name.includes('web')) {
         return 'Web content retrieved with no additional output.';
     }
-    if (name === 'view_file' || name.startsWith('read_file')) return 'File is empty (0 lines).';
-    if (name.includes('list_dir') || name === 'list_directory') return 'Directory is empty (0 entries).';
-    if (name.includes('search') || name.includes('grep') || name.includes('find')) return 'No matches found.';
-    if (name.includes('run_command') || name.includes('execute')) return 'Command executed with no output.';
+    if (name === 'view_file' || name.startsWith('read_file')) return 'File read completed.';
+    if (name.includes('list_dir') || name === 'list_directory') return 'Directory listing completed.';
+    if (name.includes('search') || name.includes('grep') || name.includes('find')) return 'Search completed.';
+    if (name.includes('run_command') || name.includes('execute')) return 'Command executed.';
     return 'Tool executed successfully with no additional output.';
 }
 
@@ -1135,45 +1321,12 @@ function extractResponseValue(resp, part, fallbackToolName) {
             } else if (p && typeof p === 'object') {
                 if (typeof p.text === 'string') {
                     textParts.push(p.text);
-                } else if (p.data !== undefined) {
-                    if (typeof p.data === 'string') {
-                        let decoded = null;
-                        try {
-                            const buf = Buffer.from(p.data, 'base64');
-                            const utf8 = buf.toString('utf8');
-                            if (!utf8.includes('\ufffd') && utf8.length > 0) {
-                                decoded = utf8;
-                            }
-                        } catch {}
-                        textParts.push(decoded || p.data);
-                    } else if (typeof p.data === 'object' && p.data !== null) {
-                        const unpackedData = unpackProtobufValue(p.data);
-                        if (typeof unpackedData === 'string') {
-                            textParts.push(unpackedData);
-                        } else if (typeof p.data.data === 'string') {
-                            let decoded = null;
-                            try {
-                                const buf = Buffer.from(p.data.data, 'base64');
-                                const utf8 = buf.toString('utf8');
-                                if (!utf8.includes('\ufffd') && utf8.length > 0) {
-                                    decoded = utf8;
-                                }
-                            } catch {}
-                            textParts.push(decoded || p.data.data);
-                        } else if (typeof unpackedData.output === 'string') {
-                            textParts.push(unpackedData.output);
-                        } else if (typeof unpackedData.result === 'string') {
-                            textParts.push(unpackedData.result);
-                        } else if (typeof unpackedData.content === 'string') {
-                            textParts.push(unpackedData.content);
-                        } else if (typeof unpackedData.text === 'string') {
-                            textParts.push(unpackedData.text);
-                        } else {
-                            textParts.push(JSON.stringify(unpackedData));
-                        }
-                    } else {
-                        textParts.push(String(p.data));
-                    }
+                } else if (p.output !== undefined) {
+                    textParts.push(typeof p.output === 'string' ? p.output : JSON.stringify(p.output));
+                } else if (p.result !== undefined) {
+                    textParts.push(typeof p.result === 'string' ? p.result : JSON.stringify(p.result));
+                } else if (p.content !== undefined) {
+                    textParts.push(typeof p.content === 'string' ? p.content : JSON.stringify(p.content));
                 } else if (p.inlineData?.data || p.inline_data?.data) {
                     const rawData = p.inlineData?.data || p.inline_data?.data;
                     let decoded = null;
@@ -1187,18 +1340,50 @@ function extractResponseValue(resp, part, fallbackToolName) {
                         } catch {}
                     }
                     textParts.push(decoded || rawData);
-                } else if (p.retrievalResult || p.retrieval_result) {
-                    const rr = p.retrievalResult || p.retrieval_result;
-                    const rrContent = rr.content || rr.display_content || rr.displayContent || JSON.stringify(rr);
-                    textParts.push(typeof rrContent === 'string' ? rrContent : JSON.stringify(rrContent));
-                } else if (p.fileData || p.file_data) {
-                    textParts.push(JSON.stringify(p.fileData || p.file_data));
-                } else if (p.output !== undefined) {
-                    textParts.push(typeof p.output === 'string' ? p.output : JSON.stringify(p.output));
-                } else if (p.result !== undefined) {
-                    textParts.push(typeof p.result === 'string' ? p.result : JSON.stringify(p.result));
-                } else if (p.content !== undefined) {
-                    textParts.push(typeof p.content === 'string' ? p.content : JSON.stringify(p.content));
+                } else if (p.data !== undefined) {
+                    if (typeof p.data === 'string') {
+                        let decoded = null;
+                        try {
+                            const buf = Buffer.from(p.data, 'base64');
+                            const utf8 = buf.toString('utf8');
+                            if (!utf8.includes('\ufffd') && utf8.length > 0) {
+                                decoded = utf8;
+                            }
+                        } catch {}
+                        textParts.push(decoded || p.data);
+                    } else if (typeof p.data === 'object' && p.data !== null) {
+                        if (typeof p.data.data === 'string') {
+                            let decoded = null;
+                            try {
+                                const buf = Buffer.from(p.data.data, 'base64');
+                                const utf8 = buf.toString('utf8');
+                                if (!utf8.includes('\ufffd') && utf8.length > 0) {
+                                    decoded = utf8;
+                                }
+                            } catch {}
+                            textParts.push(decoded || p.data.data);
+                        } else {
+                            const unpackedData = unpackProtobufValue(p.data);
+                            if (typeof unpackedData === 'string') {
+                                textParts.push(unpackedData);
+                            } else if (typeof unpackedData.text === 'string') {
+                                textParts.push(unpackedData.text);
+                            } else if (typeof unpackedData.output === 'string') {
+                                textParts.push(unpackedData.output);
+                            } else if (typeof unpackedData.result === 'string') {
+                                textParts.push(unpackedData.result);
+                            } else if (typeof unpackedData.content === 'string') {
+                                textParts.push(unpackedData.content);
+                            } else {
+                                textParts.push(JSON.stringify(unpackedData));
+                            }
+                        }
+                    } else {
+                        textParts.push(String(p.data));
+                    }
+                } else if (p.retrievalResult && typeof p.retrievalResult === 'object') {
+                    const rText = p.retrievalResult.content || p.retrievalResult.text || '';
+                    if (rText) textParts.push(rText);
                 }
             }
         }
@@ -1207,7 +1392,7 @@ function extractResponseValue(resp, part, fallbackToolName) {
         }
     }
 
-    // 3. Extract errors across resp, part, resp?.response, part?.functionResponse, and val if present
+    // 3. Fall back to error field if execution failed
     const errorKeys = ['error', 'error_details', 'errorDetails', 'errorMessage', 'error_message'];
     const errorSources = [
         resp,
@@ -1247,11 +1432,6 @@ function extractResponseValue(resp, part, fallbackToolName) {
         } else {
             finalVal = {};
         }
-    }
-
-    // Debug: log when extraction returns empty so we can identify the wire format
-    if (!finalVal || (typeof finalVal === 'object' && !Array.isArray(finalVal) && Object.keys(finalVal).length === 0)) {
-        console.warn('[Proxy Debug] extractResponseValue returned empty result. Raw resp:', JSON.stringify(resp), '| Raw part:', JSON.stringify(part));
     }
 
     return finalVal;
@@ -1314,10 +1494,10 @@ function resolveToolCallId(fnResp, pendingCalls, knownCallIds, fallbackPrefix) {
 
 /**
  * Pre-processes an array of parts to associate empty tool responses with any unconsumed
- * sibling text parts in the same turn, subsequent content items, or apply a sensible fallback message.
+ * sibling text parts in the same turn, local trajectory/transcript resolver, or apply a sensible fallback message.
  * Returns a Set of consumed parts and a Map of part -> fnResp.
  */
-function prepareToolResponses(parts, contents, itemIndex, consumedContentIndices) {
+function prepareToolResponses(parts, toolResolver) {
     const consumedParts = new Set();
     const fnRespMap = new Map();
     if (!Array.isArray(parts)) {
@@ -1349,52 +1529,16 @@ function prepareToolResponses(parts, contents, itemIndex, consumedContentIndices
             if (textSibling) {
                 consumedParts.add(textSibling);
                 fnResp.response = textSibling.text;
-            } else if (Array.isArray(contents) && typeof itemIndex === 'number') {
-                // 2. Look ahead in subsequent content items
-                let nextIdx = itemIndex + 1;
-                while (nextIdx < contents.length) {
-                    if (consumedContentIndices?.has(nextIdx)) {
-                        nextIdx++;
-                        continue;
-                    }
-                    const nextItem = contents[nextIdx];
-                    if (nextItem?.role === 'model') break;
-
-                    if (Array.isArray(nextItem?.parts)) {
-                        const hasFn = nextItem.parts.some(p => getFunctionResponse(p) || getFunctionCall(p));
-                        const textParts = nextItem.parts.filter(p =>
-                            typeof p?.text === 'string' &&
-                            p.text.trim().length > 0 &&
-                            !p.thought
-                        );
-                        if (textParts.some(p => {
-                            const t = (p.text || '').trim();
-                            return t.startsWith('<USER_REQUEST>') || t.startsWith('<SYSTEM_MESSAGE>');
-                        })) {
-                            break;
-                        }
-                        if (!hasFn && textParts.length > 0) {
-                            const text = textParts.map(p => p.text).join('\n');
-                            const partWithId = nextItem.parts.find(p => p?.id || p?.call_id || p?.callId || p?.tool_call_id);
-                            const candId = nextItem.call_id || nextItem.callId || nextItem.id || nextItem.tool_call_id ||
-                                           partWithId?.id || partWithId?.call_id || partWithId?.callId || partWithId?.tool_call_id;
-                            if (isToolExecutionOutput(text, candId, [{ id: fnResp.id, name: fnResp.name }])) {
-                                fnResp.response = text;
-                                const hasMedia = nextItem.parts.some(p => p.inlineData || p.fileData);
-                                if (!hasMedia) {
-                                    consumedContentIndices?.add(nextIdx);
-                                } else {
-                                    for (const tp of textParts) tp.text = '';
-                                }
-                                break;
-                            }
-                        }
-                    }
-                    nextIdx++;
+            } else if (toolResolver && typeof toolResolver === 'function' && fnResp.id) {
+                // 2. Hydrate from authentic conversation trajectory / transcript output if callId is already present
+                const hydrated = toolResolver(fnResp.id, fnResp.name);
+                if (hydrated && !isEffectivelyEmpty(hydrated)) {
+                    fnResp.response = hydrated;
                 }
             }
 
-            if (isEffectivelyEmpty(fnResp.response)) {
+            // 3. If no toolResolver was provided and still effectively empty, set fallback
+            if (isEffectivelyEmpty(fnResp.response) && !toolResolver) {
                 fnResp.response = formatToolSuccessFallback(fnResp.name);
             }
         }
@@ -1406,7 +1550,8 @@ function prepareToolResponses(parts, contents, itemIndex, consumedContentIndices
 /**
  * Converts Gemini contents and systemInstruction into Anthropic Messages format.
  */
-function geminiContentsToAnthropic(contents, systemInstruction) {
+function geminiContentsToAnthropic(contents, systemInstruction, options = {}) {
+    const toolResolver = options.toolResolver || (options.toolOutputs ? createToolOutputResolver(options.toolOutputs) : null);
     let system = '';
     if (systemInstruction) {
         if (typeof systemInstruction === 'string') {
@@ -1465,7 +1610,7 @@ function geminiContentsToAnthropic(contents, systemInstruction) {
                 }
             } else {
                 if (Array.isArray(item.parts)) {
-                    const { consumedParts, fnRespMap } = prepareToolResponses(item.parts, contents, cIdx, consumedContentIndices);
+                    const { consumedParts, fnRespMap } = prepareToolResponses(item.parts, toolResolver);
 
                     let hasFnResp = false;
                     for (const part of item.parts) {
@@ -1479,6 +1624,14 @@ function geminiContentsToAnthropic(contents, systemInstruction) {
                         if (fnResp) {
                             hasFnResp = true;
                             const callId = resolveToolCallId(fnResp, pendingCalls, knownToolCallIds, 'toolu');
+                            fnResp.id = callId;
+
+                            if (isEffectivelyEmpty(fnResp.response) && toolResolver) {
+                                const hydrated = toolResolver(callId, fnResp.name);
+                                if (hydrated && !isEffectivelyEmpty(hydrated)) {
+                                    fnResp.response = hydrated;
+                                }
+                            }
 
                             let respVal = fnResp.response;
                             if (isEffectivelyEmpty(respVal)) {
@@ -1555,7 +1708,8 @@ function geminiContentsToAnthropic(contents, systemInstruction) {
 /**
  * Converts Gemini contents and systemInstruction into OpenAI chat completion messages array.
  */
-function geminiContentsToOpenAI(contents, systemInstruction) {
+function geminiContentsToOpenAI(contents, systemInstruction, options = {}) {
+    const toolResolver = options.toolResolver || (options.toolOutputs ? createToolOutputResolver(options.toolOutputs) : null);
     const messages = [];
     if (systemInstruction) {
         let sysText = '';
@@ -1619,7 +1773,7 @@ function geminiContentsToOpenAI(contents, systemInstruction) {
                     const userTextParts = [];
                     const userImageParts = [];
 
-                    const { consumedParts, fnRespMap } = prepareToolResponses(item.parts, contents, cIdx, consumedContentIndices);
+                    const { consumedParts, fnRespMap } = prepareToolResponses(item.parts, toolResolver);
 
                     let hasFnResp = false;
                     for (const part of item.parts) {
@@ -1628,6 +1782,14 @@ function geminiContentsToOpenAI(contents, systemInstruction) {
                         if (fnResp) {
                             hasFnResp = true;
                             const callId = resolveToolCallId(fnResp, pendingCalls, knownToolCallIds, 'call');
+                            fnResp.id = callId;
+
+                            if (isEffectivelyEmpty(fnResp.response) && toolResolver) {
+                                const hydrated = toolResolver(callId, fnResp.name);
+                                if (hydrated && !isEffectivelyEmpty(hydrated)) {
+                                    fnResp.response = hydrated;
+                                }
+                            }
 
                             let respVal = fnResp.response;
                             if (isEffectivelyEmpty(respVal)) {
@@ -1729,5 +1891,7 @@ module.exports = {
     unpackProtobufValue,
     formatToolSuccessFallback,
     prepareToolResponses,
-    isToolExecutionOutput
+    isToolExecutionOutput,
+    resolveConversationToolOutputs,
+    createToolOutputResolver
 };

@@ -1,6 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
+const fs = require('node:fs');
+const os = require('node:os');
 const http = require('node:http');
 
 const {
@@ -801,3 +803,76 @@ test('Transcoder - sanitizeToolCallArgs defaults Overwrite for write_to_file on 
     assert.ok(result3.ArtifactMetadata, 'ArtifactMetadata must be synthesized for artifact paths');
     assert.equal(result3.ArtifactMetadata.UserFacing, false, 'Synthesized ArtifactMetadata must default UserFacing to false');
 });
+
+test('Translation Proxy - resolves conversation tool outputs and passes to provider stream hermetically', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'proxy-test-'));
+    try {
+        const convoId = 'test-proxy-convo';
+        const convoBrainDir = path.join(tmpDir, 'brain', convoId);
+        const logsDir = path.join(convoBrainDir, '.system_generated', 'logs');
+        fs.mkdirSync(logsDir, { recursive: true });
+
+        const lines = [
+            JSON.stringify({ step_index: 0, type: 'USER_INPUT', content: 'Check files' }),
+            JSON.stringify({
+                step_index: 1,
+                type: 'PLANNER_RESPONSE',
+                tool_calls: [{ name: 'run_command', id: 'call_proxy_cmd' }]
+            }),
+            JSON.stringify({
+                step_index: 2,
+                type: 'STEP_TYPE_TOOL_OUTPUT',
+                content: 'Proxy command output'
+            })
+        ];
+        fs.writeFileSync(path.join(logsDir, 'transcript.jsonl'), lines.join('\n'));
+
+        const proxy = new TranslationProxy({
+            port: 19997,
+            upstreamUrl: 'http://127.0.0.1:19996',
+            baseDir: tmpDir
+        });
+
+        let passedOptions = null;
+        proxy._callProviderStream = async (opts) => {
+            passedOptions = opts;
+        };
+
+        const mockRes = {
+            writeHead: () => {},
+            write: () => {},
+            end: () => {},
+            on: () => {},
+            removeListener: () => {},
+            writableEnded: true
+        };
+
+        const customModel = {
+            providerType: 'openai',
+            endpoint: 'http://127.0.0.1:12345',
+            apiKey: 'key',
+            rawModelId: 'gpt-6'
+        };
+
+        const parsedData = {
+            conversationId: convoId,
+            contents: [
+                {
+                    role: 'user',
+                    parts: [{ text: 'Check files' }]
+                }
+            ]
+        };
+
+        await proxy.translateAndStream(parsedData, customModel, mockRes);
+
+        assert.ok(passedOptions, 'Must call _callProviderStream');
+        assert.ok(passedOptions.toolOutputs, 'Must pass resolved toolOutputs');
+        assert.equal(passedOptions.toolOutputs.targetConvoId, convoId);
+        assert.ok(passedOptions.toolOutputs.outputsByToolName.has('run_command'));
+        assert.deepEqual(passedOptions.toolOutputs.outputsByToolName.get('run_command'), ['Proxy command output']);
+    } finally {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+});
+
