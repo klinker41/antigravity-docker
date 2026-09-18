@@ -12,6 +12,7 @@ const {
     isFetchAvailableModels,
     injectAvailableModels
 } = require('../proxy/translation-proxy');
+const { EMPTY_COMPLETION_FALLBACK_TEXT } = require('../proxy/lib/transcoder');
 
 test('Translation Proxy - Server Lifecycle & Transparent Pass-Through', async (t) => {
     // 1. Create a mock upstream representing Google CloudCode
@@ -1060,5 +1061,95 @@ test('Translation Proxy - extracts conversation ID from systemInstruction when m
         fs.rmSync(tmpDir, { recursive: true, force: true });
     }
 });
+
+test('Translation Proxy - translateAndStream emits fallback text when model completes with no text or tool calls', async () => {
+    const proxy = new TranslationProxy({
+        port: 19995,
+        upstreamUrl: 'http://127.0.0.1:19994'
+    });
+
+    const writtenChunks = [];
+    const mockRes = {
+        writeHead: () => {},
+        write: (chunk) => writtenChunks.push(chunk),
+        end: () => {},
+        on: () => {},
+        removeListener: () => {},
+        writableEnded: false
+    };
+
+    proxy._callProviderStream = async (opts) => {
+        // Simulate provider sending only thoughts and done, but no text or tool_call
+        opts.onEvent({ type: 'thought', text: 'Thinking only...' });
+        opts.onEvent({ type: 'done', finishReason: 'STOP' });
+    };
+
+    const customModel = {
+        providerType: 'openai',
+        endpoint: 'http://127.0.0.1:12345',
+        apiKey: 'key',
+        rawModelId: 'gpt-6'
+    };
+
+    const parsedData = {
+        contents: [{ role: 'user', parts: [{ text: 'Hello' }] }]
+    };
+
+    await proxy.translateAndStream(parsedData, customModel, mockRes);
+
+    const doneChunkStr = writtenChunks.find(c => c.includes('finishReason'));
+    assert.ok(doneChunkStr, 'Must write done chunk');
+    const jsonStr = doneChunkStr.replace(/^data:\s*/, '').trim();
+    const parsed = JSON.parse(jsonStr);
+    const candidate = parsed.response?.candidates?.[0];
+    assert.ok(candidate, 'Must have candidate');
+    assert.equal(candidate.content.parts.length, 1);
+    assert.equal(candidate.content.parts[0].text, EMPTY_COMPLETION_FALLBACK_TEXT);
+});
+
+test('Translation Proxy - translateAndGenerate emits fallback text when model completes with thoughts only', async () => {
+    const proxy = new TranslationProxy({
+        port: 19996,
+        upstreamUrl: 'http://127.0.0.1:19994'
+    });
+
+    let writtenBody = '';
+    const mockRes = {
+        writeHead: () => {},
+        end: (body) => { writtenBody = body; },
+        on: () => {},
+        removeListener: () => {},
+        writableEnded: false
+    };
+
+    proxy._callProviderStream = async (opts) => {
+        opts.onEvent({ type: 'thought', text: 'Thinking only...' });
+        opts.onEvent({ type: 'done', finishReason: 'STOP' });
+    };
+
+    const customModel = {
+        providerType: 'openai',
+        endpoint: 'http://127.0.0.1:12345',
+        apiKey: 'key',
+        rawModelId: 'gpt-6'
+    };
+
+    const parsedData = {
+        contents: [{ role: 'user', parts: [{ text: 'Hello' }] }]
+    };
+
+    await proxy.translateAndGenerate(parsedData, customModel, mockRes);
+
+    assert.ok(writtenBody, 'Must write response body');
+    const parsed = JSON.parse(writtenBody);
+    const candidate = parsed.response?.candidates?.[0];
+    assert.ok(candidate, 'Must have candidate');
+    // Candidate parts should contain thought AND fallback text part
+    assert.equal(candidate.content.parts.length, 2);
+    assert.equal(candidate.content.parts[0].thought, true);
+    assert.equal(candidate.content.parts[0].text, 'Thinking only...');
+    assert.equal(candidate.content.parts[1].text, EMPTY_COMPLETION_FALLBACK_TEXT);
+});
+
 
 

@@ -471,6 +471,33 @@ function formatTimeoutError(providerName, timeoutMs) {
     return `${providerName} request timed out after ${secs} second${secs === 1 ? '' : 's'}`;
 }
 
+const EMPTY_COMPLETION_FALLBACK_TEXT = 'Model completed without returning any output text or tool calls.';
+
+function createSettledPromise() {
+    let isSettled = false;
+    let resolveFn;
+    let rejectFn;
+    const promise = new Promise((resolve, reject) => {
+        resolveFn = resolve;
+        rejectFn = reject;
+    });
+    return {
+        promise,
+        safeResolve: (val) => {
+            if (!isSettled) {
+                isSettled = true;
+                resolveFn(val);
+            }
+        },
+        safeReject: (err) => {
+            if (!isSettled) {
+                isSettled = true;
+                rejectFn(err);
+            }
+        }
+    };
+}
+
 /**
  * Streams chat completion from an Anthropic Messages endpoint and normalizes events.
  */
@@ -528,118 +555,138 @@ function callAnthropicStream(options) {
     };
     if (apiKey) headers['x-api-key'] = apiKey;
 
-    return new Promise((resolve, reject) => {
-        const req = transport.request(parsed, { method: 'POST', headers, timeout: requestTimeout }, (res) => {
-            if (res.statusCode < 200 || res.statusCode >= 300) {
-                let errBody = '';
-                res.on('data', chunk => errBody += chunk);
-                res.on('end', () => {
-                    if (res.statusCode === 400 && supportsThinking && !options._thinkingRetried) {
-                        if (errBody.includes('thinking.type.adaptive') && !useAdaptiveThinking) {
-                            return resolve(callAnthropicStream({ ...options, thinkingType: 'adaptive', _thinkingRetried: true }));
-                        }
-                        if (errBody.includes('adaptive thinking is not supported') && useAdaptiveThinking) {
-                            return resolve(callAnthropicStream({ ...options, thinkingType: 'enabled', _thinkingRetried: true }));
-                        }
+    const { promise, safeResolve, safeReject } = createSettledPromise();
+
+    const req = transport.request(parsed, { method: 'POST', headers, timeout: requestTimeout }, (res) => {
+        if (res.statusCode < 200 || res.statusCode >= 300) {
+            let errBody = '';
+            res.on('data', chunk => errBody += chunk);
+            res.on('end', () => {
+                if (res.statusCode === 400 && supportsThinking && !options._thinkingRetried) {
+                    if (errBody.includes('thinking.type.adaptive') && !useAdaptiveThinking) {
+                        return safeResolve(callAnthropicStream({ ...options, thinkingType: 'adaptive', _thinkingRetried: true }));
                     }
-                    reject(new Error(`Anthropic error (${res.statusCode}): ${errBody}`));
-                });
-                return;
-            }
-
-            let buffer = '';
-            let currentEvent = null;
-            let currentBlocks = {}; // index -> { type, id, name, inputJson }
-
-            res.on('data', (chunk) => {
-                buffer += chunk.toString('utf8');
-                const lines = buffer.split('\n');
-                buffer = lines.pop(); // Keep uncompleted line
-
-                for (const line of lines) {
-                    const trimmed = line.trim();
-                    if (!trimmed) {
-                        currentEvent = null;
-                        continue;
-                    }
-
-                    if (trimmed.startsWith('event:')) {
-                        currentEvent = trimmed.slice(6).trim();
-                        continue;
-                    }
-
-                    if (trimmed.startsWith('data:')) {
-                        const dataStr = trimmed.slice(5).trim();
-                        try {
-                            const data = JSON.parse(dataStr);
-                            const evType = currentEvent || data.type;
-
-                            if (evType === 'content_block_start') {
-                                const idx = data.index;
-                                const block = data.content_block || {};
-                                currentBlocks[idx] = {
-                                    type: block.type,
-                                    id: block.id,
-                                    name: block.name,
-                                    inputJson: ''
-                                };
-                            } else if (evType === 'content_block_delta') {
-                                const idx = data.index;
-                                const delta = data.delta || {};
-                                const block = currentBlocks[idx] || {};
-
-                                if (delta.type === 'thinking_delta') {
-                                    onEvent({ type: 'thought', text: delta.thinking || '' });
-                                } else if (delta.type === 'text_delta') {
-                                    onEvent({ type: 'text', text: delta.text || '' });
-                                } else if (delta.type === 'input_json_delta') {
-                                    block.inputJson = (block.inputJson || '') + (delta.partial_json || '');
-                                }
-                            } else if (evType === 'content_block_stop') {
-                                const idx = data.index;
-                                const block = currentBlocks[idx];
-                                if (block && block.type === 'tool_use') {
-                                    onEvent({
-                                        type: 'tool_call',
-                                        id: block.id,
-                                        name: block.name,
-                                        arguments: block.inputJson || '{}'
-                                    });
-                                }
-                                delete currentBlocks[idx];
-                            } else if (evType === 'message_delta') {
-                                onEvent({
-                                    type: 'done',
-                                    stopReason: data.delta?.stop_reason || 'end_turn'
-                                });
-                            }
-                        } catch (e) {}
+                    if (errBody.includes('adaptive thinking is not supported') && useAdaptiveThinking) {
+                        return safeResolve(callAnthropicStream({ ...options, thinkingType: 'enabled', _thinkingRetried: true }));
                     }
                 }
+                safeReject(new Error(`Anthropic error (${res.statusCode}): ${errBody}`));
             });
-
-            res.on('end', () => resolve());
-            res.on('error', reject);
-        });
-
-        req.on('timeout', () => {
-            req.destroy(new Error(formatTimeoutError('Anthropic', requestTimeout)));
-        });
-        req.on('error', reject);
-
-        if (options.signal) {
-            if (options.signal.aborted) {
-                req.destroy(new Error('Aborted by client'));
-            } else {
-                options.signal.addEventListener('abort', () => {
-                    req.destroy(new Error('Aborted by client'));
-                });
-            }
+            return;
         }
 
-        req.write(body);
-        req.end();
+        let buffer = '';
+        let currentEvent = null;
+        let currentBlocks = {}; // index -> { type, id, name, inputJson }
+
+        res.on('data', (chunk) => {
+            buffer += chunk.toString('utf8');
+            const lines = buffer.split('\n');
+            buffer = lines.pop(); // Keep uncompleted line
+
+            for (const line of lines) {
+                const trimmed = line.trim();
+                if (!trimmed) {
+                    currentEvent = null;
+                    continue;
+                }
+
+                if (trimmed.startsWith('event:')) {
+                    currentEvent = trimmed.slice(6).trim();
+                    continue;
+                }
+
+                if (trimmed.startsWith('data:')) {
+                    const dataStr = trimmed.slice(5).trim();
+                    try {
+                        const data = JSON.parse(dataStr);
+                        const evType = currentEvent || data.type;
+
+                        if (evType === 'error' || data.type === 'error' || Boolean(data.error)) {
+                            const errorObj = data.error;
+                            const errMsg = (typeof errorObj === 'object' && errorObj !== null)
+                                ? (errorObj.message || errorObj.type || JSON.stringify(errorObj))
+                                : (typeof errorObj === 'string' ? errorObj : (data.message || 'Unknown Anthropic error'));
+                            safeReject(new Error(`Anthropic error: ${errMsg}`));
+                            req.destroy();
+                            return;
+                        }
+
+                        if (evType === 'content_block_start') {
+                            const idx = data.index;
+                            const block = data.content_block || {};
+                            currentBlocks[idx] = {
+                                type: block.type,
+                                id: block.id,
+                                name: block.name,
+                                inputJson: ''
+                            };
+                        } else if (evType === 'content_block_delta') {
+                            const idx = data.index;
+                            const delta = data.delta || {};
+                            const block = currentBlocks[idx] || {};
+
+                            if (delta.type === 'thinking_delta') {
+                                onEvent({ type: 'thought', text: delta.thinking || '' });
+                            } else if (delta.type === 'text_delta') {
+                                onEvent({ type: 'text', text: delta.text || '' });
+                            } else if (delta.type === 'input_json_delta') {
+                                block.inputJson = (block.inputJson || '') + (delta.partial_json || '');
+                            }
+                        } else if (evType === 'content_block_stop') {
+                            const idx = data.index;
+                            const block = currentBlocks[idx];
+                            if (block && block.type === 'tool_use') {
+                                onEvent({
+                                    type: 'tool_call',
+                                    id: block.id,
+                                    name: block.name,
+                                    arguments: block.inputJson || '{}'
+                                });
+                            }
+                            delete currentBlocks[idx];
+                        } else if (evType === 'message_delta') {
+                            onEvent({
+                                type: 'done',
+                                stopReason: data.delta?.stop_reason || 'end_turn'
+                            });
+                        }
+                    } catch (e) {
+                        if (currentEvent === 'error') {
+                            safeReject(new Error(`Anthropic error: ${dataStr}`));
+                            req.destroy();
+                            return;
+                        }
+                    }
+                }
+            }
+        });
+
+        res.on('end', () => safeResolve());
+        res.on('error', safeReject);
     });
+
+    req.on('timeout', () => {
+        safeReject(new Error(formatTimeoutError('Anthropic', requestTimeout)));
+        req.destroy();
+    });
+    req.on('error', safeReject);
+
+    if (options.signal) {
+        if (options.signal.aborted) {
+            safeReject(new Error('Aborted by client'));
+            req.destroy();
+        } else {
+            options.signal.addEventListener('abort', () => {
+                safeReject(new Error('Aborted by client'));
+                req.destroy();
+            });
+        }
+    }
+
+    req.write(body);
+    req.end();
+    return promise;
 }
 
 const RESPONSES_API_MODELS = new Set();
@@ -908,143 +955,167 @@ function callOpenAIResponsesStream(options) {
     };
     if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
 
-    return new Promise((resolve, reject) => {
-        const req = transport.request(parsed, { method: 'POST', headers, timeout: requestTimeout }, (res) => {
-            if (res.statusCode < 200 || res.statusCode >= 300) {
-                let errBody = '';
-                res.on('data', chunk => errBody += chunk);
-                res.on('end', () => {
-                    if (res.statusCode === 404 && !options._chatCompletionsRetried) {
-                        return resolve(callOpenAIStream({ ...options, _chatCompletionsRetried: true, forceChatCompletions: true }));
-                    }
-                    reject(new Error(`OpenAI Responses error (${res.statusCode}): ${errBody}`));
-                });
-                return;
-            }
+    const { promise, safeResolve, safeReject } = createSettledPromise();
 
-            let buffer = '';
-            let hasCompleted = false;
-            let currentEvent = null;
-            const pendingFunctionCalls = {}; // item_id -> { id, name, args }
-
-            res.on('data', (chunk) => {
-                buffer += chunk.toString('utf8');
-                const lines = buffer.split('\n');
-                buffer = lines.pop();
-
-                for (const line of lines) {
-                    const trimmed = line.trim();
-                    if (!trimmed) {
-                        currentEvent = null;
-                        continue;
-                    }
-
-                    if (trimmed.startsWith('event:')) {
-                        currentEvent = trimmed.slice(6).trim();
-                        continue;
-                    }
-
-                    if (trimmed.startsWith('data:')) {
-                        const dataStr = trimmed.slice(5).trim();
-                        if (dataStr === '[DONE]') {
-                            if (!hasCompleted) {
-                                hasCompleted = true;
-                                onEvent({ type: 'done' });
-                            }
-                            continue;
-                        }
-
-                        try {
-                            const data = JSON.parse(dataStr);
-                            const evType = currentEvent || data.type;
-
-                            if (evType === 'response.output_text.delta') {
-                                if (data.delta) onEvent({ type: 'text', text: data.delta });
-                            } else if (evType === 'response.reasoning_summary_text.delta' || evType === 'response.reasoning_text.delta') {
-                                if (data.delta) onEvent({ type: 'thought', text: data.delta });
-                            } else if (evType === 'response.output_item.added') {
-                                const item = data.item || {};
-                                if (item.type === 'function_call') {
-                                    pendingFunctionCalls[item.id] = {
-                                        id: item.call_id || item.id,
-                                        name: item.name || '',
-                                        args: item.arguments || ''
-                                    };
-                                }
-                            } else if (evType === 'response.function_call_arguments.delta') {
-                                const itemId = data.item_id;
-                                if (!pendingFunctionCalls[itemId]) {
-                                    pendingFunctionCalls[itemId] = { id: '', name: '', args: '' };
-                                }
-                                pendingFunctionCalls[itemId].args += (data.delta || '');
-                            } else if (evType === 'response.function_call_arguments.done') {
-                                const itemId = data.item_id;
-                                if (pendingFunctionCalls[itemId] && data.arguments) {
-                                    pendingFunctionCalls[itemId].args = data.arguments;
-                                }
-                            } else if (evType === 'response.output_item.done') {
-                                const item = data.item || {};
-                                if (item.type === 'function_call') {
-                                    const pending = pendingFunctionCalls[item.id] || {};
-                                    onEvent({
-                                        type: 'tool_call',
-                                        id: item.call_id || pending.id || item.id,
-                                        name: item.name || pending.name,
-                                        arguments: item.arguments || pending.args || '{}'
-                                    });
-                                    delete pendingFunctionCalls[item.id];
-                                }
-                            } else if (evType === 'response.completed') {
-                                for (const itemId of Object.keys(pendingFunctionCalls)) {
-                                    const tc = pendingFunctionCalls[itemId];
-                                    onEvent({
-                                        type: 'tool_call',
-                                        id: tc.id || itemId,
-                                        name: tc.name,
-                                        arguments: tc.args || '{}'
-                                    });
-                                    delete pendingFunctionCalls[itemId];
-                                }
-                                if (!hasCompleted) {
-                                    hasCompleted = true;
-                                    const status = data.response?.status;
-                                    const finishReason = status === 'completed' ? 'STOP' : (status ? String(status).toUpperCase() : 'STOP');
-                                    onEvent({ type: 'done', finishReason });
-                                }
-                            }
-                        } catch (e) {}
-                    }
-                }
-            });
-
+    const req = transport.request(parsed, { method: 'POST', headers, timeout: requestTimeout }, (res) => {
+        if (res.statusCode < 200 || res.statusCode >= 300) {
+            let errBody = '';
+            res.on('data', chunk => errBody += chunk);
             res.on('end', () => {
-                if (!hasCompleted) {
-                    hasCompleted = true;
-                    onEvent({ type: 'done' });
+                if (res.statusCode === 404 && !options._chatCompletionsRetried) {
+                    return safeResolve(callOpenAIStream({ ...options, _chatCompletionsRetried: true, forceChatCompletions: true }));
                 }
-                resolve();
+                safeReject(new Error(`OpenAI Responses error (${res.statusCode}): ${errBody}`));
             });
-            res.on('error', reject);
-        });
-
-        req.on('timeout', () => {
-            req.destroy(new Error(formatTimeoutError('OpenAI Responses', requestTimeout)));
-        });
-        req.on('error', reject);
-
-        if (options.signal) {
-            if (options.signal.aborted) {
-                req.destroy(new Error('Aborted by client'));
-            } else {
-                options.signal.addEventListener('abort', () => {
-                    req.destroy(new Error('Aborted by client'));
-                });
-            }
+            return;
         }
 
-        req.write(body);
-        req.end();
+        let buffer = '';
+        let hasCompleted = false;
+        let currentEvent = null;
+        const pendingFunctionCalls = {}; // item_id -> { id, name, args }
+
+        res.on('data', (chunk) => {
+            buffer += chunk.toString('utf8');
+            const lines = buffer.split('\n');
+            buffer = lines.pop();
+
+            for (const line of lines) {
+                const trimmed = line.trim();
+                if (!trimmed) {
+                    currentEvent = null;
+                    continue;
+                }
+
+                if (trimmed.startsWith('event:')) {
+                    currentEvent = trimmed.slice(6).trim();
+                    continue;
+                }
+
+                if (trimmed.startsWith('data:')) {
+                    const dataStr = trimmed.slice(5).trim();
+                    if (dataStr === '[DONE]') {
+                        if (!hasCompleted) {
+                            hasCompleted = true;
+                            onEvent({ type: 'done' });
+                        }
+                        continue;
+                    }
+
+                    try {
+                        const data = JSON.parse(dataStr);
+                        const evType = currentEvent || data.type;
+
+                        const isErrorEvent = evType === 'error' || data.type === 'error' ||
+                                             evType === 'response.failed' || data.type === 'response.failed' ||
+                                             Boolean(data.error || data.response?.error);
+
+                        if (isErrorEvent) {
+                            const errorObj = data.error || data.response?.error;
+                            const errMsg = (typeof errorObj === 'object' && errorObj !== null)
+                                ? (errorObj.message || errorObj.code || JSON.stringify(errorObj))
+                                : (typeof errorObj === 'string' ? errorObj : (data.message || 'Unknown OpenAI error'));
+                            safeReject(new Error(`OpenAI Responses error: ${errMsg}`));
+                            req.destroy();
+                            return;
+                        }
+
+                        if (evType === 'response.output_text.delta') {
+                            if (data.delta) onEvent({ type: 'text', text: data.delta });
+                        } else if (evType === 'response.reasoning_summary_text.delta' || evType === 'response.reasoning_text.delta') {
+                            if (data.delta) onEvent({ type: 'thought', text: data.delta });
+                        } else if (evType === 'response.output_item.added') {
+                            const item = data.item || {};
+                            if (item.type === 'function_call') {
+                                pendingFunctionCalls[item.id] = {
+                                    id: item.call_id || item.id,
+                                    name: item.name || '',
+                                    args: item.arguments || ''
+                                };
+                            }
+                        } else if (evType === 'response.function_call_arguments.delta') {
+                            const itemId = data.item_id;
+                            if (!pendingFunctionCalls[itemId]) {
+                                pendingFunctionCalls[itemId] = { id: '', name: '', args: '' };
+                            }
+                            pendingFunctionCalls[itemId].args += (data.delta || '');
+                        } else if (evType === 'response.function_call_arguments.done') {
+                            const itemId = data.item_id;
+                            if (pendingFunctionCalls[itemId] && data.arguments) {
+                                pendingFunctionCalls[itemId].args = data.arguments;
+                            }
+                        } else if (evType === 'response.output_item.done') {
+                            const item = data.item || {};
+                            if (item.type === 'function_call') {
+                                const pending = pendingFunctionCalls[item.id] || {};
+                                onEvent({
+                                    type: 'tool_call',
+                                    id: item.call_id || pending.id || item.id,
+                                    name: item.name || pending.name,
+                                    arguments: item.arguments || pending.args || '{}'
+                                });
+                                delete pendingFunctionCalls[item.id];
+                            }
+                        } else if (evType === 'response.completed') {
+                            for (const itemId of Object.keys(pendingFunctionCalls)) {
+                                const tc = pendingFunctionCalls[itemId];
+                                onEvent({
+                                    type: 'tool_call',
+                                    id: tc.id || itemId,
+                                    name: tc.name,
+                                    arguments: tc.args || '{}'
+                                });
+                                delete pendingFunctionCalls[itemId];
+                            }
+                            if (!hasCompleted) {
+                                hasCompleted = true;
+                                const status = data.response?.status;
+                                const finishReason = status === 'completed' ? 'STOP' : (status ? String(status).toUpperCase() : 'STOP');
+                                onEvent({ type: 'done', finishReason });
+                            }
+                        }
+                    } catch (e) {
+                        if (currentEvent === 'error') {
+                            safeReject(new Error(`OpenAI Responses error: ${dataStr}`));
+                            req.destroy();
+                            return;
+                        }
+                    }
+                }
+            }
+        });
+
+        res.on('end', () => {
+            if (!hasCompleted) {
+                hasCompleted = true;
+                onEvent({ type: 'done' });
+            }
+            safeResolve();
+        });
+        res.on('error', safeReject);
     });
+
+    req.on('timeout', () => {
+        safeReject(new Error(formatTimeoutError('OpenAI Responses', requestTimeout)));
+        req.destroy();
+    });
+    req.on('error', safeReject);
+
+    if (options.signal) {
+        if (options.signal.aborted) {
+            safeReject(new Error('Aborted by client'));
+            req.destroy();
+        } else {
+            options.signal.addEventListener('abort', () => {
+                safeReject(new Error('Aborted by client'));
+                req.destroy();
+            });
+        }
+    }
+
+    req.write(body);
+    req.end();
+    return promise;
 }
 
 /**
@@ -1085,42 +1156,108 @@ function callOpenAIStream(options) {
     };
     if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
 
-    return new Promise((resolve, reject) => {
-        const req = transport.request(parsed, { method: 'POST', headers, timeout: requestTimeout }, (res) => {
-            if (res.statusCode < 200 || res.statusCode >= 300) {
-                let errBody = '';
-                res.on('data', chunk => errBody += chunk);
-                res.on('end', () => {
-                    // Fall back to /v1/responses if chat completions indicates Responses API is required
-                    if (res.statusCode === 400 && errBody.includes('/v1/responses')) {
-                        if (model) RESPONSES_API_MODELS.add(model.toLowerCase());
-                        return resolve(callOpenAIResponsesStream(options));
+    const { promise, safeResolve, safeReject } = createSettledPromise();
+
+    const req = transport.request(parsed, { method: 'POST', headers, timeout: requestTimeout }, (res) => {
+        if (res.statusCode < 200 || res.statusCode >= 300) {
+            let errBody = '';
+            res.on('data', chunk => errBody += chunk);
+            res.on('end', () => {
+                // Fall back to /v1/responses if chat completions indicates Responses API is required
+                if (res.statusCode === 400 && errBody.includes('/v1/responses')) {
+                    if (model) RESPONSES_API_MODELS.add(model.toLowerCase());
+                    return safeResolve(callOpenAIResponsesStream(options));
+                }
+                // Retry without reasoning_effort if rejected by endpoint (HTTP 400 or 422)
+                if ((res.statusCode === 400 || res.statusCode === 422) && errBody.includes('reasoning_effort') && !options._reasoningRetried) {
+                    return safeResolve(callOpenAIStream({ ...options, _reasoningRetried: true, omitReasoningEffort: true }));
+                }
+                safeReject(new Error(`OpenAI error (${res.statusCode}): ${errBody}`));
+            });
+            return;
+        }
+
+        let buffer = '';
+        let hasCompleted = false;
+        let currentEvent = null;
+        const pendingToolCalls = {}; // index -> { id, name, args }
+
+        res.on('data', (chunk) => {
+            buffer += chunk.toString('utf8');
+            const lines = buffer.split('\n');
+            buffer = lines.pop();
+
+            for (const line of lines) {
+                const trimmed = line.trim();
+                if (!trimmed) {
+                    currentEvent = null;
+                    continue;
+                }
+
+                if (trimmed.startsWith('event:')) {
+                    currentEvent = trimmed.slice(6).trim();
+                    continue;
+                }
+
+                if (!trimmed.startsWith('data:')) continue;
+
+                const dataStr = trimmed.slice(5).trim();
+                if (dataStr === '[DONE]') {
+                    // Flush any pending tool calls
+                    for (const idx of Object.keys(pendingToolCalls)) {
+                        const tc = pendingToolCalls[idx];
+                        onEvent({
+                            type: 'tool_call',
+                            id: tc.id,
+                            name: tc.name,
+                            arguments: tc.args
+                        });
                     }
-                    // Retry without reasoning_effort if rejected by endpoint (HTTP 400 or 422)
-                    if ((res.statusCode === 400 || res.statusCode === 422) && errBody.includes('reasoning_effort') && !options._reasoningRetried) {
-                        return resolve(callOpenAIStream({ ...options, _reasoningRetried: true, omitReasoningEffort: true }));
+                    if (!hasCompleted) {
+                        hasCompleted = true;
+                        onEvent({ type: 'done' });
                     }
-                    reject(new Error(`OpenAI error (${res.statusCode}): ${errBody}`));
-                });
-                return;
-            }
+                    continue;
+                }
 
-            let buffer = '';
-            let hasCompleted = false;
-            const pendingToolCalls = {}; // index -> { id, name, args }
+                try {
+                    const data = JSON.parse(dataStr);
+                    const evType = currentEvent || data.type;
 
-            res.on('data', (chunk) => {
-                buffer += chunk.toString('utf8');
-                const lines = buffer.split('\n');
-                buffer = lines.pop();
+                    if (evType === 'error' || data.type === 'error' || Boolean(data.error)) {
+                        const errorObj = data.error;
+                        const errMsg = (typeof errorObj === 'object' && errorObj !== null)
+                            ? (errorObj.message || errorObj.code || JSON.stringify(errorObj))
+                            : (typeof errorObj === 'string' ? errorObj : (data.message || 'Unknown OpenAI error'));
+                        safeReject(new Error(`OpenAI error: ${errMsg}`));
+                        req.destroy();
+                        return;
+                    }
 
-                for (const line of lines) {
-                    const trimmed = line.trim();
-                    if (!trimmed || !trimmed.startsWith('data:')) continue;
+                    const choice = data.choices?.[0];
+                    if (!choice) continue;
 
-                    const dataStr = trimmed.slice(5).trim();
-                    if (dataStr === '[DONE]') {
-                        // Flush any pending tool calls
+                    const delta = choice.delta || {};
+                    const thoughtText = delta.reasoning_content || delta.reasoning;
+                    if (thoughtText) {
+                        onEvent({ type: 'thought', text: thoughtText });
+                    }
+                    if (delta.content) {
+                        onEvent({ type: 'text', text: delta.content });
+                    }
+                    if (Array.isArray(delta.tool_calls)) {
+                        for (const tc of delta.tool_calls) {
+                            const idx = tc.index || 0;
+                            if (!pendingToolCalls[idx]) {
+                                pendingToolCalls[idx] = { id: tc.id || '', name: '', args: '' };
+                            }
+                            if (tc.id) pendingToolCalls[idx].id = tc.id;
+                            if (tc.function?.name) pendingToolCalls[idx].name += tc.function.name;
+                            if (tc.function?.arguments) pendingToolCalls[idx].args += tc.function.arguments;
+                        }
+                    }
+
+                    if (choice.finish_reason) {
                         for (const idx of Object.keys(pendingToolCalls)) {
                             const tc = pendingToolCalls[idx];
                             onEvent({
@@ -1129,81 +1266,48 @@ function callOpenAIStream(options) {
                                 name: tc.name,
                                 arguments: tc.args
                             });
+                            delete pendingToolCalls[idx];
                         }
                         if (!hasCompleted) {
                             hasCompleted = true;
-                            onEvent({ type: 'done' });
+                            onEvent({ type: 'done', finishReason: choice.finish_reason });
                         }
-                        continue;
                     }
-
-                    try {
-                        const data = JSON.parse(dataStr);
-                        const choice = data.choices?.[0];
-                        if (!choice) continue;
-
-                        const delta = choice.delta || {};
-                        const thoughtText = delta.reasoning_content || delta.reasoning;
-                        if (thoughtText) {
-                            onEvent({ type: 'thought', text: thoughtText });
-                        }
-                        if (delta.content) {
-                            onEvent({ type: 'text', text: delta.content });
-                        }
-                        if (Array.isArray(delta.tool_calls)) {
-                            for (const tc of delta.tool_calls) {
-                                const idx = tc.index || 0;
-                                if (!pendingToolCalls[idx]) {
-                                    pendingToolCalls[idx] = { id: tc.id || '', name: '', args: '' };
-                                }
-                                if (tc.id) pendingToolCalls[idx].id = tc.id;
-                                if (tc.function?.name) pendingToolCalls[idx].name += tc.function.name;
-                                if (tc.function?.arguments) pendingToolCalls[idx].args += tc.function.arguments;
-                            }
-                        }
-
-                        if (choice.finish_reason) {
-                            for (const idx of Object.keys(pendingToolCalls)) {
-                                const tc = pendingToolCalls[idx];
-                                onEvent({
-                                    type: 'tool_call',
-                                    id: tc.id,
-                                    name: tc.name,
-                                    arguments: tc.args
-                                });
-                                delete pendingToolCalls[idx];
-                            }
-                            if (!hasCompleted) {
-                                hasCompleted = true;
-                                onEvent({ type: 'done', finishReason: choice.finish_reason });
-                            }
-                        }
-                    } catch (e) {}
+                } catch (e) {
+                    if (currentEvent === 'error') {
+                        safeReject(new Error(`OpenAI error: ${dataStr}`));
+                        req.destroy();
+                        return;
+                    }
                 }
-            });
-
-            res.on('end', () => resolve());
-            res.on('error', reject);
-        });
-
-        req.on('timeout', () => {
-            req.destroy(new Error(formatTimeoutError('OpenAI', requestTimeout)));
-        });
-        req.on('error', reject);
-
-        if (options.signal) {
-            if (options.signal.aborted) {
-                req.destroy(new Error('Aborted by client'));
-            } else {
-                options.signal.addEventListener('abort', () => {
-                    req.destroy(new Error('Aborted by client'));
-                });
             }
-        }
+        });
 
-        req.write(body);
-        req.end();
+        res.on('end', () => safeResolve());
+        res.on('error', safeReject);
     });
+
+    req.on('timeout', () => {
+        safeReject(new Error(formatTimeoutError('OpenAI', requestTimeout)));
+        req.destroy();
+    });
+    req.on('error', safeReject);
+
+    if (options.signal) {
+        if (options.signal.aborted) {
+            safeReject(new Error('Aborted by client'));
+            req.destroy();
+        } else {
+            options.signal.addEventListener('abort', () => {
+                safeReject(new Error('Aborted by client'));
+                req.destroy();
+            });
+        }
+    }
+
+    req.write(body);
+    req.end();
+    return promise;
 }
 
 /**
@@ -2312,5 +2416,7 @@ module.exports = {
     createToolOutputResolver,
     DEFAULT_REQUEST_TIMEOUT_MS,
     getRequestTimeout,
-    formatTimeoutError
+    formatTimeoutError,
+    EMPTY_COMPLETION_FALLBACK_TEXT,
+    createSettledPromise
 };

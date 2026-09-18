@@ -13,7 +13,8 @@ const {
     geminiContentsToOpenAI,
     geminiToolsToOpenAI,
     sanitizeToolCallArgs,
-    resolveConversationToolOutputs
+    resolveConversationToolOutputs,
+    EMPTY_COMPLETION_FALLBACK_TEXT
 } = require('./lib/transcoder.js');
 const { CUSTOM_PLACEHOLDER_REGEX, THINKING_BUDGETS } = require('./lib/models-manager.js');
 
@@ -391,6 +392,8 @@ class TranslationProxy {
         const generationConfig = requestObj.generationConfig || {};
         const maxTokens = generationConfig.maxOutputTokens || 4096;
 
+        let hasEmittedContent = false;
+
         const onEvent = (ev) => {
             if (res.writableEnded || res.destroyed) return;
 
@@ -407,6 +410,7 @@ class TranslationProxy {
                 };
                 res.write(`data: ${JSON.stringify(chunk)}\n\n`);
             } else if (ev.type === 'text') {
+                hasEmittedContent = true;
                 const chunk = {
                     response: {
                         candidates: [{
@@ -419,6 +423,7 @@ class TranslationProxy {
                 };
                 res.write(`data: ${JSON.stringify(chunk)}\n\n`);
             } else if (ev.type === 'tool_call') {
+                hasEmittedContent = true;
                 let argsObj = {};
                 try {
                     argsObj = typeof ev.arguments === 'string' ? JSON.parse(ev.arguments) : (ev.arguments || {});
@@ -440,12 +445,17 @@ class TranslationProxy {
                 res.write(`data: ${JSON.stringify(chunk)}\n\n`);
             } else if (ev.type === 'done') {
                 const finishReason = normalizeFinishReason(ev.finishReason || ev.stopReason);
+                const parts = [];
+                if (!hasEmittedContent) {
+                    parts.push({ text: EMPTY_COMPLETION_FALLBACK_TEXT });
+                    hasEmittedContent = true;
+                }
                 const chunk = {
                     response: {
                         candidates: [{
                             content: {
                                 role: 'model',
-                                parts: []
+                                parts
                             },
                             finishReason
                         }]
@@ -642,8 +652,8 @@ class TranslationProxy {
             for (const tc of toolCalls) {
                 parts.push({ functionCall: tc });
             }
-            if (parts.length === 0) {
-                parts.push({ text: '' });
+            if (!accumulatedText && toolCalls.length === 0) {
+                parts.push({ text: EMPTY_COMPLETION_FALLBACK_TEXT });
             }
 
             const candidate = {

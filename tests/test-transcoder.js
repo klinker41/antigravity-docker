@@ -2759,6 +2759,101 @@ test('Stream Transcoder - Anthropic & OpenAI Event Normalization', async (t) => 
             hangServer.close();
         }
     });
+
+    await t.test('stream transcoders reject on in-stream error events', async (t) => {
+        // 1. callOpenAIResponsesStream with event: error
+        const mockResponsesErrorServer = http.createServer((req, res) => {
+            res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+            res.write('event: response.created\ndata: {"type":"response.created"}\n\n');
+            res.write('event: error\ndata: {"type":"error","error":{"type":"insufficient_quota","code":"credit_balance_exhausted","message":"You have no credits remaining. Add credits to continue using the API."}}\n\n');
+            res.end();
+        });
+        await new Promise((resolve) => mockResponsesErrorServer.listen(0, '127.0.0.1', resolve));
+        const respErrPort = mockResponsesErrorServer.address().port;
+
+        try {
+            await assert.rejects(
+                callOpenAIResponsesStream({
+                    endpoint: `http://127.0.0.1:${respErrPort}`,
+                    model: 'gpt-6-astra',
+                    messages: [{ role: 'user', content: 'hi' }],
+                    onEvent: () => {}
+                }),
+                /OpenAI Responses error: You have no credits remaining/
+            );
+        } finally {
+            mockResponsesErrorServer.close();
+        }
+
+        // 2. callOpenAIResponsesStream with event: response.failed
+        const mockResponsesFailedServer = http.createServer((req, res) => {
+            res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+            res.write('event: response.failed\ndata: {"type":"response.failed","response":{"status":"failed","error":{"code":"credit_balance_exhausted","message":"Credit balance exhausted"}}}\n\n');
+            res.end();
+        });
+        await new Promise((resolve) => mockResponsesFailedServer.listen(0, '127.0.0.1', resolve));
+        const respFailPort = mockResponsesFailedServer.address().port;
+
+        try {
+            await assert.rejects(
+                callOpenAIResponsesStream({
+                    endpoint: `http://127.0.0.1:${respFailPort}`,
+                    model: 'gpt-6-astra',
+                    messages: [{ role: 'user', content: 'hi' }],
+                    onEvent: () => {}
+                }),
+                /OpenAI Responses error: Credit balance exhausted/
+            );
+        } finally {
+            mockResponsesFailedServer.close();
+        }
+
+        // 3. callOpenAIStream with data.error
+        const mockOpenAIChatErrorServer = http.createServer((req, res) => {
+            res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+            res.write('data: {"error":{"message":"Rate limit exceeded","type":"requests","code":"rate_limit_exceeded"}}\n\n');
+            res.end();
+        });
+        await new Promise((resolve) => mockOpenAIChatErrorServer.listen(0, '127.0.0.1', resolve));
+        const chatErrPort = mockOpenAIChatErrorServer.address().port;
+
+        try {
+            await assert.rejects(
+                callOpenAIStream({
+                    endpoint: `http://127.0.0.1:${chatErrPort}`,
+                    model: 'gpt-4o',
+                    messages: [{ role: 'user', content: 'hi' }],
+                    onEvent: () => {}
+                }),
+                /OpenAI error: Rate limit exceeded/
+            );
+        } finally {
+            mockOpenAIChatErrorServer.close();
+        }
+
+        // 4. callAnthropicStream with event: error
+        const mockAnthropicErrorServer = http.createServer((req, res) => {
+            res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+            res.write('event: error\ndata: {"type":"error","error":{"type":"invalid_request_error","message":"Usage limit reached"}}\n\n');
+            res.end();
+        });
+        await new Promise((resolve) => mockAnthropicErrorServer.listen(0, '127.0.0.1', resolve));
+        const anthErrPort = mockAnthropicErrorServer.address().port;
+
+        try {
+            await assert.rejects(
+                callAnthropicStream({
+                    endpoint: `http://127.0.0.1:${anthErrPort}`,
+                    model: 'claude-3-5-sonnet',
+                    messages: [{ role: 'user', content: 'hi' }],
+                    onEvent: () => {}
+                }),
+                /Anthropic error: Usage limit reached/
+            );
+        } finally {
+            mockAnthropicErrorServer.close();
+        }
+    });
 });
 
 
