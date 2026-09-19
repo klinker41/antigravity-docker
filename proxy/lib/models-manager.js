@@ -63,6 +63,28 @@ function extractSupportsThinking(m, _providerType) {
     return isThinkingModel(id, label);
 }
 
+const NON_IMAGE_MODEL_REGEX = /(?:embedding|whisper|tts|moderation|dall-e|realtime)/i;
+
+/**
+ * Extracts whether a model supports images / vision input.
+ * Explicit boolean takes precedence; falls back to checking known non-vision model keywords.
+ */
+function extractSupportsImages(m, _providerType) {
+    if (!m || typeof m !== 'object') return true;
+    if (typeof m.supportsImages === 'boolean') return m.supportsImages;
+    if (typeof m.supports_images === 'boolean') return m.supports_images;
+    if (typeof m.supports_vision === 'boolean') return m.supports_vision;
+    if (m.capabilities && typeof m.capabilities === 'object') {
+        if (typeof m.capabilities.vision === 'boolean') return m.capabilities.vision;
+        if (typeof m.capabilities.vision?.supported === 'boolean') return m.capabilities.vision.supported;
+        if (typeof m.capabilities.image === 'boolean') return m.capabilities.image;
+        if (typeof m.capabilities.images === 'boolean') return m.capabilities.images;
+        if (typeof m.capabilities.images?.supported === 'boolean') return m.capabilities.images.supported;
+    }
+    const id = String(m.id || m.name || m.model || '');
+    return !NON_IMAGE_MODEL_REGEX.test(id);
+}
+
 const DEFAULT_ALLOWED_TIERS = [
     'TEAMS_TIER_PRO',
     'TEAMS_TIER_TEAMS',
@@ -72,21 +94,32 @@ const DEFAULT_ALLOWED_TIERS = [
     'TEAMS_TIER_PRO_ULTIMATE'
 ];
 
-const DEFAULT_SUPPORTED_MIME_TYPES = {
+const TEXT_ONLY_SUPPORTED_MIME_TYPES = Object.freeze({
     'application/json': true,
     'application/pdf': true,
     'application/x-javascript': true,
     'application/x-python-code': true,
     'application/x-typescript': true,
-    'image/jpeg': true,
-    'image/png': true,
-    'image/webp': true,
     'text/css': true,
+    'text/csv': true,
     'text/html': true,
     'text/javascript': true,
     'text/markdown': true,
-    'text/plain': true
-};
+    'text/plain': true,
+    'text/xml': true
+});
+
+const IMAGE_SUPPORTED_MIME_TYPES = Object.freeze({
+    'image/gif': true,
+    'image/jpeg': true,
+    'image/png': true,
+    'image/webp': true
+});
+
+const DEFAULT_SUPPORTED_MIME_TYPES = Object.freeze({
+    ...TEXT_ONLY_SUPPORTED_MIME_TYPES,
+    ...IMAGE_SUPPORTED_MIME_TYPES
+});
 
 /**
  * Returns the array of variants (low, medium, high or single) for a given model definition.
@@ -272,6 +305,7 @@ class ModelsManager {
                 label: String(m.label || m.id || '').trim(),
                 enabled: m.enabled !== false,
                 supportsThinking: m.supportsThinking !== undefined ? Boolean(m.supportsThinking) : isThinkingModel(m.id, m.label),
+                supportsImages: m.supportsImages !== undefined ? Boolean(m.supportsImages) : extractSupportsImages(m, providerData.type),
                 ...(Number.isInteger(modelTimeout) && modelTimeout > 0 ? { timeout: modelTimeout } : {})
             };
         }).filter(m => m.id.length > 0) : [];
@@ -376,6 +410,7 @@ class ModelsManager {
                             apiKey: provider.apiKey,
                             rawModelId: model.id,
                             supportsThinking: v.supportsThinking,
+                            supportsImages: model.supportsImages !== false,
                             ...(typeof provider.timeout === 'number' && provider.timeout > 0 ? { timeout: provider.timeout } : {}),
                             ...(typeof model.timeout === 'number' && model.timeout > 0 ? { timeout: model.timeout } : {}),
                             ...(v.supportsThinking ? { thinkingLevel: v.thinkingLevel, thinkingBudget: v.thinkingBudget } : {})
@@ -403,13 +438,16 @@ class ModelsManager {
             for (const model of provider.models) {
                 if (!model.enabled) continue;
 
+                const supportsImages = model.supportsImages !== false;
+                const supportedMimeTypes = supportsImages ? DEFAULT_SUPPORTED_MIME_TYPES : TEXT_ONLY_SUPPORTED_MIME_TYPES;
+
                 for (const v of getModelVariants(model)) {
                     const variantModelId = `custom-${provider.type}-${model.id}${v.variantSuffix}`;
                     const placeholderEnum = this.getPlaceholderEnum(variantModelId, usedEnums);
                     results.push({
                         label: v.label,
                         modelOrAlias: { model: placeholderEnum },
-                        supportsImages: true,
+                        supportsImages,
                         supportsThinking: v.supportsThinking,
                         ...(v.supportsThinking ? { thinkingLevel: v.thinkingLevel, thinkingBudget: v.thinkingBudget } : {}),
                         isRecommended: true,
@@ -420,7 +458,7 @@ class ModelsManager {
                         },
                         tagTitle: providerTag,
                         tagDescription: providerTag,
-                        supportedMimeTypes: DEFAULT_SUPPORTED_MIME_TYPES,
+                        supportedMimeTypes,
                         modelId: variantModelId
                     });
                 }
@@ -511,7 +549,8 @@ class ModelsManager {
                                 .map(m => ({
                                     id: String(m.id || m.name || m.model || ''),
                                     label: String(m.display_name || m.name || m.id || m.model || ''),
-                                    supportsThinking: extractSupportsThinking(m, type)
+                                    supportsThinking: extractSupportsThinking(m, type),
+                                    supportsImages: extractSupportsImages(m, type)
                                 }))
                                 .filter(m => m.id.length > 0);
                             resolve({ success: true, models, status: res.statusCode });
@@ -558,5 +597,9 @@ module.exports = {
     getModelVariants,
     isThinkingModel,
     THINKING_MODEL_REGEX,
-    extractSupportsThinking
+    extractSupportsThinking,
+    extractSupportsImages,
+    NON_IMAGE_MODEL_REGEX,
+    DEFAULT_SUPPORTED_MIME_TYPES,
+    TEXT_ONLY_SUPPORTED_MIME_TYPES
 };

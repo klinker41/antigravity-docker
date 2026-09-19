@@ -2219,6 +2219,10 @@ function renderModelsPage() {
                                 <input type="checkbox" id="customModelThinking" style="accent-color: var(--accent-purple); width: 14px; height: 14px;">
                                 Thinking
                             </label>
+                            <label style="display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-secondary); cursor: pointer; white-space: nowrap; user-select: none;">
+                                <input type="checkbox" id="customModelVision" checked style="accent-color: var(--accent-cyan); width: 14px; height: 14px;">
+                                Vision
+                            </label>
                             <button type="button" class="btn-secondary btn-small" id="addCustomModelBtn">+ Add</button>
                         </div>
                     </div>
@@ -2425,6 +2429,9 @@ function renderModelsPage() {
                             <button type="button" onclick="toggleModelThinking(\${idx})" title="\${m.supportsThinking ? 'Thinking enabled (click to disable)' : 'Thinking disabled (click to enable)'}" style="font-size: 9.5px; padding: 2px 7px; border-radius: 4px; cursor: pointer; transition: all 0.15s ease; \${m.supportsThinking ? 'background: rgba(167, 139, 250, 0.2); color: #c4b5fd; border: 1px solid rgba(167, 139, 250, 0.4);' : 'background: transparent; color: var(--text-muted); border: 1px dashed rgba(255, 255, 255, 0.2);'}">
                                 \${m.supportsThinking ? '🧠 Thinking' : '+ Thinking'}
                             </button>
+                            <button type="button" onclick="toggleModelVision(\${idx})" title="\${m.supportsImages !== false ? 'Vision enabled (click to disable)' : 'Vision disabled (click to enable)'}" style="font-size: 9.5px; padding: 2px 7px; border-radius: 4px; cursor: pointer; transition: all 0.15s ease; \${m.supportsImages !== false ? 'background: rgba(56, 189, 248, 0.2); color: #7dd3fc; border: 1px solid rgba(56, 189, 248, 0.4);' : 'background: transparent; color: var(--text-muted); border: 1px dashed rgba(255, 255, 255, 0.2);'}">
+                                \${m.supportsImages !== false ? '🖼️ Vision' : '+ Vision'}
+                            </button>
                             <button type="button" onclick="removeModel(\${idx})" title="Remove" style="background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 16px; line-height: 1; padding: 2px 6px; border-radius: 4px;">&times;</button>
                         </div>
                     </div>
@@ -2443,6 +2450,14 @@ function renderModelsPage() {
         window.toggleModelThinking = function(idx) {
             if (stagedModels[idx]) {
                 stagedModels[idx].supportsThinking = !stagedModels[idx].supportsThinking;
+                renderStagedModels();
+            }
+        };
+
+        window.toggleModelVision = function(idx) {
+            if (stagedModels[idx]) {
+                const current = stagedModels[idx].supportsImages !== false;
+                stagedModels[idx].supportsImages = !current;
                 renderStagedModels();
             }
         };
@@ -2482,6 +2497,7 @@ function renderModelsPage() {
             const idInput = document.getElementById('customModelId');
             const labelInput = document.getElementById('customModelLabel');
             const thinkingInput = document.getElementById('customModelThinking');
+            const visionInput = document.getElementById('customModelVision');
             const id = (idInput?.value || '').trim();
             const label = (labelInput?.value || id).trim();
 
@@ -2491,13 +2507,15 @@ function renderModelsPage() {
                     id,
                     label,
                     enabled: true,
-                    supportsThinking: Boolean(thinkingInput ? thinkingInput.checked : false)
+                    supportsThinking: Boolean(thinkingInput ? thinkingInput.checked : false),
+                    supportsImages: Boolean(visionInput ? visionInput.checked : true)
                 });
                 renderStagedModels();
             }
             if (idInput) idInput.value = '';
             if (labelInput) labelInput.value = '';
             if (thinkingInput) thinkingInput.checked = false;
+            if (visionInput) visionInput.checked = true;
         });
 
         async function fetchAvailableModels(auto = false) {
@@ -2546,12 +2564,16 @@ function renderModelsPage() {
                             if (m.supportsThinking !== undefined && existing.supportsThinking === undefined) {
                                 existing.supportsThinking = Boolean(m.supportsThinking);
                             }
+                            if (m.supportsImages !== undefined && existing.supportsImages === undefined) {
+                                existing.supportsImages = Boolean(m.supportsImages);
+                            }
                         } else {
                             stagedModels.push({
                                 id: m.id,
                                 label: m.label || m.id,
                                 enabled: true,
-                                supportsThinking: Boolean(m.supportsThinking)
+                                supportsThinking: Boolean(m.supportsThinking),
+                                supportsImages: m.supportsImages !== undefined ? Boolean(m.supportsImages) : true
                             });
                         }
                     }

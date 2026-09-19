@@ -16,7 +16,12 @@ const {
     resolveConversationToolOutputs,
     EMPTY_COMPLETION_FALLBACK_TEXT
 } = require('./lib/transcoder.js');
-const { CUSTOM_PLACEHOLDER_REGEX, THINKING_BUDGETS } = require('./lib/models-manager.js');
+const {
+    CUSTOM_PLACEHOLDER_REGEX,
+    THINKING_BUDGETS,
+    DEFAULT_SUPPORTED_MIME_TYPES,
+    TEXT_ONLY_SUPPORTED_MIME_TYPES
+} = require('./lib/models-manager.js');
 
 const DEFAULT_PORT = parseInt(process.env.TRANSLATION_PORT || '4405', 10);
 const DEFAULT_UPSTREAM = process.env.CLOUDCODE_UPSTREAM_URL || 'https://daily-cloudcode-pa.googleapis.com';
@@ -78,9 +83,12 @@ function injectAvailableModels(data, modelsManager) {
             ? (m.thinkingBudget || (THINKING_BUDGETS && THINKING_BUDGETS[m.thinkingLevel]) || 2048)
             : 2048;
 
+        const supportsImages = m.supportsImages !== false;
+        const supportedMimeTypes = m.supportedMimeTypes || (supportsImages ? DEFAULT_SUPPORTED_MIME_TYPES : TEXT_ONLY_SUPPORTED_MIME_TYPES);
+
         data.models[placeholderEnum] = {
             displayName: m.label,
-            supportsImages: Boolean(m.supportsImages),
+            supportsImages: Boolean(supportsImages),
             supportsThinking: Boolean(m.supportsThinking),
             thinkingBudget: budget,
             minThinkingBudget: 1024,
@@ -90,7 +98,10 @@ function injectAvailableModels(data, modelsManager) {
             model: placeholderEnum,
             quotaInfo: {
                 remainingFraction: 1.0
-            }
+            },
+            supportedMimeTypes,
+            ...(m.tagTitle ? { tagTitle: m.tagTitle } : {}),
+            ...(m.tagDescription ? { tagDescription: m.tagDescription } : {})
         };
     }
 

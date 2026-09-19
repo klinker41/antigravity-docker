@@ -76,6 +76,11 @@ test('renderModelsPage - Responsive Layout & Modal Configuration', async (t) => 
         assert.ok(html.includes('toggleModelThinking'));
         // UI uses provider-provided metadata; no hardcoded model regex in client HTML
         assert.equal(html.includes('isThinkingModel'), false);
+
+        // Vision capability controls
+        assert.ok(html.includes('id="customModelVision"'));
+        assert.ok(html.includes('toggleModelVision'));
+        assert.ok(html.includes('Vision'));
     });
 });
 

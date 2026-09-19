@@ -425,8 +425,30 @@ test('Translation Proxy - isFetchAvailableModels and injectAvailableModels helpe
     assert.equal(result.models.MODEL_PLACEHOLDER_M592.displayName, 'Claude Fable 5.1');
     assert.equal(result.models.MODEL_PLACEHOLDER_M592.supportsThinking, true);
     assert.equal(result.models.MODEL_PLACEHOLDER_M592.supportsImages, true);
+    assert.ok(result.models.MODEL_PLACEHOLDER_M592.supportedMimeTypes);
+    assert.equal(result.models.MODEL_PLACEHOLDER_M592.supportedMimeTypes['image/png'], true);
+    assert.equal(result.models.MODEL_PLACEHOLDER_M592.supportedMimeTypes['image/jpeg'], true);
     assert.ok(result.agentModelSorts[0].groups[0].modelIds.includes('MODEL_PLACEHOLDER_M592'));
     assert.ok(result.agentModelSorts[0].groups[0].modelIds.includes('MODEL_PLACEHOLDER_M0'));
+
+    // Text-only custom model receives TEXT_ONLY_SUPPORTED_MIME_TYPES without image MIME types
+    const mockModelsWithTextOnly = {
+        getInjectedModels() {
+            return [
+                {
+                    label: 'Text Only Model',
+                    modelOrAlias: { model: 'MODEL_PLACEHOLDER_M593' },
+                    supportsImages: false,
+                    supportsThinking: false
+                }
+            ];
+        }
+    };
+    const textOnlyResult = injectAvailableModels({ models: {} }, mockModelsWithTextOnly);
+    assert.equal(textOnlyResult.models.MODEL_PLACEHOLDER_M593.supportsImages, false);
+    assert.equal(textOnlyResult.models.MODEL_PLACEHOLDER_M593.supportedMimeTypes['image/png'], undefined);
+    assert.equal(textOnlyResult.models.MODEL_PLACEHOLDER_M593.supportedMimeTypes['image/jpeg'], undefined);
+    assert.equal(textOnlyResult.models.MODEL_PLACEHOLDER_M593.supportedMimeTypes['application/json'], true);
 
     // Handles missing or empty agentModelSorts gracefully
     const missingSorts = injectAvailableModels({ models: {} }, mockModelsManager);

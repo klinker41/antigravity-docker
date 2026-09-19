@@ -442,12 +442,17 @@ function injectCustomModels(data, modelsManager) {
     if (!injected || injected.length === 0) return data;
 
     for (const m of injected) {
-        const alreadyExists = targetConfigData.clientModelConfigs.some(existing =>
-            (existing.modelId && existing.modelId === m.modelId) ||
-            (existing.modelOrAlias?.model && existing.modelOrAlias.model === m.modelOrAlias?.model)
+        const existing = targetConfigData.clientModelConfigs.find(item =>
+            (item.modelId && item.modelId === m.modelId) ||
+            (item.modelOrAlias?.model && item.modelOrAlias.model === m.modelOrAlias?.model)
         );
-        if (!alreadyExists) {
+        if (!existing) {
             targetConfigData.clientModelConfigs.push(m);
+        } else {
+            existing.supportsImages = m.supportsImages;
+            existing.supportedMimeTypes = m.supportedMimeTypes;
+            if (m.tagTitle) existing.tagTitle = m.tagTitle;
+            if (m.tagDescription) existing.tagDescription = m.tagDescription;
         }
     }
 

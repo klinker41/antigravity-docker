@@ -10,7 +10,15 @@ test('Models Manager - Configuration, CRUD & Provider Connectivity', async (t) =
     const configPath = path.join(tempDir, 'custom_models.json');
 
     // Create fresh instance of ModelsManager with isolated config path
-    const { ModelsManager, getModelVariants, isThinkingModel, extractSupportsThinking } = require('../proxy/lib/models-manager');
+    const {
+        ModelsManager,
+        getModelVariants,
+        isThinkingModel,
+        extractSupportsThinking,
+        extractSupportsImages,
+        DEFAULT_SUPPORTED_MIME_TYPES,
+        TEXT_ONLY_SUPPORTED_MIME_TYPES
+    } = require('../proxy/lib/models-manager');
     const manager = new ModelsManager({ configPath });
 
     t.after(() => {
@@ -125,6 +133,11 @@ test('Models Manager - Configuration, CRUD & Provider Connectivity', async (t) =
         assert.equal(claudeLow.tagTitle, 'Anthropic Cloud Updated');
         assert.equal(claudeLow.supportsImages, true);
         assert.equal(claudeLow.isRecommended, true);
+        assert.ok(claudeLow.supportedMimeTypes['image/jpeg'], 'Should support image/jpeg');
+        assert.ok(claudeLow.supportedMimeTypes['image/png'], 'Should support image/png');
+        assert.ok(claudeLow.supportedMimeTypes['image/webp'], 'Should support image/webp');
+        assert.ok(claudeLow.supportedMimeTypes['image/gif'], 'Should support image/gif');
+        assert.ok(claudeLow.supportedMimeTypes['application/json'], 'Should support application/json');
 
         // Verify distinct placeholder enums
         assert.match(claudeLow.modelOrAlias.model, /^MODEL_PLACEHOLDER_M\d+$/);
@@ -137,6 +150,7 @@ test('Models Manager - Configuration, CRUD & Provider Connectivity', async (t) =
         assert.ok(llama);
         assert.equal(llama.label, 'Llama 3.3');
         assert.equal(llama.supportsThinking, false);
+        assert.equal(llama.supportsImages, true);
         assert.equal(llama.tagTitle, 'Local Ollama');
         assert.match(llama.modelOrAlias.model, /^MODEL_PLACEHOLDER_M\d+$/);
         assert.notEqual(claudeLow.modelOrAlias.model, llama.modelOrAlias.model);
@@ -158,6 +172,7 @@ test('Models Manager - Configuration, CRUD & Provider Connectivity', async (t) =
         assert.equal(lookedUpLow.providerType, 'anthropic');
         assert.equal(lookedUpLow.rawModelId, 'claude-3-7-sonnet-20250219');
         assert.equal(lookedUpLow.supportsThinking, true);
+        assert.equal(lookedUpLow.supportsImages, true);
         assert.equal(lookedUpLow.thinkingLevel, 'low');
         assert.equal(lookedUpLow.thinkingBudget, 2048);
 
@@ -407,5 +422,65 @@ test('Models Manager - Configuration, CRUD & Provider Connectivity', async (t) =
         const placeholderInvalid = manager.getPlaceholderEnum('custom-openai-m-invalid');
         const modelInvalid = manager.getModelByPlaceholder(placeholderInvalid);
         assert.equal(modelInvalid.timeout, 120000); // Falls back to provider timeout
+    });
+
+    await t.test('extractSupportsImages correctly identifies vision and non-vision models', () => {
+        // Standard models support images
+        assert.equal(extractSupportsImages({ id: 'claude-3-7-sonnet' }, 'anthropic'), true);
+        assert.equal(extractSupportsImages({ id: 'gpt-4o' }, 'openai'), true);
+        assert.equal(extractSupportsImages({ id: 'gpt-4o-mini' }, 'openai'), true);
+        assert.equal(extractSupportsImages({ id: 'gemini-2.0-flash' }, 'openai'), true);
+
+        // Explicit boolean capabilities
+        assert.equal(extractSupportsImages({ id: 'custom-model', supportsImages: true }), true);
+        assert.equal(extractSupportsImages({ id: 'custom-model', supportsImages: false }), false);
+        assert.equal(extractSupportsImages({ id: 'custom-model', supports_images: false }), false);
+        assert.equal(extractSupportsImages({ id: 'custom-model', supports_vision: false }), false);
+        assert.equal(extractSupportsImages({ id: 'custom-model', supports_vision: true }), true);
+        assert.equal(extractSupportsImages({ id: 'custom-model', capabilities: { vision: false } }), false);
+        assert.equal(extractSupportsImages({ id: 'custom-model', capabilities: { vision: true } }), true);
+        assert.equal(extractSupportsImages({ id: 'custom-model', capabilities: { vision: { supported: false } } }), false);
+        assert.equal(extractSupportsImages({ id: 'custom-model', capabilities: { vision: { supported: true } } }), true);
+        assert.equal(extractSupportsImages({ id: 'custom-model', capabilities: { images: { supported: false } } }), false);
+        assert.equal(extractSupportsImages({ id: 'custom-model', capabilities: { images: { supported: true } } }), true);
+
+        // Verify HEIC/HEIF are excluded from default vision types to avoid provider 400 errors
+        assert.equal(DEFAULT_SUPPORTED_MIME_TYPES['image/heic'], undefined);
+        assert.equal(DEFAULT_SUPPORTED_MIME_TYPES['image/heif'], undefined);
+
+        // Non-vision model keywords
+        assert.equal(extractSupportsImages({ id: 'text-embedding-3-small' }, 'openai'), false);
+        assert.equal(extractSupportsImages({ id: 'text-embedding-ada-002' }, 'openai'), false);
+        assert.equal(extractSupportsImages({ id: 'whisper-1' }, 'openai'), false);
+        assert.equal(extractSupportsImages({ id: 'tts-1-hd' }, 'openai'), false);
+        assert.equal(extractSupportsImages({ id: 'text-moderation-latest' }, 'openai'), false);
+        assert.equal(extractSupportsImages({ id: 'dall-e-3' }, 'openai'), false);
+
+        assert.equal(extractSupportsImages(null), true);
+    });
+
+    await t.test('respects supportsImages: false and assigns TEXT_ONLY_SUPPORTED_MIME_TYPES', () => {
+        manager.saveProvider({
+            name: 'Text Only Provider',
+            type: 'openai',
+            endpoint: 'http://127.0.0.1:11434',
+            models: [
+                { id: 'pure-text-model', label: 'Pure Text Model', supportsImages: false, supportsThinking: false }
+            ]
+        });
+
+        const injected = manager.getInjectedModels();
+        const textModel = injected.find(m => m.modelId.includes('pure-text-model'));
+        assert.ok(textModel);
+        assert.equal(textModel.supportsImages, false);
+        assert.equal(textModel.supportedMimeTypes['image/png'], undefined);
+        assert.equal(textModel.supportedMimeTypes['image/jpeg'], undefined);
+        assert.equal(textModel.supportedMimeTypes['image/gif'], undefined);
+        assert.equal(textModel.supportedMimeTypes['application/json'], true);
+        assert.equal(textModel.supportedMimeTypes['text/plain'], true);
+
+        const lookedUp = manager.getModelByPlaceholder(textModel.modelOrAlias.model);
+        assert.ok(lookedUp);
+        assert.equal(lookedUp.supportsImages, false);
     });
 });

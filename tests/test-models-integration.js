@@ -409,6 +409,10 @@ test('Multi-Model Integration - HTTP Proxy, Models API, & Upstream Interception'
             assert.ok(injectedModelHigh, 'Custom model High variant should be present in clientModelConfigs');
             assert.equal(injectedModelMed.label, 'Claude 3.7 Sonnet (Medium)');
             assert.equal(injectedModelMed.tagTitle, 'Anthropic Production');
+            assert.equal(injectedModelMed.supportsImages, true);
+            assert.ok(injectedModelMed.supportedMimeTypes, 'supportedMimeTypes must be present');
+            assert.equal(injectedModelMed.supportedMimeTypes['image/png'], true);
+            assert.equal(injectedModelMed.supportedMimeTypes['image/jpeg'], true);
 
             // Injected into model sorting labels
             const group = rpcData.clientModelSorts[0].groups[0];
@@ -438,6 +442,9 @@ test('Multi-Model Integration - HTTP Proxy, Models API, & Upstream Interception'
             const injectedModel = configData.clientModelConfigs.find(m => m.modelId === 'custom-anthropic-claude-3-7-sonnet-medium');
             assert.ok(injectedModel, 'Custom model should be present in clientModelConfigs');
             assert.equal(injectedModel.label, 'Claude 3.7 Sonnet (Medium)');
+            assert.equal(injectedModel.supportsImages, true);
+            assert.ok(injectedModel.supportedMimeTypes, 'supportedMimeTypes must be present');
+            assert.equal(injectedModel.supportedMimeTypes['image/png'], true);
 
             // Injected into model sorting labels
             const group = configData.clientModelSorts[0].groups[0];
@@ -518,6 +525,9 @@ test('Multi-Model Integration - HTTP Proxy, Models API, & Upstream Interception'
             const injected = configs.find(m => m.modelId === 'custom-anthropic-claude-3-7-sonnet-medium');
             assert.ok(injected, 'Custom Anthropic model must be injected over WebSocket');
             assert.equal(injected.label, 'Claude 3.7 Sonnet (Medium)');
+            assert.equal(injected.supportsImages, true);
+            assert.ok(injected.supportedMimeTypes, 'supportedMimeTypes must be present over WS');
+            assert.equal(injected.supportedMimeTypes['image/png'], true);
             assert.match(injected.modelOrAlias.model, /^MODEL_PLACEHOLDER_M\d+$/, 'Enum must be valid MODEL_PLACEHOLDER');
 
             const sorts = receivedData.userStatus?.cascadeModelConfigData?.clientModelSorts?.[0]?.groups?.[0]?.modelLabels || [];
@@ -770,6 +780,96 @@ test('Multi-Model Integration - HTTP Proxy, Models API, & Upstream Interception'
             // convo-2 MUST NOT be bound to customModel
             assert.equal(testMap.has('convo-2'), false);
             assert.equal(testMap.get('latestConvoId'), 'convo-2');
+        });
+
+        await t.test('injectCustomModels enriches existing models lacking supportedMimeTypes', () => {
+            const { injectCustomModels } = require('../proxy/lib/proxy');
+            const mockManager = {
+                getInjectedModels() {
+                    return [
+                        {
+                            label: 'Existing Custom Model',
+                            modelId: 'custom-provider-model-1',
+                            supportsImages: true,
+                            supportedMimeTypes: {
+                                'image/png': true,
+                                'image/jpeg': true
+                            },
+                            tagTitle: 'Provider',
+                            tagDescription: 'Description'
+                        }
+                    ];
+                }
+            };
+
+            const data = {
+                clientModelConfigs: [
+                    {
+                        label: 'Existing Custom Model',
+                        modelId: 'custom-provider-model-1'
+                        // supportedMimeTypes missing
+                    }
+                ]
+            };
+
+            injectCustomModels(data, mockManager);
+
+            const updated = data.clientModelConfigs[0];
+            assert.equal(updated.supportsImages, true);
+            assert.deepEqual(updated.supportedMimeTypes, {
+                'image/png': true,
+                'image/jpeg': true
+            });
+            assert.equal(updated.tagTitle, 'Provider');
+            assert.equal(updated.tagDescription, 'Description');
+        });
+
+        await t.test('injectCustomModels updates existing model capability when toggled between text and vision', () => {
+            const { injectCustomModels } = require('../proxy/lib/proxy');
+            const data = {
+                clientModelConfigs: [
+                    {
+                        label: 'Dynamic Model',
+                        modelId: 'custom-provider-dyn-1',
+                        supportsImages: false,
+                        supportedMimeTypes: { 'text/plain': true }
+                    }
+                ]
+            };
+
+            const mockManagerVision = {
+                getInjectedModels() {
+                    return [
+                        {
+                            label: 'Dynamic Model',
+                            modelId: 'custom-provider-dyn-1',
+                            supportsImages: true,
+                            supportedMimeTypes: { 'image/png': true, 'text/plain': true }
+                        }
+                    ];
+                }
+            };
+
+            injectCustomModels(data, mockManagerVision);
+            assert.equal(data.clientModelConfigs[0].supportsImages, true);
+            assert.equal(data.clientModelConfigs[0].supportedMimeTypes['image/png'], true);
+
+            const mockManagerText = {
+                getInjectedModels() {
+                    return [
+                        {
+                            label: 'Dynamic Model',
+                            modelId: 'custom-provider-dyn-1',
+                            supportsImages: false,
+                            supportedMimeTypes: { 'text/plain': true }
+                        }
+                    ];
+                }
+            };
+
+            injectCustomModels(data, mockManagerText);
+            assert.equal(data.clientModelConfigs[0].supportsImages, false);
+            assert.equal(data.clientModelConfigs[0].supportedMimeTypes['image/png'], undefined);
         });
 
     } finally {
