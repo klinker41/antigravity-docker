@@ -116,30 +116,36 @@ async function proxyWebRequest(c, targetPort, targetPath, options = {}) {
 
     if (hasBody) {
         if (isUpstream && parsedUrl.pathname.startsWith('/exa.language_server_pb.LanguageServerService/')) {
-            try {
-                let textBody = await c.req.text();
-                let parsed = null;
-                try { parsed = JSON.parse(textBody); } catch (e) {}
-                const cascadeId = parsed?.cascadeId || parsed?.payload?.cascadeId;
-                const convoId = parsed?.conversationId || parsed?.payload?.conversationId;
-                if (convoId || cascadeId) {
-                    activeConversationModels.set('latestConvoId', convoId || cascadeId);
-                }
+            const isMediaEndpoint = parsedUrl.pathname.includes('/SaveMediaAsArtifact') ||
+                                    parsedUrl.pathname.includes('/SaveScreenRecording');
+            if (!isMediaEndpoint) {
+                try {
+                    let textBody = await c.req.text();
+                    let parsed = null;
+                    try { parsed = JSON.parse(textBody); } catch (e) {}
+                    const cascadeId = parsed?.cascadeId || parsed?.payload?.cascadeId;
+                    const convoId = parsed?.conversationId || parsed?.payload?.conversationId;
+                    if (convoId || cascadeId) {
+                        activeConversationModels.set('latestConvoId', convoId || cascadeId);
+                    }
 
-                const matches = matchCustomPlaceholders(textBody);
-                if (matches.length > 0) {
-                    for (const placeholder of matches) {
-                        const modelConfig = modelsManager?.getModelByPlaceholder?.(placeholder);
-                        if (modelConfig) {
-                            if (cascadeId) setTrackedModel(cascadeId, modelConfig);
-                            if (convoId) setTrackedModel(convoId, modelConfig);
-                            if (convoId || cascadeId) activeConversationModels.set('latestConvoId', convoId || cascadeId);
-                            setTrackedModel('latest', modelConfig);
+                    const matches = matchCustomPlaceholders(textBody);
+                    if (matches.length > 0) {
+                        for (const placeholder of matches) {
+                            const modelConfig = modelsManager?.getModelByPlaceholder?.(placeholder);
+                            if (modelConfig) {
+                                if (cascadeId) setTrackedModel(cascadeId, modelConfig);
+                                if (convoId) setTrackedModel(convoId, modelConfig);
+                                if (convoId || cascadeId) activeConversationModels.set('latestConvoId', convoId || cascadeId);
+                                setTrackedModel('latest', modelConfig);
+                            }
                         }
                     }
+                    requestBody = textBody;
+                } catch (readErr) {
+                    requestBody = c.req.raw.body;
                 }
-                requestBody = textBody;
-            } catch (readErr) {
+            } else {
                 requestBody = c.req.raw.body;
             }
         } else {
@@ -310,14 +316,41 @@ function handleWebSocketClientMessage(ws, message, modelsManager, activeModelsMa
     try {
         const parsed = JSON.parse(text);
         if (parsed && typeof parsed === 'object') {
+            // Immediate pong response for client ping probes
+            if (parsed.type === 'ping') {
+                try {
+                    const pong = { type: 'pong' };
+                    if (parsed.streamId) pong.streamId = parsed.streamId;
+                    ws.send(JSON.stringify(pong));
+                } catch (e) {}
+                return null;
+            }
+
             if (parsed.type === 'start' && parsed.streamId && typeof parsed.procedure === 'string') {
                 if (ws.data.activeStreams.size >= MAX_CONCURRENT_STREAMS) {
                     const oldest = ws.data.activeStreams.keys().next().value;
                     if (oldest !== undefined) ws.data.activeStreams.delete(oldest);
                 }
                 ws.data.activeStreams.set(parsed.streamId, parsed.procedure);
+
+                // Media and binary RPCs do not contain model placeholders; return immediately to avoid regex overhead on large payloads
+                if (parsed.procedure.includes('SaveMediaAsArtifact') ||
+                    parsed.procedure.includes('SaveScreenRecording') ||
+                    parsed.procedure.includes('DeleteMediaArtifact')) {
+                    return message;
+                }
             } else if (parsed.type === 'cancel' && parsed.streamId) {
                 ws.data.activeStreams.delete(parsed.streamId);
+            }
+
+            // If this message belongs to an active media upload stream, skip expensive placeholder parsing
+            if (parsed.streamId && ws.data.activeStreams.has(parsed.streamId)) {
+                const proc = ws.data.activeStreams.get(parsed.streamId);
+                if (proc && (proc.includes('SaveMediaAsArtifact') ||
+                             proc.includes('SaveScreenRecording') ||
+                             proc.includes('DeleteMediaArtifact'))) {
+                    return message;
+                }
             }
 
             const cascadeId = parsed.payload?.cascadeId || parsed.cascadeId;
@@ -371,6 +404,35 @@ function handleWebSocketClientMessage(ws, message, modelsManager, activeModelsMa
 function handleWebSocketUpstreamMessage(ws, event, modelsManager) {
     let dataToSend = event.data;
     if (!ws.data || !ws.data.activeStreams || ws.data.activeStreams.size === 0) {
+        return dataToSend;
+    }
+
+    // Fast-path: Check if any active stream is a model procedure
+    let hasModelStream = false;
+    if (modelsManager && typeof modelsManager.hasEnabledModels === 'function' && modelsManager.hasEnabledModels()) {
+        for (const proc of ws.data.activeStreams.values()) {
+            if (isModelProcedure(proc)) {
+                hasModelStream = true;
+                break;
+            }
+        }
+    }
+
+    // Model procedure responses are never larger than 256KB. Skip parsing large streams (e.g. 15MB trajectories)
+    const len = typeof event.data === 'string' ? event.data.length : (event.data?.byteLength || 0);
+    if (!hasModelStream || len > 256 * 1024) {
+        // Fast cleanup of completed stream IDs for end frames (end frames are small JSON)
+        if (len < 512) {
+            try {
+                const str = typeof event.data === 'string' ? event.data : Buffer.from(event.data).toString('utf8');
+                if (str.startsWith('{') && str.includes('"type":"end"')) {
+                    const parsed = JSON.parse(str);
+                    if (parsed.type === 'end' && parsed.streamId) {
+                        ws.data.activeStreams.delete(parsed.streamId);
+                    }
+                }
+            } catch (e) {}
+        }
         return dataToSend;
     }
 
