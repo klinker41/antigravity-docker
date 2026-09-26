@@ -82,10 +82,15 @@ if (sidecarManager && TARGET_PORT) {
     sidecarManager.setLsAddress(`127.0.0.1:${TARGET_PORT}`);
 }
 
+let cachedPatchedMainJs = null;
+let cachedMainJsEtag = null;
+
 function setTargetPort(port) {
     const newPort = parseInt(port, 10);
     if (!newPort || newPort === TARGET_PORT) return;
     TARGET_PORT = newPort;
+    cachedPatchedMainJs = null;
+    cachedMainJsEtag = null;
     console.log(`[Proxy Gateway] 🔗 Bridged port ${LISTEN_PORT} -> http://127.0.0.1:${TARGET_PORT}`);
     if (sidecarManager) {
         sidecarManager.setLsAddress(`127.0.0.1:${TARGET_PORT}`);
@@ -421,11 +426,55 @@ app.all('/ide/*', (c) => {
     return proxyWebRequest(c, IDE_PORT, strippedPath, { isIde: true });
 });
 
+// Dynamic patch & cache for main.js to expand client-side WebSocket liveness watchdog timeout
+async function getPatchedMainJs(targetPort) {
+    if (cachedPatchedMainJs) {
+        return { data: cachedPatchedMainJs, etag: cachedMainJsEtag };
+    }
+    try {
+        const res = await fetch(`http://127.0.0.1:${targetPort}/main.js`);
+        if (!res.ok) return null;
+        let text = await res.text();
+        const regex = /(Error\("no frames for 4000ms and ping unanswered; closing socket"\)\),b\.close\(\),qJ\(a,b\)\)\},)2E3(\)\}else rJ\(a\)\},\s*)2E3(\)\}function pYa)/;
+        if (regex.test(text)) {
+            text = text.replace(regex, `$1 45E3$2 45E3$3`);
+            console.log('[Proxy Gateway] ⚡ Successfully patched main.js client-side WebSocket liveness watchdog (4s -> 90s)');
+        }
+        cachedPatchedMainJs = Buffer.from(text, 'utf8');
+        cachedMainJsEtag = `W/"patched-${crypto.createHash('md5').update(cachedPatchedMainJs).digest('hex').slice(0, 16)}"`;
+        return { data: cachedPatchedMainJs, etag: cachedMainJsEtag };
+    } catch (e) {
+        return null;
+    }
+}
+
+app.get('/main.js', async (c) => {
+    if (!TARGET_PORT) return c.text('Upstream not ready', 503);
+    const patched = await getPatchedMainJs(TARGET_PORT);
+    if (!patched) {
+        return proxyWebRequest(c, TARGET_PORT, '/main.js', { isUpstream: true });
+    }
+    const clientEtag = c.req.header('if-none-match');
+    if (clientEtag === patched.etag) {
+        return new Response(null, { status: 304 });
+    }
+    return new Response(patched.data, {
+        status: 200,
+        headers: {
+            'Content-Type': 'text/javascript; charset=utf-8',
+            'Content-Length': String(patched.data.length),
+            'ETag': patched.etag,
+            'Cache-Control': 'no-cache',
+            'Vary': 'Accept-Encoding'
+        }
+    });
+});
+
 // SPA check & Upstream Antigravity Hub proxy
 app.all('*', (c) => {
     const pathname = c.req.path;
     if (c.req.method === 'GET' && isSpaRoute(pathname)) {
-        if (c.req.query('useWebSocket') !== 'true') {
+        if (!c.req.query('useWebSocket') && c.req.query('useWebSocket') !== 'false') {
             const url = new URL(c.req.raw.url);
             url.searchParams.set('useWebSocket', 'true');
             return c.redirect(url.pathname + url.search, 302);
@@ -520,6 +569,9 @@ const server = Bun.serve({
         return app.fetch(req, { server });
     },
     websocket: {
+        maxPayloadLength: 128 * 1024 * 1024,
+        backpressureLimit: 128 * 1024 * 1024,
+        closeOnBackpressureLimit: false,
         open(ws) {
             const { wsTargetPort, wsTargetPath, headers } = ws.data;
             const targetUrl = `ws://127.0.0.1:${wsTargetPort}${wsTargetPath}`;
@@ -546,12 +598,35 @@ const server = Bun.serve({
                 ws.data.pendingMessages = [];
                 if (isConnectWs) {
                     ws.data.activeStreams = new Map();
+                    // Proactive WebSocket heartbeat to satisfy client liveness probe (main.js sJ probe)
+                    // During large uploads (like images/recordings), full-duplex downstream frames keep the probe alive.
+                    ws.data.heartbeatTimer = setInterval(() => {
+                        try {
+                            if (ws.readyState === 1 /* WebSocket.OPEN */) {
+                                ws.send(JSON.stringify({ type: 'heartbeat' }));
+                            } else {
+                                if (ws.data?.heartbeatTimer) {
+                                    clearInterval(ws.data.heartbeatTimer);
+                                    ws.data.heartbeatTimer = null;
+                                }
+                            }
+                        } catch (e) {
+                            if (ws.data?.heartbeatTimer) {
+                                clearInterval(ws.data.heartbeatTimer);
+                                ws.data.heartbeatTimer = null;
+                            }
+                        }
+                    }, 1000);
                 }
 
                 upstreamWs.onopen = () => {
                     if (ws.data.pendingMessages && ws.data.pendingMessages.length > 0) {
                         for (const msg of ws.data.pendingMessages) {
-                            upstreamWs.send(msg);
+                            try {
+                                upstreamWs.send(msg);
+                            } catch (e) {
+                                console.error('[WebSocket Upstream Pending Send Error]', e.message);
+                            }
                         }
                         ws.data.pendingMessages = null;
                     }
@@ -570,11 +645,19 @@ const server = Bun.serve({
                 };
 
                 upstreamWs.onclose = () => {
+                    if (ws.data?.heartbeatTimer) {
+                        clearInterval(ws.data.heartbeatTimer);
+                        ws.data.heartbeatTimer = null;
+                    }
                     ws.data?.activeStreams?.clear();
                     try { ws.close(); } catch (e) {}
                 };
 
                 upstreamWs.onerror = () => {
+                    if (ws.data?.heartbeatTimer) {
+                        clearInterval(ws.data.heartbeatTimer);
+                        ws.data.heartbeatTimer = null;
+                    }
                     ws.data?.activeStreams?.clear();
                     try { ws.close(); } catch (e) {}
                 };
@@ -588,15 +671,24 @@ const server = Bun.serve({
             if (ws.data?.activeStreams) {
                 processedMessage = handleWebSocketClientMessage(ws, message, modelsManager, activeConversationModels);
             }
+            if (!processedMessage) return;
 
             const upstreamWs = ws.data?.upstreamWs;
             if (upstreamWs && upstreamWs.readyState === WebSocket.OPEN) {
-                upstreamWs.send(processedMessage);
+                try {
+                    upstreamWs.send(processedMessage);
+                } catch (sendErr) {
+                    console.error('[WebSocket Upstream Send Error]', sendErr.message);
+                }
             } else if (ws.data?.pendingMessages) {
                 ws.data.pendingMessages.push(processedMessage);
             }
         },
         close(ws) {
+            if (ws.data?.heartbeatTimer) {
+                clearInterval(ws.data.heartbeatTimer);
+                ws.data.heartbeatTimer = null;
+            }
             ws.data?.activeStreams?.clear();
             if (ws.data?.upstreamWs) {
                 try { ws.data.upstreamWs.close(); } catch (e) {}
