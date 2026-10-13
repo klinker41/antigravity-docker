@@ -105,18 +105,6 @@ function getFaviconAsset(pathname) {
     return { contentType, data };
 }
 
-function handleFaviconRequest(req, res, pathname) {
-    const { contentType, data } = getFaviconAsset(pathname);
-
-    res.writeHead(200, {
-        'Content-Type': contentType,
-        'Content-Length': data.length,
-        'Cache-Control': 'public, max-age=86400, must-revalidate',
-        'X-Content-Type-Options': 'nosniff'
-    });
-    res.end(data);
-}
-
 // Helper to strip existing favicon/touch-icon links and inject unified Antigravity favicon links
 function replaceFaviconInHtml(html) {
     const cleaned = html.replace(/<link\b(?:"[^"]*"|'[^']*'|[^'">])*?>/gis, (tag) => {
@@ -141,6 +129,5 @@ module.exports = {
     FAVICON_SVG_BUFFER,
     isFaviconRequest,
     getFaviconAsset,
-    handleFaviconRequest,
     replaceFaviconInHtml,
 };

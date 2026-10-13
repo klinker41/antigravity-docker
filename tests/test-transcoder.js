@@ -2854,6 +2854,32 @@ test('Stream Transcoder - Anthropic & OpenAI Event Normalization', async (t) => 
             mockAnthropicErrorServer.close();
         }
     });
+
+    await t.test('callOpenAIStream deletes flushed pendingToolCalls on [DONE] to prevent duplicate tool_call events', async () => {
+        const mockServer = http.createServer((req, res) => {
+            res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+            res.write('data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_dup_1","function":{"name":"view_file","arguments":"{\\"AbsolutePath\\":\\"/tmp/a\\"}"}}]},"finish_reason":null}]}\n\n');
+            res.write('data: [DONE]\n\n');
+            res.write('data: [DONE]\n\n');
+            res.end();
+        });
+        await new Promise((resolve) => mockServer.listen(0, '127.0.0.1', resolve));
+        const port = mockServer.address().port;
+
+        try {
+            const toolCallEvents = [];
+            await callOpenAIStream({
+                endpoint: `http://127.0.0.1:${port}`,
+                model: 'gpt-4o',
+                messages: [{ role: 'user', content: 'read file' }],
+                onEvent: (evt) => {
+                    if (evt.type === 'tool_call') toolCallEvents.push(evt);
+                }
+            });
+            assert.equal(toolCallEvents.length, 1, 'Must emit tool_call exactly once even if [DONE] is processed multiple times');
+            assert.equal(toolCallEvents[0].id, 'call_dup_1');
+        } finally {
+            mockServer.close();
+        }
+    });
 });
-
-

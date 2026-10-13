@@ -82,5 +82,17 @@ test('renderModelsPage - Responsive Layout & Modal Configuration', async (t) => 
         assert.ok(html.includes('toggleModelVision'));
         assert.ok(html.includes('Vision'));
     });
-});
 
+    await t.test('uses valid status-pill-success class and preserves provider timeout on edit', () => {
+        assert.ok(html.includes('status-pill-success'), 'Should render status-pill-success');
+        assert.equal(html.includes('status-pill-ready'), false, 'Should not use non-existent status-pill-ready class');
+        assert.ok(html.includes('editingProviderTimeout'), 'Should track and preserve provider timeout when editing');
+    });
+
+    await t.test('renderSidecarsPage restores promptModel dropdown from --model= argument on edit', () => {
+        const { renderSidecarsPage } = require('../proxy/lib/pages.js');
+        const sidecarsHtml = renderSidecarsPage();
+        assert.ok(sidecarsHtml.includes("a.startsWith('--model=')"));
+        assert.ok(sidecarsHtml.includes("document.getElementById('promptModel').value = modelArg ? modelArg.slice('--model='.length) : 'inherit'"));
+    });
+});

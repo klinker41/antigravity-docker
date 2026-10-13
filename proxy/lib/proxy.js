@@ -281,86 +281,87 @@ function isModelProcedure(pathOrName) {
 const MAX_CONCURRENT_STREAMS = 500;
 
 /**
+ * Extracts UTF-8 text and parsed JSON object from a WebSocket string or binary message
+ * if it starts with '{'. Returns null if not a valid JSON object payload.
+ */
+function parseWebSocketJsonMessage(raw) {
+    let text = null;
+    if (typeof raw === 'string') {
+        if (raw.startsWith('{')) text = raw;
+    } else if (raw && typeof raw === 'object') {
+        const u8 = new Uint8Array(raw);
+        if (u8.length > 0 && u8[0] === 0x7b /* '{' */) {
+            text = Buffer.from(raw).toString('utf8');
+        }
+    }
+    if (!text) return null;
+    try {
+        const parsed = JSON.parse(text);
+        if (parsed && typeof parsed === 'object') {
+            return { text, parsed };
+        }
+    } catch {}
+    return null;
+}
+
+/**
  * Inspects outgoing client messages on /connect-websocket, tracks active stream IDs,
  * and maps custom model placeholders to active conversation/cascade context for translation.
  */
 function handleWebSocketClientMessage(ws, message, modelsManager, activeModelsMap = activeConversationModels) {
     if (!ws.data || !ws.data.activeStreams) return message;
 
-    let isJsonCandidate = false;
-    let text = null;
-    let isBinary = false;
+    const decoded = parseWebSocketJsonMessage(message);
+    if (!decoded) return message;
+    const { text, parsed } = decoded;
 
-    if (typeof message === 'string') {
-        if (message.startsWith('{')) {
-            isJsonCandidate = true;
-            text = message;
+    if (parsed.type === 'start' && parsed.streamId && typeof parsed.procedure === 'string') {
+        if (ws.data.activeStreams.size >= MAX_CONCURRENT_STREAMS) {
+            const oldest = ws.data.activeStreams.keys().next().value;
+            if (oldest !== undefined) ws.data.activeStreams.delete(oldest);
         }
-    } else if (message && typeof message === 'object') {
-        const u8 = new Uint8Array(message);
-        if (u8.length > 0 && u8[0] === 0x7b /* '{' */) {
-            isJsonCandidate = true;
-            text = Buffer.from(message).toString('utf8');
-            isBinary = true;
-        }
+        ws.data.activeStreams.set(parsed.streamId, parsed.procedure);
+    } else if (parsed.type === 'cancel' && parsed.streamId) {
+        ws.data.activeStreams.delete(parsed.streamId);
     }
 
-    if (!isJsonCandidate || !text) return message;
+    const cascadeId = parsed.payload?.cascadeId || parsed.cascadeId;
+    const convoId = parsed.payload?.conversationId || parsed.conversationId;
+    if (convoId || cascadeId) {
+        activeModelsMap.set('latestConvoId', convoId || cascadeId);
+    }
 
-    try {
-        const parsed = JSON.parse(text);
-        if (parsed && typeof parsed === 'object') {
-            if (parsed.type === 'start' && parsed.streamId && typeof parsed.procedure === 'string') {
-                if (ws.data.activeStreams.size >= MAX_CONCURRENT_STREAMS) {
-                    const oldest = ws.data.activeStreams.keys().next().value;
-                    if (oldest !== undefined) ws.data.activeStreams.delete(oldest);
-                }
-                ws.data.activeStreams.set(parsed.streamId, parsed.procedure);
-            } else if (parsed.type === 'cancel' && parsed.streamId) {
-                ws.data.activeStreams.delete(parsed.streamId);
-            }
-
-            const cascadeId = parsed.payload?.cascadeId || parsed.cascadeId;
-            const convoId = parsed.payload?.conversationId || parsed.conversationId;
-            if (convoId || cascadeId) {
-                activeModelsMap.set('latestConvoId', convoId || cascadeId);
-            }
-
-            const matches = matchCustomPlaceholders(text);
-            if (matches.length > 0) {
-                if (modelsManager) {
-                    for (const placeholder of matches) {
-                        const modelConfig = modelsManager.getModelByPlaceholder(placeholder);
-                        if (modelConfig) {
-                            if (cascadeId) setTrackedModel(cascadeId, modelConfig, activeModelsMap);
-                            if (convoId) setTrackedModel(convoId, modelConfig, activeModelsMap);
-                            if (convoId || cascadeId) activeModelsMap.set('latestConvoId', convoId || cascadeId);
-                            setTrackedModel('latest', modelConfig, activeModelsMap);
-                        }
-                    }
-                }
-
-                // Native placeholder preservation: agy accepts M500..M649 via fetchAvailableModels interception
-                return message;
-            } else {
-                // Only remove from active models if the message explicitly specifies a standard model
-                const explicitModel = parsed.payload?.cascadeConfig?.plannerConfig?.planModel ||
-                                      parsed.payload?.model ||
-                                      parsed.model;
-
-                if (explicitModel && typeof explicitModel === 'string' && !CUSTOM_PLACEHOLDER_REGEX.test(explicitModel)) {
-                    const cascadeId = parsed.payload?.cascadeId || parsed.cascadeId;
-                    const convoId = parsed.payload?.conversationId || parsed.conversationId;
-                    if (cascadeId && activeModelsMap.has(cascadeId)) {
-                        activeModelsMap.delete(cascadeId);
-                    }
-                    if (convoId && activeModelsMap.has(convoId)) {
-                        activeModelsMap.delete(convoId);
-                    }
+    const matches = matchCustomPlaceholders(text);
+    if (matches.length > 0) {
+        if (modelsManager) {
+            for (const placeholder of matches) {
+                const modelConfig = modelsManager.getModelByPlaceholder(placeholder);
+                if (modelConfig) {
+                    if (cascadeId) setTrackedModel(cascadeId, modelConfig, activeModelsMap);
+                    if (convoId) setTrackedModel(convoId, modelConfig, activeModelsMap);
+                    if (convoId || cascadeId) activeModelsMap.set('latestConvoId', convoId || cascadeId);
+                    setTrackedModel('latest', modelConfig, activeModelsMap);
                 }
             }
         }
-    } catch (e) {}
+
+        // Native placeholder preservation: agy accepts M500..M649 via fetchAvailableModels interception
+        return message;
+    }
+
+    // Only remove from active models if the message explicitly specifies a standard model
+    const explicitModel = parsed.payload?.cascadeConfig?.plannerConfig?.planModel ||
+                          parsed.payload?.model ||
+                          parsed.model;
+
+    if (explicitModel && typeof explicitModel === 'string' && !CUSTOM_PLACEHOLDER_REGEX.test(explicitModel)) {
+        if (cascadeId && activeModelsMap.has(cascadeId)) {
+            activeModelsMap.delete(cascadeId);
+        }
+        if (convoId && activeModelsMap.has(convoId)) {
+            activeModelsMap.delete(convoId);
+        }
+    }
 
     return message;
 }
@@ -374,40 +375,21 @@ function handleWebSocketUpstreamMessage(ws, event, modelsManager) {
         return dataToSend;
     }
 
-    let isJsonCandidate = false;
-    let text = null;
+    const decoded = parseWebSocketJsonMessage(event.data);
+    if (!decoded) return dataToSend;
+    const { parsed } = decoded;
 
-    if (typeof event.data === 'string') {
-        if (event.data.startsWith('{')) {
-            isJsonCandidate = true;
-            text = event.data;
-        }
-    } else if (event.data && typeof event.data === 'object') {
-        const u8 = new Uint8Array(event.data);
-        if (u8.length > 0 && u8[0] === 0x7b /* '{' */) {
-            isJsonCandidate = true;
-            text = Buffer.from(event.data).toString('utf8');
-        }
-    }
-
-    if (!isJsonCandidate || !text) return dataToSend;
-
-    try {
-        const parsed = JSON.parse(text);
-        if (parsed && typeof parsed === 'object') {
-            if (parsed.type === 'data' && parsed.streamId && ws.data.activeStreams.has(parsed.streamId)) {
-                const procedure = ws.data.activeStreams.get(parsed.streamId);
-                if (isModelProcedure(procedure) && modelsManager && typeof modelsManager.hasEnabledModels === 'function' && modelsManager.hasEnabledModels()) {
-                    if (parsed.payload) {
-                        injectCustomModels(parsed.payload, modelsManager);
-                        dataToSend = JSON.stringify(parsed);
-                    }
-                }
-            } else if (parsed.type === 'end' && parsed.streamId) {
-                ws.data.activeStreams.delete(parsed.streamId);
+    if (parsed.type === 'data' && parsed.streamId && ws.data.activeStreams.has(parsed.streamId)) {
+        const procedure = ws.data.activeStreams.get(parsed.streamId);
+        if (isModelProcedure(procedure) && modelsManager && typeof modelsManager.hasEnabledModels === 'function' && modelsManager.hasEnabledModels()) {
+            if (parsed.payload) {
+                injectCustomModels(parsed.payload, modelsManager);
+                dataToSend = JSON.stringify(parsed);
             }
         }
-    } catch (e) {}
+    } else if (parsed.type === 'end' && parsed.streamId) {
+        ws.data.activeStreams.delete(parsed.streamId);
+    }
 
     return dataToSend;
 }
@@ -475,6 +457,7 @@ function injectCustomModels(data, modelsManager) {
 }
 
 module.exports = {
+    HOP_BY_HOP_HEADERS,
     isSpaRoute,
     isModelProcedure,
     handleWebSocketClientMessage,

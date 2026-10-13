@@ -43,6 +43,61 @@ mkdir -p "$GEMINI_DIR/config/projects" \
          "$GEMINI_DIR/antigravity-cli/knowledge" \
          "$WORKSPACE_DIR"
 
+# Scan /workspace and register each folder as a separate project in ~/.gemini/config/projects/<UUID>.json
+# only if the projects folder is empty
+if [ -z "$(ls -A "$GEMINI_DIR/config/projects" 2>/dev/null)" ]; then
+    bun -e '
+const fs = require("fs");
+const path = require("path");
+const crypto = require("crypto");
+
+const projectsDir = process.argv[1];
+const workspaceDir = process.argv[2];
+
+fs.mkdirSync(projectsDir, { recursive: true });
+
+function registerProject(folderPath, folderName) {
+    const uri = `file://${folderPath}`;
+    const id = crypto.randomUUID();
+    const projectData = {
+        id: id,
+        name: folderName,
+        projectResources: {
+            resources: [
+                {
+                    gitFolder: {
+                        folderUri: uri,
+                        defaultBranch: "main"
+                    }
+                }
+            ]
+        },
+        settings: {},
+        updatedAt: new Date().toISOString(),
+        isWorkspaceOnly: false
+    };
+
+    fs.writeFileSync(path.join(projectsDir, `${id}.json`), JSON.stringify(projectData, null, 2), "utf8");
+    console.log(`[Project Registry] Registered project: "${folderName}" (${id})`);
+}
+
+if (fs.existsSync(workspaceDir)) {
+    const entries = fs.readdirSync(workspaceDir, { withFileTypes: true });
+    let subdirsFound = false;
+    for (const entry of entries) {
+        if (entry.isDirectory() && !entry.name.startsWith(".") && entry.name !== "node_modules" && entry.name !== "dist" && entry.name !== "build") {
+            const fullPath = path.join(workspaceDir, entry.name);
+            registerProject(fullPath, entry.name);
+            subdirsFound = true;
+        }
+    }
+    if (!subdirsFound) {
+        registerProject(workspaceDir, "workspace");
+    }
+}
+' "$GEMINI_DIR/config/projects" "$WORKSPACE_DIR"
+fi
+
 # Ensure default outside-of-project and root .json configs exist
 if [ ! -f "$GEMINI_DIR/config/projects/outside-of-project.json" ]; then
     cat <<EOF > "$GEMINI_DIR/config/projects/outside-of-project.json"
@@ -91,78 +146,6 @@ if [ ! -f "$GEMINI_DIR/config/custom_models.json" ]; then
   "providers": []
 }
 EOF
-fi
-
-# Scan /workspace and register each folder as a separate project in ~/.gemini/config/projects/<UUID>.json
-# only if the projects folder is empty
-if [ -z "$(ls -A "$GEMINI_DIR/config/projects" 2>/dev/null)" ]; then
-    bun -e '
-const fs = require("fs");
-const path = require("path");
-const crypto = require("crypto");
-
-const projectsDir = process.argv[1];
-const workspaceDir = process.argv[2];
-
-fs.mkdirSync(projectsDir, { recursive: true });
-
-// Check if projects directory is already populated
-const existingFiles = fs.readdirSync(projectsDir).filter(f => f.endsWith(".json") && f !== ".json");
-if (existingFiles.length > 0) {
-    process.exit(0);
-}
-
-function registerProject(folderPath, folderName) {
-    const uri = `file://${folderPath}`;
-    const id = crypto.randomUUID();
-    const projectData = {
-        id: id,
-        name: folderName,
-        projectResources: {
-            resources: [
-                {
-                    gitFolder: {
-                        folderUri: uri,
-                        defaultBranch: "main"
-                    }
-                }
-            ]
-        },
-        settings: {},
-        updatedAt: new Date().toISOString(),
-        isWorkspaceOnly: false
-    };
-
-    fs.writeFileSync(path.join(projectsDir, `${id}.json`), JSON.stringify(projectData, null, 2), "utf8");
-    console.log(`[Project Registry] Registered project: "${folderName}" (${id})`);
-}
-
-// Create outside-of-project.json default configuration
-const outsideOfProject = {
-    id: "outside-of-project",
-    name: "Outside of Project",
-    projectResources: { resources: [] },
-    settings: {},
-    updatedAt: new Date().toISOString(),
-    isWorkspaceOnly: false
-};
-fs.writeFileSync(path.join(projectsDir, "outside-of-project.json"), JSON.stringify(outsideOfProject, null, 2), "utf8");
-
-if (fs.existsSync(workspaceDir)) {
-    const entries = fs.readdirSync(workspaceDir, { withFileTypes: true });
-    let subdirsFound = false;
-    for (const entry of entries) {
-        if (entry.isDirectory() && !entry.name.startsWith(".") && entry.name !== "node_modules" && entry.name !== "dist" && entry.name !== "build") {
-            const fullPath = path.join(workspaceDir, entry.name);
-            registerProject(fullPath, entry.name);
-            subdirsFound = true;
-        }
-    }
-    if (!subdirsFound) {
-        registerProject(workspaceDir, "workspace");
-    }
-}
-' "$GEMINI_DIR/config/projects" "$WORKSPACE_DIR"
 fi
 
 
@@ -437,10 +420,6 @@ case "$1" in
 
     *)
         # If user passed custom command (e.g. bash, npm, python, docker)
-        if [ "$1" = "bash" ] || [ "$1" = "zsh" ] || [ "$1" = "sh" ]; then
-            exec gosu "$DEVELOPER_USER" "$@"
-        else
-            exec gosu "$DEVELOPER_USER" "$@"
-        fi
+        exec gosu "$DEVELOPER_USER" "$@"
         ;;
 esac

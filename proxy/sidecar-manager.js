@@ -674,7 +674,13 @@ class SidecarManager extends EventEmitter {
         if (isEnabled) {
             if (isScheduled) {
                 status = 'scheduled';
-            } else if (workerInfo && workerInfo.process && !workerInfo.process.killed) {
+            } else if (
+                workerInfo &&
+                workerInfo.process &&
+                !workerInfo.process.killed &&
+                workerInfo.process.exitCode === null &&
+                workerInfo.process.signalCode === null
+            ) {
                 status = 'running';
             } else {
                 status = 'starting';
@@ -958,7 +964,8 @@ class SidecarManager extends EventEmitter {
                 process: child,
                 startedAt: new Date().toISOString(),
                 restartCount: (this.runningWorkers.get(id)?.restartCount || 0),
-                timer: null
+                timer: null,
+                stopped: false
             };
             this.runningWorkers.set(id, workerEntry);
 
@@ -980,7 +987,12 @@ class SidecarManager extends EventEmitter {
             child.on('close', (code, signal) => {
                 logStream.end();
                 console.log(`[Sidecar Manager] ⚠️ Worker '${id}' exited (Code: ${code}, Signal: ${signal})`);
-                this.runningWorkers.delete(id);
+                if (this.runningWorkers.get(id) === workerEntry) {
+                    this.runningWorkers.delete(id);
+                }
+                if (workerEntry.stopped) {
+                    return;
+                }
 
                 const currentSidecar = this.getSidecar(id);
                 if (currentSidecar && currentSidecar.enabled) {
@@ -990,13 +1002,16 @@ class SidecarManager extends EventEmitter {
                     if (shouldRestart) {
                         console.log(`[Sidecar Manager] 🔁 Restarting worker '${id}' in 3s (Policy: ${policy})...`);
                         const timer = setTimeout(() => {
+                            if (workerEntry.stopped) return;
                             const latest = this.getSidecar(id);
                             if (latest && latest.enabled && !latest.isScheduled) {
                                 workerEntry.restartCount += 1;
                                 this.startWorker(latest);
                             }
                         }, 3000);
-                        this.runningWorkers.set(id, { ...workerEntry, process: null, timer });
+                        workerEntry.process = null;
+                        workerEntry.timer = timer;
+                        this.runningWorkers.set(id, workerEntry);
                     }
                 }
             });
@@ -1012,13 +1027,15 @@ class SidecarManager extends EventEmitter {
         const cleanId = sanitizeSidecarId(id);
         const worker = this.runningWorkers.get(cleanId);
         if (worker) {
+            worker.stopped = true;
             if (worker.timer) clearTimeout(worker.timer);
-            if (worker.process && !worker.process.killed) {
+            const proc = worker.process;
+            if (proc && proc.exitCode === null && proc.signalCode === null) {
                 try {
-                    worker.process.kill('SIGTERM');
+                    proc.kill('SIGTERM');
                     setTimeout(() => {
-                        if (worker.process && !worker.process.killed) {
-                            try { worker.process.kill('SIGKILL'); } catch (e) {}
+                        if (proc.exitCode === null && proc.signalCode === null) {
+                            try { proc.kill('SIGKILL'); } catch (e) {}
                         }
                     }, 2000);
                 } catch (e) {}

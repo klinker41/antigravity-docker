@@ -22,18 +22,10 @@ const {
     DEFAULT_SUPPORTED_MIME_TYPES,
     TEXT_ONLY_SUPPORTED_MIME_TYPES
 } = require('./lib/models-manager.js');
+const { HOP_BY_HOP_HEADERS } = require('./lib/proxy.js');
 
 const DEFAULT_PORT = parseInt(process.env.TRANSLATION_PORT || '4405', 10);
 const DEFAULT_UPSTREAM = process.env.CLOUDCODE_UPSTREAM_URL || 'https://daily-cloudcode-pa.googleapis.com';
-
-const HOP_BY_HOP_HEADERS = new Set([
-    'connection',
-    'keep-alive',
-    'proxy-authenticate',
-    'proxy-authorization',
-    'transfer-encoding',
-    'upgrade'
-]);
 
 function filterHeaders(headers) {
     const out = {};
@@ -43,6 +35,22 @@ function filterHeaders(headers) {
         }
     }
     return out;
+}
+
+function formatToolCallEvent(ev) {
+    let argsObj = {};
+    try {
+        argsObj = typeof ev.arguments === 'string' ? JSON.parse(ev.arguments) : (ev.arguments || {});
+    } catch (e) {
+        argsObj = { raw: ev.arguments };
+    }
+    const fnCall = { name: ev.name, args: sanitizeToolCallArgs(ev.name, argsObj) };
+    if (ev.id) fnCall.id = ev.id;
+    return fnCall;
+}
+
+function formatProviderErrorText(customModel, err) {
+    return `\n\n**Error connecting to custom model provider (${customModel.providerType}):**\n\`\`\`\n${err.message}\n\`\`\`\nPlease check your provider configuration in \`/models\`.`;
 }
 
 function isStreamGenerateContent(url) {
@@ -329,18 +337,21 @@ class TranslationProxy {
         return resolveConversationToolOutputs(convoId, cascadeId, this.baseDir, { candidateIds, callIds });
     }
 
-    handleStreamGenerateContent(req, res) {
+    _readRequestBuffer(req, res, onEnd) {
         const chunks = [];
         req.on('data', chunk => chunks.push(chunk));
         req.on('error', (err) => {
             console.error('[Translation Proxy] Request error:', err.message);
-            if (!res.headersSent && !res.writableEnded) {
+            if (!res.headersSent && !res.writableEnded && !res.destroyed) {
                 res.writeHead(400, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ error: err.message }));
             }
         });
-        req.on('end', async () => {
-            const rawBody = Buffer.concat(chunks);
+        req.on('end', () => onEnd(Buffer.concat(chunks)));
+    }
+
+    _handleContentGenerationRequest(req, res, translateFn, onErrorFn) {
+        this._readRequestBuffer(req, res, async (rawBody) => {
             let parsedData = null;
             try {
                 parsedData = JSON.parse(rawBody.toString('utf8'));
@@ -348,52 +359,21 @@ class TranslationProxy {
 
             const customModel = this.resolveCustomModel(parsedData);
             if (!customModel) {
-                // Pass through directly to upstream Google CloudCode
                 this.forwardPassThrough(req, res, rawBody);
                 return;
             }
 
             try {
-                await this.translateAndStream(parsedData, customModel, res);
+                await translateFn.call(this, parsedData, customModel, res);
             } catch (err) {
-                console.error('[Translation Proxy] Translation error:', err.message);
-                if (!res.headersSent) {
-                    res.writeHead(200, {
-                        'Content-Type': 'text/event-stream',
-                        'Cache-Control': 'no-cache',
-                        'Connection': 'keep-alive'
-                    });
-                }
-                const errorText = `\n\n**Error connecting to custom model provider (${customModel.providerType}):**\n\`\`\`\n${err.message}\n\`\`\`\nPlease check your provider configuration in \`/models\`.`;
-                const errChunk = {
-                    response: {
-                        candidates: [{
-                            content: {
-                                role: 'model',
-                                parts: [{ text: errorText }]
-                            },
-                            finishReason: 'STOP'
-                        }]
-                    }
-                };
-                res.write(`data: ${JSON.stringify(errChunk)}\n\n`);
-                res.end();
+                onErrorFn(err, customModel);
             }
         });
     }
 
-    async translateAndStream(parsedData, customModel, res) {
-        res.writeHead(200, {
-            'Content-Type': 'text/event-stream',
-            'Cache-Control': 'no-cache',
-            'Connection': 'keep-alive',
-            'X-Accel-Buffering': 'no'
-        });
-
+    async _executeTranslatedGeneration(parsedData, customModel, res, onEvent) {
         const abortController = new AbortController();
-        const onClose = () => {
-            abortController.abort();
-        };
+        const onClose = () => abortController.abort();
         res.on('close', onClose);
 
         const requestObj = parsedData.request || parsedData;
@@ -402,80 +382,6 @@ class TranslationProxy {
         const tools = requestObj.tools;
         const generationConfig = requestObj.generationConfig || {};
         const maxTokens = generationConfig.maxOutputTokens || 4096;
-
-        let hasEmittedContent = false;
-
-        const onEvent = (ev) => {
-            if (res.writableEnded || res.destroyed) return;
-
-            if (ev.type === 'thought') {
-                const chunk = {
-                    response: {
-                        candidates: [{
-                            content: {
-                                role: 'model',
-                                parts: [{ text: ev.text, thought: true }]
-                            }
-                        }]
-                    }
-                };
-                res.write(`data: ${JSON.stringify(chunk)}\n\n`);
-            } else if (ev.type === 'text') {
-                hasEmittedContent = true;
-                const chunk = {
-                    response: {
-                        candidates: [{
-                            content: {
-                                role: 'model',
-                                parts: [{ text: ev.text }]
-                            }
-                        }]
-                    }
-                };
-                res.write(`data: ${JSON.stringify(chunk)}\n\n`);
-            } else if (ev.type === 'tool_call') {
-                hasEmittedContent = true;
-                let argsObj = {};
-                try {
-                    argsObj = typeof ev.arguments === 'string' ? JSON.parse(ev.arguments) : (ev.arguments || {});
-                } catch (e) {
-                    argsObj = { raw: ev.arguments };
-                }
-                const fnCall = { name: ev.name, args: sanitizeToolCallArgs(ev.name, argsObj) };
-                if (ev.id) fnCall.id = ev.id;
-                const chunk = {
-                    response: {
-                        candidates: [{
-                            content: {
-                                role: 'model',
-                                parts: [{ functionCall: fnCall }]
-                            }
-                        }]
-                    }
-                };
-                res.write(`data: ${JSON.stringify(chunk)}\n\n`);
-            } else if (ev.type === 'done') {
-                const finishReason = normalizeFinishReason(ev.finishReason || ev.stopReason);
-                const parts = [];
-                if (!hasEmittedContent) {
-                    parts.push({ text: EMPTY_COMPLETION_FALLBACK_TEXT });
-                    hasEmittedContent = true;
-                }
-                const chunk = {
-                    response: {
-                        candidates: [{
-                            content: {
-                                role: 'model',
-                                parts
-                            },
-                            finishReason
-                        }]
-                    }
-                };
-                res.write(`data: ${JSON.stringify(chunk)}\n\n`);
-            }
-        };
-
         const toolOutputs = this._resolveToolOutputs(parsedData, contents, systemInstruction);
 
         try {
@@ -492,6 +398,70 @@ class TranslationProxy {
         } finally {
             res.removeListener('close', onClose);
         }
+    }
+
+    handleStreamGenerateContent(req, res) {
+        this._handleContentGenerationRequest(req, res, this.translateAndStream, (err, customModel) => {
+            console.error('[Translation Proxy] Translation error:', err.message);
+            if (!res.headersSent) {
+                res.writeHead(200, {
+                    'Content-Type': 'text/event-stream',
+                    'Cache-Control': 'no-cache',
+                    'Connection': 'keep-alive'
+                });
+            }
+            const errChunk = {
+                response: {
+                    candidates: [{
+                        content: {
+                            role: 'model',
+                            parts: [{ text: formatProviderErrorText(customModel, err) }]
+                        },
+                        finishReason: 'STOP'
+                    }]
+                }
+            };
+            res.write(`data: ${JSON.stringify(errChunk)}\n\n`);
+            res.end();
+        });
+    }
+
+    async translateAndStream(parsedData, customModel, res) {
+        res.writeHead(200, {
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+            'X-Accel-Buffering': 'no'
+        });
+
+        let hasEmittedContent = false;
+        const writeCandidate = (parts, finishReason) => {
+            const candidate = { content: { role: 'model', parts } };
+            if (finishReason) candidate.finishReason = finishReason;
+            res.write(`data: ${JSON.stringify({ response: { candidates: [candidate] } })}\n\n`);
+        };
+
+        await this._executeTranslatedGeneration(parsedData, customModel, res, (ev) => {
+            if (res.writableEnded || res.destroyed) return;
+
+            if (ev.type === 'thought') {
+                writeCandidate([{ text: ev.text, thought: true }]);
+            } else if (ev.type === 'text') {
+                hasEmittedContent = true;
+                writeCandidate([{ text: ev.text }]);
+            } else if (ev.type === 'tool_call') {
+                hasEmittedContent = true;
+                writeCandidate([{ functionCall: formatToolCallEvent(ev) }]);
+            } else if (ev.type === 'done') {
+                const finishReason = normalizeFinishReason(ev.finishReason || ev.stopReason);
+                const parts = [];
+                if (!hasEmittedContent) {
+                    parts.push({ text: EMPTY_COMPLETION_FALLBACK_TEXT });
+                    hasEmittedContent = true;
+                }
+                writeCandidate(parts, finishReason);
+            }
+        });
 
         if (!res.writableEnded && !res.destroyed) {
             res.end();
@@ -540,176 +510,86 @@ class TranslationProxy {
     }
 
     handleGenerateContent(req, res) {
-        const chunks = [];
-        req.on('data', chunk => chunks.push(chunk));
-        req.on('error', (err) => {
-            console.error('[Translation Proxy] Request error in generateContent:', err.message);
+        this._handleContentGenerationRequest(req, res, this.translateAndGenerate, (err, customModel) => {
+            console.error('[Translation Proxy] Translation error in generateContent:', err.message);
             if (!res.headersSent && !res.writableEnded && !res.destroyed) {
-                res.writeHead(400, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: err.message }));
-            }
-        });
-        req.on('end', async () => {
-            const rawBody = Buffer.concat(chunks);
-            let parsedData = null;
-            try {
-                parsedData = JSON.parse(rawBody.toString('utf8'));
-            } catch (e) {}
-
-            const customModel = this.resolveCustomModel(parsedData);
-            if (!customModel) {
-                // Pass through directly to upstream Google CloudCode
-                this.forwardPassThrough(req, res, rawBody);
-                return;
-            }
-
-            try {
-                await this.translateAndGenerate(parsedData, customModel, res);
-            } catch (err) {
-                console.error('[Translation Proxy] Translation error in generateContent:', err.message);
-                if (!res.headersSent && !res.writableEnded && !res.destroyed) {
-                    const errorText = `\n\n**Error connecting to custom model provider (${customModel.providerType}):**\n\`\`\`\n${err.message}\n\`\`\`\nPlease check your provider configuration in \`/models\`.`;
-                    const errCandidate = {
-                        content: {
-                            role: 'model',
-                            parts: [{ text: errorText }]
-                        },
-                        finishReason: 'STOP'
-                    };
-                    const errResponse = {
-                        candidates: [errCandidate],
-                        response: {
-                            candidates: [errCandidate]
-                        },
-                        usageMetadata: {
-                            promptTokenCount: 0,
-                            candidatesTokenCount: 0,
-                            totalTokenCount: 0
-                        }
-                    };
-                    const bodyStr = JSON.stringify(errResponse);
-                    res.writeHead(200, {
-                        'Content-Type': 'application/json; charset=utf-8',
-                        'Content-Length': Buffer.byteLength(bodyStr)
-                    });
-                    res.end(bodyStr);
-                }
+                const errCandidate = {
+                    content: {
+                        role: 'model',
+                        parts: [{ text: formatProviderErrorText(customModel, err) }]
+                    },
+                    finishReason: 'STOP'
+                };
+                const errResponse = {
+                    candidates: [errCandidate],
+                    response: { candidates: [errCandidate] },
+                    usageMetadata: { promptTokenCount: 0, candidatesTokenCount: 0, totalTokenCount: 0 }
+                };
+                const bodyStr = JSON.stringify(errResponse);
+                res.writeHead(200, {
+                    'Content-Type': 'application/json; charset=utf-8',
+                    'Content-Length': Buffer.byteLength(bodyStr)
+                });
+                res.end(bodyStr);
             }
         });
     }
 
     async translateAndGenerate(parsedData, customModel, res) {
-        const abortController = new AbortController();
-        const onClose = () => {
-            abortController.abort();
-        };
-        res.on('close', onClose);
-
-        const requestObj = parsedData.request || parsedData;
-        const contents = requestObj.contents || [];
-        const systemInstruction = requestObj.systemInstruction;
-        const tools = requestObj.tools;
-        const generationConfig = requestObj.generationConfig || {};
-        const maxTokens = generationConfig.maxOutputTokens || 4096;
-
         let accumulatedText = '';
         let accumulatedThought = '';
         const toolCalls = [];
         let finishReason = 'STOP';
 
-        const onEvent = (ev) => {
+        await this._executeTranslatedGeneration(parsedData, customModel, res, (ev) => {
             if (ev.type === 'thought') {
                 accumulatedThought += ev.text || '';
             } else if (ev.type === 'text') {
                 accumulatedText += ev.text || '';
             } else if (ev.type === 'tool_call') {
-                let argsObj = {};
-                try {
-                    argsObj = typeof ev.arguments === 'string' ? JSON.parse(ev.arguments) : (ev.arguments || {});
-                } catch (e) {
-                    argsObj = { raw: ev.arguments };
-                }
-                const fnCall = { name: ev.name, args: sanitizeToolCallArgs(ev.name, argsObj) };
-                if (ev.id) fnCall.id = ev.id;
-                toolCalls.push(fnCall);
+                toolCalls.push(formatToolCallEvent(ev));
             } else if (ev.type === 'done') {
                 finishReason = normalizeFinishReason(ev.finishReason || ev.stopReason);
             }
+        });
+
+        if (res.writableEnded || res.destroyed) return;
+
+        const parts = [];
+        if (accumulatedThought) {
+            parts.push({ text: accumulatedThought, thought: true });
+        }
+        if (accumulatedText) {
+            parts.push({ text: accumulatedText });
+        }
+        for (const tc of toolCalls) {
+            parts.push({ functionCall: tc });
+        }
+        if (!accumulatedText && toolCalls.length === 0) {
+            parts.push({ text: EMPTY_COMPLETION_FALLBACK_TEXT });
+        }
+
+        const candidate = {
+            content: { role: 'model', parts },
+            finishReason
         };
 
-        const toolOutputs = this._resolveToolOutputs(parsedData, contents, systemInstruction);
+        const responseObj = {
+            candidates: [candidate],
+            response: { candidates: [candidate] },
+            usageMetadata: { promptTokenCount: 0, candidatesTokenCount: 0, totalTokenCount: 0 }
+        };
 
-        try {
-            await this._callProviderStream({
-                customModel,
-                contents,
-                systemInstruction,
-                tools,
-                maxTokens,
-                signal: abortController.signal,
-                onEvent,
-                toolOutputs
-            });
-
-            if (res.writableEnded || res.destroyed) return;
-
-            const parts = [];
-            if (accumulatedThought) {
-                parts.push({ text: accumulatedThought, thought: true });
-            }
-            if (accumulatedText) {
-                parts.push({ text: accumulatedText });
-            }
-            for (const tc of toolCalls) {
-                parts.push({ functionCall: tc });
-            }
-            if (!accumulatedText && toolCalls.length === 0) {
-                parts.push({ text: EMPTY_COMPLETION_FALLBACK_TEXT });
-            }
-
-            const candidate = {
-                content: {
-                    role: 'model',
-                    parts
-                },
-                finishReason
-            };
-
-            const responseObj = {
-                candidates: [candidate],
-                response: {
-                    candidates: [candidate]
-                },
-                usageMetadata: {
-                    promptTokenCount: 0,
-                    candidatesTokenCount: 0,
-                    totalTokenCount: 0
-                }
-            };
-
-            const bodyStr = JSON.stringify(responseObj);
-            res.writeHead(200, {
-                'Content-Type': 'application/json; charset=utf-8',
-                'Content-Length': Buffer.byteLength(bodyStr)
-            });
-            res.end(bodyStr);
-        } finally {
-            res.removeListener('close', onClose);
-        }
+        const bodyStr = JSON.stringify(responseObj);
+        res.writeHead(200, {
+            'Content-Type': 'application/json; charset=utf-8',
+            'Content-Length': Buffer.byteLength(bodyStr)
+        });
+        res.end(bodyStr);
     }
 
     handleFetchAvailableModels(req, res) {
-        const chunks = [];
-        req.on('data', chunk => chunks.push(chunk));
-        req.on('error', (err) => {
-            console.error('[Translation Proxy] Request error in fetchAvailableModels:', err.message);
-            if (!res.headersSent && !res.writableEnded) {
-                res.writeHead(400, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: err.message }));
-            }
-        });
-        req.on('end', () => {
-            const rawBodyBuffer = Buffer.concat(chunks);
+        this._readRequestBuffer(req, res, (rawBodyBuffer) => {
             const parsedReq = new URL(req.url, 'http://127.0.0.1');
             const targetUrl = new URL(parsedReq.pathname + parsedReq.search, this.upstreamUrl);
             const isHttps = targetUrl.protocol === 'https:';

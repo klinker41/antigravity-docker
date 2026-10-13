@@ -274,5 +274,30 @@ test('Security - Web Gateway Hardening & SSRF Prevention', async (t) => {
             activeSessions.delete(token);
         }
     });
-});
 
+    await t.test('parseCookiesFromHeader safely handles malformed percent-encoded cookie values without throwing URIError', () => {
+        const { parseCookiesFromHeader } = require('../proxy/lib/session.js');
+        const cookies = parseCookiesFromHeader('malformed=%E0%A4%A; antigravity_session=valid_token_123; encoded=hello%20world');
+        assert.equal(cookies.malformed, '%E0%A4%A');
+        assert.equal(cookies.antigravity_session, 'valid_token_123');
+        assert.equal(cookies.encoded, 'hello world');
+    });
+
+    await t.test('readRequestBody supports Web Fetch Request instances and enforces maxBytes', async () => {
+        const { readRequestBody } = require('../proxy/lib/security.js');
+        const webReq = new Request('http://localhost/test', {
+            method: 'POST',
+            body: 'hello 🚀 web stream'
+        });
+        const body = await readRequestBody(webReq, 1024);
+        assert.equal(body, 'hello 🚀 web stream');
+
+        const largeWebReq = new Request('http://localhost/test', {
+            method: 'POST',
+            body: 'x'.repeat(2048)
+        });
+        await assert.rejects(async () => {
+            await readRequestBody(largeWebReq, 512);
+        }, /Payload Too Large/);
+    });
+});

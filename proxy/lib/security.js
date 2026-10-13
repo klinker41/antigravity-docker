@@ -10,55 +10,82 @@ function safeCompare(a, b) {
     return crypto.timingSafeEqual(hashA, hashB);
 }
 
-// Standard HTTP Security Headers
-function applySecurityHeaders(res, req) {
-    res.setHeader('X-Content-Type-Options', 'nosniff');
-    res.setHeader('X-Frame-Options', 'SAMEORIGIN');
-    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
-    res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
-    res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: https:; connect-src 'self' ws: wss:; frame-ancestors 'self';");
-    res.setHeader('X-Accel-Buffering', 'no');
-    const isHttps = req.headers['x-forwarded-proto'] === 'https' || req.socket?.encrypted;
-    if (isHttps) {
-        res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+// Read raw request body as string with maximum byte length protection.
+// Supports both Web Fetch Request / ReadableStream and Node.js Readable streams.
+async function readRequestBody(req, maxBytes = 64 * 1024) {
+    const contentLengthHeader = typeof req?.headers?.get === 'function'
+        ? req.headers.get('content-length')
+        : req?.headers?.['content-length'];
+    if (contentLengthHeader && parseInt(contentLengthHeader, 10) > maxBytes) {
+        throw new Error('Payload Too Large');
     }
-}
 
-// Read raw request body as string with maximum byte length protection
-function readRequestBody(req, maxBytes = 64 * 1024) {
-    return new Promise((resolve, reject) => {
+    const webStream = typeof req?.getReader === 'function'
+        ? req
+        : (typeof req?.body?.getReader === 'function' ? req.body : null);
+
+    if (webStream) {
+        const reader = webStream.getReader();
         const chunks = [];
         let totalBytes = 0;
-        let exceeded = false;
-
-        const onData = (chunk) => {
-            if (exceeded) return;
-            totalBytes += chunk.length;
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            totalBytes += value.length;
             if (totalBytes > maxBytes) {
-                exceeded = true;
-                req.removeListener('data', onData);
-                req.removeListener('end', onEnd);
-                req.resume(); // drain incoming data to avoid hanging socket
-                reject(new Error('Payload Too Large'));
-                return;
+                try { await reader.cancel(); } catch {}
+                throw new Error('Payload Too Large');
             }
-            chunks.push(chunk);
-        };
+            chunks.push(value);
+        }
+        return Buffer.concat(chunks).toString('utf8');
+    }
 
-        const onEnd = () => {
-            if (exceeded) return;
-            resolve(Buffer.concat(chunks).toString('utf8'));
-        };
+    if (typeof req?.on === 'function') {
+        return new Promise((resolve, reject) => {
+            const chunks = [];
+            let totalBytes = 0;
+            let exceeded = false;
 
-        const onError = (err) => {
-            if (exceeded) return;
-            reject(err);
-        };
+            const onData = (chunk) => {
+                if (exceeded) return;
+                totalBytes += chunk.length;
+                if (totalBytes > maxBytes) {
+                    exceeded = true;
+                    req.removeListener('data', onData);
+                    req.removeListener('end', onEnd);
+                    if (typeof req.resume === 'function') req.resume();
+                    reject(new Error('Payload Too Large'));
+                    return;
+                }
+                chunks.push(chunk);
+            };
 
-        req.on('data', onData);
-        req.on('end', onEnd);
-        req.on('error', onError);
-    });
+            const onEnd = () => {
+                if (exceeded) return;
+                resolve(Buffer.concat(chunks).toString('utf8'));
+            };
+
+            const onError = (err) => {
+                if (exceeded) return;
+                reject(err);
+            };
+
+            req.on('data', onData);
+            req.on('end', onEnd);
+            req.on('error', onError);
+        });
+    }
+
+    if (typeof req?.text === 'function') {
+        const text = await req.text();
+        if (Buffer.byteLength(text, 'utf8') > maxBytes) {
+            throw new Error('Payload Too Large');
+        }
+        return text;
+    }
+
+    return '';
 }
 
 // Read and parse JSON body helper
@@ -73,7 +100,6 @@ async function readJsonBody(req, maxBytes = 64 * 1024) {
 
 module.exports = {
     safeCompare,
-    applySecurityHeaders,
     readRequestBody,
     readJsonBody,
 };

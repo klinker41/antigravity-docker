@@ -11,6 +11,23 @@ function isValidConversationId(id) {
     return typeof id === 'string' && id.length > 0 && id.length < 128 && !id.includes('/') && !id.includes('\\') && !id.includes('..') && /^[a-zA-Z0-9_-]+$/.test(id);
 }
 
+function queryConversationStepsDb(dbPath, sql) {
+    let Database;
+    try {
+        Database = require('bun:sqlite').Database;
+    } catch {
+        try { Database = require('node:sqlite').DatabaseSync; } catch {}
+    }
+    if (!Database) return null;
+    const db = new Database(dbPath, { readonly: true });
+    try {
+        const queryFn = db.query ? (q) => db.query(q).all() : (q) => db.prepare(q).all();
+        return queryFn(sql);
+    } finally {
+        if (typeof db.close === 'function') db.close();
+    }
+}
+
 function checkConversationForCallIds(candId, callIds, brainDir, rootDir) {
     if (!candId || !Array.isArray(callIds) || callIds.length === 0) return false;
 
@@ -29,28 +46,16 @@ function checkConversationForCallIds(candId, callIds, brainDir, rootDir) {
     // Query conversation SQLite DB
     const candDbPath = path.join(rootDir, 'conversations', `${candId}.db`);
     try {
-        let Database;
-        try {
-            Database = require('bun:sqlite').Database;
-        } catch {
-            try { Database = require('node:sqlite').DatabaseSync; } catch {}
-        }
-        if (Database) {
-            const db = new Database(candDbPath, { readonly: true });
-            try {
-                const queryFn = db.query ? (sql) => db.query(sql).all() : (sql) => db.prepare(sql).all();
-                const rows = queryFn('SELECT metadata FROM steps WHERE step_type = 132');
-                for (const row of rows) {
-                    const meta = row?.metadata;
-                    const metaStr = Buffer.isBuffer(meta)
-                        ? meta.toString('utf8')
-                        : (meta instanceof Uint8Array ? Buffer.from(meta).toString('utf8') : String(meta || ''));
-                    if (callIds.some(cid => metaStr.includes(cid))) {
-                        return true;
-                    }
+        const rows = queryConversationStepsDb(candDbPath, 'SELECT metadata FROM steps WHERE step_type = 132');
+        if (rows) {
+            for (const row of rows) {
+                const meta = row?.metadata;
+                const metaStr = Buffer.isBuffer(meta)
+                    ? meta.toString('utf8')
+                    : (meta instanceof Uint8Array ? Buffer.from(meta).toString('utf8') : String(meta || ''));
+                if (callIds.some(cid => metaStr.includes(cid))) {
+                    return true;
                 }
-            } finally {
-                if (db.close) db.close();
             }
         } else {
             const stat = fs.statSync(candDbPath);
@@ -179,46 +184,32 @@ function resolveConversationToolOutputs(convoId, cascadeId, baseDir, options = {
     const dbPath = path.join(rootDir, 'conversations', `${targetConvoId}.db`);
     if (fs.existsSync(dbPath)) {
         try {
-            let Database;
-            try {
-                Database = require('bun:sqlite').Database;
-            } catch {
-                try { Database = require('node:sqlite').DatabaseSync; } catch {}
-            }
-            if (Database) {
-                const db = new Database(dbPath, { readonly: true });
-                try {
-                    const queryFn = db.query ? (sql) => db.query(sql).all() : (sql) => db.prepare(sql).all();
-                    const rows = queryFn('SELECT idx, metadata FROM steps WHERE step_type = 132');
-                    for (const row of rows) {
-                        if (!row || row.idx === undefined) continue;
-                        const buf = Buffer.isBuffer(row.metadata)
-                            ? row.metadata
-                            : (row.metadata instanceof Uint8Array ? Buffer.from(row.metadata) : Buffer.from(String(row.metadata || '')));
-                        const rawStr = buf.toString('utf8');
-                        const callMatch = rawStr.match(/(?:call|toolu)_[a-zA-Z0-9_-]+/);
-                        if (callMatch) {
-                            const callId = callMatch[0];
-                            stepIndexToCallId.set(row.idx, callId);
+            const rows = queryConversationStepsDb(dbPath, 'SELECT idx, metadata FROM steps WHERE step_type = 132') || [];
+            for (const row of rows) {
+                if (!row || row.idx === undefined) continue;
+                const buf = Buffer.isBuffer(row.metadata)
+                    ? row.metadata
+                    : (row.metadata instanceof Uint8Array ? Buffer.from(row.metadata) : Buffer.from(String(row.metadata || '')));
+                const rawStr = buf.toString('utf8');
+                const callMatch = rawStr.match(/(?:call|toolu)_[a-zA-Z0-9_-]+/);
+                if (callMatch) {
+                    const callId = callMatch[0];
+                    stepIndexToCallId.set(row.idx, callId);
 
-                            const callIdx = buf.indexOf(callId);
-                            if (callIdx !== -1) {
-                                const afterCallIdx = callIdx + callId.length;
-                                // In protobuf, field 2 (tag 0x12) is string tool_name: [0x12, length, ...nameBytes]
-                                if (afterCallIdx < buf.length && buf[afterCallIdx] === 0x12) {
-                                    const nameLen = buf[afterCallIdx + 1];
-                                    if (nameLen > 0 && afterCallIdx + 2 + nameLen <= buf.length) {
-                                        const toolName = buf.slice(afterCallIdx + 2, afterCallIdx + 2 + nameLen).toString('utf8');
-                                        if (/^[a-zA-Z0-9_.-]+$/.test(toolName)) {
-                                            stepIndexToToolName.set(row.idx, toolName);
-                                        }
-                                    }
+                    const callIdx = buf.indexOf(callId);
+                    if (callIdx !== -1) {
+                        const afterCallIdx = callIdx + callId.length;
+                        // In protobuf, field 2 (tag 0x12) is string tool_name: [0x12, length, ...nameBytes]
+                        if (afterCallIdx < buf.length && buf[afterCallIdx] === 0x12) {
+                            const nameLen = buf[afterCallIdx + 1];
+                            if (nameLen > 0 && afterCallIdx + 2 + nameLen <= buf.length) {
+                                const toolName = buf.slice(afterCallIdx + 2, afterCallIdx + 2 + nameLen).toString('utf8');
+                                if (/^[a-zA-Z0-9_.-]+$/.test(toolName)) {
+                                    stepIndexToToolName.set(row.idx, toolName);
                                 }
                             }
                         }
                     }
-                } finally {
-                    if (typeof db.close === 'function') db.close();
                 }
             }
         } catch {}
@@ -498,6 +489,86 @@ function createSettledPromise() {
     };
 }
 
+function executeSseStreamRequest({
+    targetUrl,
+    headers,
+    body,
+    requestTimeout,
+    providerName,
+    signal,
+    onHttpError,
+    onDataLine,
+    onStreamEnd
+}) {
+    const parsed = new URL(targetUrl);
+    const transport = parsed.protocol === 'https:' ? https : http;
+    const { promise, safeResolve, safeReject } = createSettledPromise();
+
+    const req = transport.request(parsed, { method: 'POST', headers, timeout: requestTimeout }, (res) => {
+        if (res.statusCode < 200 || res.statusCode >= 300) {
+            let errBody = '';
+            res.on('data', chunk => errBody += chunk);
+            res.on('end', () => onHttpError(res.statusCode, errBody, { safeResolve, safeReject }));
+            return;
+        }
+
+        let buffer = '';
+        let currentEvent = null;
+
+        res.on('data', (chunk) => {
+            buffer += chunk.toString('utf8');
+            const lines = buffer.split('\n');
+            buffer = lines.pop();
+
+            for (const line of lines) {
+                const trimmed = line.trim();
+                if (!trimmed) {
+                    currentEvent = null;
+                    continue;
+                }
+                if (trimmed.startsWith('event:')) {
+                    currentEvent = trimmed.slice(6).trim();
+                    continue;
+                }
+                if (!trimmed.startsWith('data:')) continue;
+
+                const dataStr = trimmed.slice(5).trim();
+                if (onDataLine(dataStr, currentEvent, { req, safeResolve, safeReject })) {
+                    return;
+                }
+            }
+        });
+
+        res.on('end', () => {
+            if (onStreamEnd) onStreamEnd();
+            safeResolve();
+        });
+        res.on('error', safeReject);
+    });
+
+    req.on('timeout', () => {
+        safeReject(new Error(formatTimeoutError(providerName, requestTimeout)));
+        req.destroy();
+    });
+    req.on('error', safeReject);
+
+    if (signal) {
+        if (signal.aborted) {
+            safeReject(new Error('Aborted by client'));
+            req.destroy();
+        } else {
+            signal.addEventListener('abort', () => {
+                safeReject(new Error('Aborted by client'));
+                req.destroy();
+            });
+        }
+    }
+
+    req.write(body);
+    req.end();
+    return promise;
+}
+
 /**
  * Streams chat completion from an Anthropic Messages endpoint and normalizes events.
  */
@@ -511,7 +582,6 @@ function callAnthropicStream(options) {
         system,
         tools,
         supportsThinking,
-        useAdaptiveThinking: forceAdaptive,
         maxTokens = 8192,
         signal,
         onEvent
@@ -520,9 +590,6 @@ function callAnthropicStream(options) {
     let cleanBase = (endpoint || 'https://api.anthropic.com').trim().replace(/\/+$/, '');
     cleanBase = cleanBase.replace(/\/+(v1(\/(messages|models))?)?$/, '');
     const targetUrl = `${cleanBase}/v1/messages`;
-
-    const parsed = new URL(targetUrl);
-    const transport = parsed.protocol === 'https:' ? https : http;
 
     const useAdaptiveThinking = options.useAdaptiveThinking ||
         options.thinkingType === 'adaptive' ||
@@ -555,138 +622,90 @@ function callAnthropicStream(options) {
     };
     if (apiKey) headers['x-api-key'] = apiKey;
 
-    const { promise, safeResolve, safeReject } = createSettledPromise();
+    const currentBlocks = {}; // index -> { type, id, name, inputJson }
 
-    const req = transport.request(parsed, { method: 'POST', headers, timeout: requestTimeout }, (res) => {
-        if (res.statusCode < 200 || res.statusCode >= 300) {
-            let errBody = '';
-            res.on('data', chunk => errBody += chunk);
-            res.on('end', () => {
-                if (res.statusCode === 400 && supportsThinking && !options._thinkingRetried) {
-                    if (errBody.includes('thinking.type.adaptive') && !useAdaptiveThinking) {
-                        return safeResolve(callAnthropicStream({ ...options, thinkingType: 'adaptive', _thinkingRetried: true }));
-                    }
-                    if (errBody.includes('adaptive thinking is not supported') && useAdaptiveThinking) {
-                        return safeResolve(callAnthropicStream({ ...options, thinkingType: 'enabled', _thinkingRetried: true }));
-                    }
+    return executeSseStreamRequest({
+        targetUrl,
+        headers,
+        body,
+        requestTimeout,
+        providerName: 'Anthropic',
+        signal,
+        onHttpError: (statusCode, errBody, { safeResolve, safeReject }) => {
+            if (statusCode === 400 && supportsThinking && !options._thinkingRetried) {
+                if (errBody.includes('thinking.type.adaptive') && !useAdaptiveThinking) {
+                    return safeResolve(callAnthropicStream({ ...options, thinkingType: 'adaptive', _thinkingRetried: true }));
                 }
-                safeReject(new Error(`Anthropic error (${res.statusCode}): ${errBody}`));
-            });
-            return;
-        }
-
-        let buffer = '';
-        let currentEvent = null;
-        let currentBlocks = {}; // index -> { type, id, name, inputJson }
-
-        res.on('data', (chunk) => {
-            buffer += chunk.toString('utf8');
-            const lines = buffer.split('\n');
-            buffer = lines.pop(); // Keep uncompleted line
-
-            for (const line of lines) {
-                const trimmed = line.trim();
-                if (!trimmed) {
-                    currentEvent = null;
-                    continue;
-                }
-
-                if (trimmed.startsWith('event:')) {
-                    currentEvent = trimmed.slice(6).trim();
-                    continue;
-                }
-
-                if (trimmed.startsWith('data:')) {
-                    const dataStr = trimmed.slice(5).trim();
-                    try {
-                        const data = JSON.parse(dataStr);
-                        const evType = currentEvent || data.type;
-
-                        if (evType === 'error' || data.type === 'error' || Boolean(data.error)) {
-                            const errorObj = data.error;
-                            const errMsg = (typeof errorObj === 'object' && errorObj !== null)
-                                ? (errorObj.message || errorObj.type || JSON.stringify(errorObj))
-                                : (typeof errorObj === 'string' ? errorObj : (data.message || 'Unknown Anthropic error'));
-                            safeReject(new Error(`Anthropic error: ${errMsg}`));
-                            req.destroy();
-                            return;
-                        }
-
-                        if (evType === 'content_block_start') {
-                            const idx = data.index;
-                            const block = data.content_block || {};
-                            currentBlocks[idx] = {
-                                type: block.type,
-                                id: block.id,
-                                name: block.name,
-                                inputJson: ''
-                            };
-                        } else if (evType === 'content_block_delta') {
-                            const idx = data.index;
-                            const delta = data.delta || {};
-                            const block = currentBlocks[idx] || {};
-
-                            if (delta.type === 'thinking_delta') {
-                                onEvent({ type: 'thought', text: delta.thinking || '' });
-                            } else if (delta.type === 'text_delta') {
-                                onEvent({ type: 'text', text: delta.text || '' });
-                            } else if (delta.type === 'input_json_delta') {
-                                block.inputJson = (block.inputJson || '') + (delta.partial_json || '');
-                            }
-                        } else if (evType === 'content_block_stop') {
-                            const idx = data.index;
-                            const block = currentBlocks[idx];
-                            if (block && block.type === 'tool_use') {
-                                onEvent({
-                                    type: 'tool_call',
-                                    id: block.id,
-                                    name: block.name,
-                                    arguments: block.inputJson || '{}'
-                                });
-                            }
-                            delete currentBlocks[idx];
-                        } else if (evType === 'message_delta') {
-                            onEvent({
-                                type: 'done',
-                                stopReason: data.delta?.stop_reason || 'end_turn'
-                            });
-                        }
-                    } catch (e) {
-                        if (currentEvent === 'error') {
-                            safeReject(new Error(`Anthropic error: ${dataStr}`));
-                            req.destroy();
-                            return;
-                        }
-                    }
+                if (errBody.includes('adaptive thinking is not supported') && useAdaptiveThinking) {
+                    return safeResolve(callAnthropicStream({ ...options, thinkingType: 'enabled', _thinkingRetried: true }));
                 }
             }
-        });
+            safeReject(new Error(`Anthropic error (${statusCode}): ${errBody}`));
+        },
+        onDataLine: (dataStr, currentEvent, { req, safeReject }) => {
+            try {
+                const data = JSON.parse(dataStr);
+                const evType = currentEvent || data.type;
 
-        res.on('end', () => safeResolve());
-        res.on('error', safeReject);
-    });
+                if (evType === 'error' || data.type === 'error' || Boolean(data.error)) {
+                    const errorObj = data.error;
+                    const errMsg = (typeof errorObj === 'object' && errorObj !== null)
+                        ? (errorObj.message || errorObj.type || JSON.stringify(errorObj))
+                        : (typeof errorObj === 'string' ? errorObj : (data.message || 'Unknown Anthropic error'));
+                    safeReject(new Error(`Anthropic error: ${errMsg}`));
+                    req.destroy();
+                    return true;
+                }
 
-    req.on('timeout', () => {
-        safeReject(new Error(formatTimeoutError('Anthropic', requestTimeout)));
-        req.destroy();
-    });
-    req.on('error', safeReject);
+                if (evType === 'content_block_start') {
+                    const idx = data.index;
+                    const block = data.content_block || {};
+                    currentBlocks[idx] = {
+                        type: block.type,
+                        id: block.id,
+                        name: block.name,
+                        inputJson: ''
+                    };
+                } else if (evType === 'content_block_delta') {
+                    const idx = data.index;
+                    const delta = data.delta || {};
+                    const block = currentBlocks[idx] || {};
 
-    if (options.signal) {
-        if (options.signal.aborted) {
-            safeReject(new Error('Aborted by client'));
-            req.destroy();
-        } else {
-            options.signal.addEventListener('abort', () => {
-                safeReject(new Error('Aborted by client'));
-                req.destroy();
-            });
+                    if (delta.type === 'thinking_delta') {
+                        onEvent({ type: 'thought', text: delta.thinking || '' });
+                    } else if (delta.type === 'text_delta') {
+                        onEvent({ type: 'text', text: delta.text || '' });
+                    } else if (delta.type === 'input_json_delta') {
+                        block.inputJson = (block.inputJson || '') + (delta.partial_json || '');
+                    }
+                } else if (evType === 'content_block_stop') {
+                    const idx = data.index;
+                    const block = currentBlocks[idx];
+                    if (block && block.type === 'tool_use') {
+                        onEvent({
+                            type: 'tool_call',
+                            id: block.id,
+                            name: block.name,
+                            arguments: block.inputJson || '{}'
+                        });
+                    }
+                    delete currentBlocks[idx];
+                } else if (evType === 'message_delta') {
+                    onEvent({
+                        type: 'done',
+                        stopReason: data.delta?.stop_reason || 'end_turn'
+                    });
+                }
+            } catch (e) {
+                if (currentEvent === 'error') {
+                    safeReject(new Error(`Anthropic error: ${dataStr}`));
+                    req.destroy();
+                    return true;
+                }
+            }
+            return false;
         }
-    }
-
-    req.write(body);
-    req.end();
-    return promise;
+    });
 }
 
 const RESPONSES_API_MODELS = new Set();
@@ -924,14 +943,11 @@ function chatToolsToResponsesTools(tools) {
  */
 function callOpenAIResponsesStream(options) {
     const requestTimeout = getRequestTimeout(options);
-    const { endpoint, apiKey, model, messages, tools, maxTokens, onEvent } = options;
+    const { endpoint, apiKey, model, messages, tools, maxTokens, signal, onEvent } = options;
 
     let cleanBase = (endpoint || 'https://api.openai.com').trim().replace(/\/+$/, '');
     cleanBase = cleanBase.replace(/\/+(v1(\/(chat\/completions|responses|models))?)?$/, '');
     const targetUrl = `${cleanBase}/v1/responses`;
-
-    const parsed = new URL(targetUrl);
-    const transport = parsed.protocol === 'https:' ? https : http;
 
     const input = Array.isArray(options.input) ? options.input : chatMessagesToResponsesInput(messages);
     const respTools = options.responsesTools || chatToolsToResponsesTools(tools);
@@ -955,167 +971,119 @@ function callOpenAIResponsesStream(options) {
     };
     if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
 
-    const { promise, safeResolve, safeReject } = createSettledPromise();
+    let hasCompleted = false;
+    const pendingFunctionCalls = {}; // item_id -> { id, name, args }
 
-    const req = transport.request(parsed, { method: 'POST', headers, timeout: requestTimeout }, (res) => {
-        if (res.statusCode < 200 || res.statusCode >= 300) {
-            let errBody = '';
-            res.on('data', chunk => errBody += chunk);
-            res.on('end', () => {
-                if (res.statusCode === 404 && !options._chatCompletionsRetried) {
-                    return safeResolve(callOpenAIStream({ ...options, _chatCompletionsRetried: true, forceChatCompletions: true }));
+    return executeSseStreamRequest({
+        targetUrl,
+        headers,
+        body,
+        requestTimeout,
+        providerName: 'OpenAI Responses',
+        signal,
+        onHttpError: (statusCode, errBody, { safeResolve, safeReject }) => {
+            if (statusCode === 404 && !options._chatCompletionsRetried) {
+                return safeResolve(callOpenAIStream({ ...options, _chatCompletionsRetried: true, forceChatCompletions: true }));
+            }
+            safeReject(new Error(`OpenAI Responses error (${statusCode}): ${errBody}`));
+        },
+        onDataLine: (dataStr, currentEvent, { req, safeReject }) => {
+            if (dataStr === '[DONE]') {
+                if (!hasCompleted) {
+                    hasCompleted = true;
+                    onEvent({ type: 'done' });
                 }
-                safeReject(new Error(`OpenAI Responses error (${res.statusCode}): ${errBody}`));
-            });
-            return;
-        }
+                return false;
+            }
 
-        let buffer = '';
-        let hasCompleted = false;
-        let currentEvent = null;
-        const pendingFunctionCalls = {}; // item_id -> { id, name, args }
+            try {
+                const data = JSON.parse(dataStr);
+                const evType = currentEvent || data.type;
 
-        res.on('data', (chunk) => {
-            buffer += chunk.toString('utf8');
-            const lines = buffer.split('\n');
-            buffer = lines.pop();
+                const isErrorEvent = evType === 'error' || data.type === 'error' ||
+                                     evType === 'response.failed' || data.type === 'response.failed' ||
+                                     Boolean(data.error || data.response?.error);
 
-            for (const line of lines) {
-                const trimmed = line.trim();
-                if (!trimmed) {
-                    currentEvent = null;
-                    continue;
+                if (isErrorEvent) {
+                    const errorObj = data.error || data.response?.error;
+                    const errMsg = (typeof errorObj === 'object' && errorObj !== null)
+                        ? (errorObj.message || errorObj.code || JSON.stringify(errorObj))
+                        : (typeof errorObj === 'string' ? errorObj : (data.message || 'Unknown OpenAI error'));
+                    safeReject(new Error(`OpenAI Responses error: ${errMsg}`));
+                    req.destroy();
+                    return true;
                 }
 
-                if (trimmed.startsWith('event:')) {
-                    currentEvent = trimmed.slice(6).trim();
-                    continue;
-                }
-
-                if (trimmed.startsWith('data:')) {
-                    const dataStr = trimmed.slice(5).trim();
-                    if (dataStr === '[DONE]') {
-                        if (!hasCompleted) {
-                            hasCompleted = true;
-                            onEvent({ type: 'done' });
-                        }
-                        continue;
+                if (evType === 'response.output_text.delta') {
+                    if (data.delta) onEvent({ type: 'text', text: data.delta });
+                } else if (evType === 'response.reasoning_summary_text.delta' || evType === 'response.reasoning_text.delta') {
+                    if (data.delta) onEvent({ type: 'thought', text: data.delta });
+                } else if (evType === 'response.output_item.added') {
+                    const item = data.item || {};
+                    if (item.type === 'function_call') {
+                        pendingFunctionCalls[item.id] = {
+                            id: item.call_id || item.id,
+                            name: item.name || '',
+                            args: item.arguments || ''
+                        };
                     }
-
-                    try {
-                        const data = JSON.parse(dataStr);
-                        const evType = currentEvent || data.type;
-
-                        const isErrorEvent = evType === 'error' || data.type === 'error' ||
-                                             evType === 'response.failed' || data.type === 'response.failed' ||
-                                             Boolean(data.error || data.response?.error);
-
-                        if (isErrorEvent) {
-                            const errorObj = data.error || data.response?.error;
-                            const errMsg = (typeof errorObj === 'object' && errorObj !== null)
-                                ? (errorObj.message || errorObj.code || JSON.stringify(errorObj))
-                                : (typeof errorObj === 'string' ? errorObj : (data.message || 'Unknown OpenAI error'));
-                            safeReject(new Error(`OpenAI Responses error: ${errMsg}`));
-                            req.destroy();
-                            return;
-                        }
-
-                        if (evType === 'response.output_text.delta') {
-                            if (data.delta) onEvent({ type: 'text', text: data.delta });
-                        } else if (evType === 'response.reasoning_summary_text.delta' || evType === 'response.reasoning_text.delta') {
-                            if (data.delta) onEvent({ type: 'thought', text: data.delta });
-                        } else if (evType === 'response.output_item.added') {
-                            const item = data.item || {};
-                            if (item.type === 'function_call') {
-                                pendingFunctionCalls[item.id] = {
-                                    id: item.call_id || item.id,
-                                    name: item.name || '',
-                                    args: item.arguments || ''
-                                };
-                            }
-                        } else if (evType === 'response.function_call_arguments.delta') {
-                            const itemId = data.item_id;
-                            if (!pendingFunctionCalls[itemId]) {
-                                pendingFunctionCalls[itemId] = { id: '', name: '', args: '' };
-                            }
-                            pendingFunctionCalls[itemId].args += (data.delta || '');
-                        } else if (evType === 'response.function_call_arguments.done') {
-                            const itemId = data.item_id;
-                            if (pendingFunctionCalls[itemId] && data.arguments) {
-                                pendingFunctionCalls[itemId].args = data.arguments;
-                            }
-                        } else if (evType === 'response.output_item.done') {
-                            const item = data.item || {};
-                            if (item.type === 'function_call') {
-                                const pending = pendingFunctionCalls[item.id] || {};
-                                onEvent({
-                                    type: 'tool_call',
-                                    id: item.call_id || pending.id || item.id,
-                                    name: item.name || pending.name,
-                                    arguments: item.arguments || pending.args || '{}'
-                                });
-                                delete pendingFunctionCalls[item.id];
-                            }
-                        } else if (evType === 'response.completed') {
-                            for (const itemId of Object.keys(pendingFunctionCalls)) {
-                                const tc = pendingFunctionCalls[itemId];
-                                onEvent({
-                                    type: 'tool_call',
-                                    id: tc.id || itemId,
-                                    name: tc.name,
-                                    arguments: tc.args || '{}'
-                                });
-                                delete pendingFunctionCalls[itemId];
-                            }
-                            if (!hasCompleted) {
-                                hasCompleted = true;
-                                const status = data.response?.status;
-                                const finishReason = status === 'completed' ? 'STOP' : (status ? String(status).toUpperCase() : 'STOP');
-                                onEvent({ type: 'done', finishReason });
-                            }
-                        }
-                    } catch (e) {
-                        if (currentEvent === 'error') {
-                            safeReject(new Error(`OpenAI Responses error: ${dataStr}`));
-                            req.destroy();
-                            return;
-                        }
+                } else if (evType === 'response.function_call_arguments.delta') {
+                    const itemId = data.item_id;
+                    if (!pendingFunctionCalls[itemId]) {
+                        pendingFunctionCalls[itemId] = { id: '', name: '', args: '' };
                     }
+                    pendingFunctionCalls[itemId].args += (data.delta || '');
+                } else if (evType === 'response.function_call_arguments.done') {
+                    const itemId = data.item_id;
+                    if (pendingFunctionCalls[itemId] && data.arguments) {
+                        pendingFunctionCalls[itemId].args = data.arguments;
+                    }
+                } else if (evType === 'response.output_item.done') {
+                    const item = data.item || {};
+                    if (item.type === 'function_call') {
+                        const pending = pendingFunctionCalls[item.id] || {};
+                        onEvent({
+                            type: 'tool_call',
+                            id: item.call_id || pending.id || item.id,
+                            name: item.name || pending.name,
+                            arguments: item.arguments || pending.args || '{}'
+                        });
+                        delete pendingFunctionCalls[item.id];
+                    }
+                } else if (evType === 'response.completed') {
+                    for (const itemId of Object.keys(pendingFunctionCalls)) {
+                        const tc = pendingFunctionCalls[itemId];
+                        onEvent({
+                            type: 'tool_call',
+                            id: tc.id || itemId,
+                            name: tc.name,
+                            arguments: tc.args || '{}'
+                        });
+                        delete pendingFunctionCalls[itemId];
+                    }
+                    if (!hasCompleted) {
+                        hasCompleted = true;
+                        const status = data.response?.status;
+                        const finishReason = status === 'completed' ? 'STOP' : (status ? String(status).toUpperCase() : 'STOP');
+                        onEvent({ type: 'done', finishReason });
+                    }
+                }
+            } catch (e) {
+                if (currentEvent === 'error') {
+                    safeReject(new Error(`OpenAI Responses error: ${dataStr}`));
+                    req.destroy();
+                    return true;
                 }
             }
-        });
-
-        res.on('end', () => {
+            return false;
+        },
+        onStreamEnd: () => {
             if (!hasCompleted) {
                 hasCompleted = true;
                 onEvent({ type: 'done' });
             }
-            safeResolve();
-        });
-        res.on('error', safeReject);
-    });
-
-    req.on('timeout', () => {
-        safeReject(new Error(formatTimeoutError('OpenAI Responses', requestTimeout)));
-        req.destroy();
-    });
-    req.on('error', safeReject);
-
-    if (options.signal) {
-        if (options.signal.aborted) {
-            safeReject(new Error('Aborted by client'));
-            req.destroy();
-        } else {
-            options.signal.addEventListener('abort', () => {
-                safeReject(new Error('Aborted by client'));
-                req.destroy();
-            });
         }
-    }
-
-    req.write(body);
-    req.end();
-    return promise;
+    });
 }
 
 /**
@@ -1123,7 +1091,7 @@ function callOpenAIResponsesStream(options) {
  */
 function callOpenAIStream(options) {
     const requestTimeout = getRequestTimeout(options);
-    const { endpoint, apiKey, model, messages, tools, maxTokens, onEvent } = options;
+    const { endpoint, apiKey, model, messages, tools, maxTokens, signal, onEvent } = options;
 
     if (!options.forceChatCompletions && isOpenAIResponsesModel(model, endpoint)) {
         return callOpenAIResponsesStream(options);
@@ -1132,9 +1100,6 @@ function callOpenAIStream(options) {
     let cleanBase = (endpoint || 'https://api.openai.com').trim().replace(/\/+$/, '');
     cleanBase = cleanBase.replace(/\/+(v1(\/(chat\/completions|models))?)?$/, '');
     const targetUrl = `${cleanBase}/v1/chat/completions`;
-
-    const parsed = new URL(targetUrl);
-    const transport = parsed.protocol === 'https:' ? https : http;
 
     const payload = {
         model,
@@ -1156,158 +1121,104 @@ function callOpenAIStream(options) {
     };
     if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
 
-    const { promise, safeResolve, safeReject } = createSettledPromise();
-
-    const req = transport.request(parsed, { method: 'POST', headers, timeout: requestTimeout }, (res) => {
-        if (res.statusCode < 200 || res.statusCode >= 300) {
-            let errBody = '';
-            res.on('data', chunk => errBody += chunk);
-            res.on('end', () => {
-                // Fall back to /v1/responses if chat completions indicates Responses API is required
-                if (res.statusCode === 400 && errBody.includes('/v1/responses')) {
-                    if (model) RESPONSES_API_MODELS.add(model.toLowerCase());
-                    return safeResolve(callOpenAIResponsesStream(options));
-                }
-                // Retry without reasoning_effort if rejected by endpoint (HTTP 400 or 422)
-                if ((res.statusCode === 400 || res.statusCode === 422) && errBody.includes('reasoning_effort') && !options._reasoningRetried) {
-                    return safeResolve(callOpenAIStream({ ...options, _reasoningRetried: true, omitReasoningEffort: true }));
-                }
-                safeReject(new Error(`OpenAI error (${res.statusCode}): ${errBody}`));
+    let hasCompleted = false;
+    const pendingToolCalls = {}; // index -> { id, name, args }
+    const flushPendingToolCalls = () => {
+        for (const idx of Object.keys(pendingToolCalls)) {
+            const tc = pendingToolCalls[idx];
+            onEvent({
+                type: 'tool_call',
+                id: tc.id,
+                name: tc.name,
+                arguments: tc.args
             });
-            return;
+            delete pendingToolCalls[idx];
         }
+    };
 
-        let buffer = '';
-        let hasCompleted = false;
-        let currentEvent = null;
-        const pendingToolCalls = {}; // index -> { id, name, args }
+    return executeSseStreamRequest({
+        targetUrl,
+        headers,
+        body,
+        requestTimeout,
+        providerName: 'OpenAI',
+        signal,
+        onHttpError: (statusCode, errBody, { safeResolve, safeReject }) => {
+            // Fall back to /v1/responses if chat completions indicates Responses API is required
+            if (statusCode === 400 && errBody.includes('/v1/responses')) {
+                if (model) RESPONSES_API_MODELS.add(model.toLowerCase());
+                return safeResolve(callOpenAIResponsesStream(options));
+            }
+            // Retry without reasoning_effort if rejected by endpoint (HTTP 400 or 422)
+            if ((statusCode === 400 || statusCode === 422) && errBody.includes('reasoning_effort') && !options._reasoningRetried) {
+                return safeResolve(callOpenAIStream({ ...options, _reasoningRetried: true, omitReasoningEffort: true }));
+            }
+            safeReject(new Error(`OpenAI error (${statusCode}): ${errBody}`));
+        },
+        onDataLine: (dataStr, currentEvent, { req, safeReject }) => {
+            if (dataStr === '[DONE]') {
+                flushPendingToolCalls();
+                if (!hasCompleted) {
+                    hasCompleted = true;
+                    onEvent({ type: 'done' });
+                }
+                return false;
+            }
 
-        res.on('data', (chunk) => {
-            buffer += chunk.toString('utf8');
-            const lines = buffer.split('\n');
-            buffer = lines.pop();
+            try {
+                const data = JSON.parse(dataStr);
+                const evType = currentEvent || data.type;
 
-            for (const line of lines) {
-                const trimmed = line.trim();
-                if (!trimmed) {
-                    currentEvent = null;
-                    continue;
+                if (evType === 'error' || data.type === 'error' || Boolean(data.error)) {
+                    const errorObj = data.error;
+                    const errMsg = (typeof errorObj === 'object' && errorObj !== null)
+                        ? (errorObj.message || errorObj.code || JSON.stringify(errorObj))
+                        : (typeof errorObj === 'string' ? errorObj : (data.message || 'Unknown OpenAI error'));
+                    safeReject(new Error(`OpenAI error: ${errMsg}`));
+                    req.destroy();
+                    return true;
                 }
 
-                if (trimmed.startsWith('event:')) {
-                    currentEvent = trimmed.slice(6).trim();
-                    continue;
+                const choice = data.choices?.[0];
+                if (!choice) return false;
+
+                const delta = choice.delta || {};
+                const thoughtText = delta.reasoning_content || delta.reasoning;
+                if (thoughtText) {
+                    onEvent({ type: 'thought', text: thoughtText });
                 }
-
-                if (!trimmed.startsWith('data:')) continue;
-
-                const dataStr = trimmed.slice(5).trim();
-                if (dataStr === '[DONE]') {
-                    // Flush any pending tool calls
-                    for (const idx of Object.keys(pendingToolCalls)) {
-                        const tc = pendingToolCalls[idx];
-                        onEvent({
-                            type: 'tool_call',
-                            id: tc.id,
-                            name: tc.name,
-                            arguments: tc.args
-                        });
+                if (delta.content) {
+                    onEvent({ type: 'text', text: delta.content });
+                }
+                if (Array.isArray(delta.tool_calls)) {
+                    for (const tc of delta.tool_calls) {
+                        const idx = tc.index || 0;
+                        if (!pendingToolCalls[idx]) {
+                            pendingToolCalls[idx] = { id: tc.id || '', name: '', args: '' };
+                        }
+                        if (tc.id) pendingToolCalls[idx].id = tc.id;
+                        if (tc.function?.name) pendingToolCalls[idx].name += tc.function.name;
+                        if (tc.function?.arguments) pendingToolCalls[idx].args += tc.function.arguments;
                     }
+                }
+
+                if (choice.finish_reason) {
+                    flushPendingToolCalls();
                     if (!hasCompleted) {
                         hasCompleted = true;
-                        onEvent({ type: 'done' });
+                        onEvent({ type: 'done', finishReason: choice.finish_reason });
                     }
-                    continue;
                 }
-
-                try {
-                    const data = JSON.parse(dataStr);
-                    const evType = currentEvent || data.type;
-
-                    if (evType === 'error' || data.type === 'error' || Boolean(data.error)) {
-                        const errorObj = data.error;
-                        const errMsg = (typeof errorObj === 'object' && errorObj !== null)
-                            ? (errorObj.message || errorObj.code || JSON.stringify(errorObj))
-                            : (typeof errorObj === 'string' ? errorObj : (data.message || 'Unknown OpenAI error'));
-                        safeReject(new Error(`OpenAI error: ${errMsg}`));
-                        req.destroy();
-                        return;
-                    }
-
-                    const choice = data.choices?.[0];
-                    if (!choice) continue;
-
-                    const delta = choice.delta || {};
-                    const thoughtText = delta.reasoning_content || delta.reasoning;
-                    if (thoughtText) {
-                        onEvent({ type: 'thought', text: thoughtText });
-                    }
-                    if (delta.content) {
-                        onEvent({ type: 'text', text: delta.content });
-                    }
-                    if (Array.isArray(delta.tool_calls)) {
-                        for (const tc of delta.tool_calls) {
-                            const idx = tc.index || 0;
-                            if (!pendingToolCalls[idx]) {
-                                pendingToolCalls[idx] = { id: tc.id || '', name: '', args: '' };
-                            }
-                            if (tc.id) pendingToolCalls[idx].id = tc.id;
-                            if (tc.function?.name) pendingToolCalls[idx].name += tc.function.name;
-                            if (tc.function?.arguments) pendingToolCalls[idx].args += tc.function.arguments;
-                        }
-                    }
-
-                    if (choice.finish_reason) {
-                        for (const idx of Object.keys(pendingToolCalls)) {
-                            const tc = pendingToolCalls[idx];
-                            onEvent({
-                                type: 'tool_call',
-                                id: tc.id,
-                                name: tc.name,
-                                arguments: tc.args
-                            });
-                            delete pendingToolCalls[idx];
-                        }
-                        if (!hasCompleted) {
-                            hasCompleted = true;
-                            onEvent({ type: 'done', finishReason: choice.finish_reason });
-                        }
-                    }
-                } catch (e) {
-                    if (currentEvent === 'error') {
-                        safeReject(new Error(`OpenAI error: ${dataStr}`));
-                        req.destroy();
-                        return;
-                    }
+            } catch (e) {
+                if (currentEvent === 'error') {
+                    safeReject(new Error(`OpenAI error: ${dataStr}`));
+                    req.destroy();
+                    return true;
                 }
             }
-        });
-
-        res.on('end', () => safeResolve());
-        res.on('error', safeReject);
-    });
-
-    req.on('timeout', () => {
-        safeReject(new Error(formatTimeoutError('OpenAI', requestTimeout)));
-        req.destroy();
-    });
-    req.on('error', safeReject);
-
-    if (options.signal) {
-        if (options.signal.aborted) {
-            safeReject(new Error('Aborted by client'));
-            req.destroy();
-        } else {
-            options.signal.addEventListener('abort', () => {
-                safeReject(new Error('Aborted by client'));
-                req.destroy();
-            });
+            return false;
         }
-    }
-
-    req.write(body);
-    req.end();
-    return promise;
+    });
 }
 
 /**
@@ -1379,53 +1290,48 @@ function normalizeJsonSchema(schema, isRoot = true) {
     return out;
 }
 
-/**
- * Converts Gemini tool declarations to Anthropic tools array.
- */
-function geminiToolsToAnthropic(tools) {
-    if (!Array.isArray(tools)) return undefined;
-    const anthropicTools = [];
+function extractGeminiFunctionDeclarations(tools) {
+    if (!Array.isArray(tools)) return [];
+    const declsOut = [];
     for (const toolGroup of tools) {
         if (!toolGroup) continue;
         const decls = toolGroup.functionDeclarations || toolGroup.function_declarations || (toolGroup.name ? [toolGroup] : null);
         if (Array.isArray(decls)) {
             for (const fn of decls) {
-                if (!fn || !fn.name) continue;
-                anthropicTools.push({
-                    name: fn.name,
-                    description: fn.description || '',
-                    input_schema: normalizeJsonSchema(fn.parameters || { type: 'object', properties: {} })
-                });
+                if (fn && fn.name) declsOut.push(fn);
             }
         }
     }
-    return anthropicTools.length > 0 ? anthropicTools : undefined;
+    return declsOut;
+}
+
+/**
+ * Converts Gemini tool declarations to Anthropic tools array.
+ */
+function geminiToolsToAnthropic(tools) {
+    const decls = extractGeminiFunctionDeclarations(tools);
+    if (decls.length === 0) return undefined;
+    return decls.map(fn => ({
+        name: fn.name,
+        description: fn.description || '',
+        input_schema: normalizeJsonSchema(fn.parameters || { type: 'object', properties: {} })
+    }));
 }
 
 /**
  * Converts Gemini tool declarations to OpenAI tools array.
  */
 function geminiToolsToOpenAI(tools) {
-    if (!Array.isArray(tools)) return undefined;
-    const openAiTools = [];
-    for (const toolGroup of tools) {
-        if (!toolGroup) continue;
-        const decls = toolGroup.functionDeclarations || toolGroup.function_declarations || (toolGroup.name ? [toolGroup] : null);
-        if (Array.isArray(decls)) {
-            for (const fn of decls) {
-                if (!fn || !fn.name) continue;
-                openAiTools.push({
-                    type: 'function',
-                    function: {
-                        name: fn.name,
-                        description: fn.description || '',
-                        parameters: normalizeJsonSchema(fn.parameters || { type: 'object', properties: {} })
-                    }
-                });
-            }
+    const decls = extractGeminiFunctionDeclarations(tools);
+    if (decls.length === 0) return undefined;
+    return decls.map(fn => ({
+        type: 'function',
+        function: {
+            name: fn.name,
+            description: fn.description || '',
+            parameters: normalizeJsonSchema(fn.parameters || { type: 'object', properties: {} })
         }
-    }
-    return openAiTools.length > 0 ? openAiTools : undefined;
+    }));
 }
 
 /**
@@ -1578,6 +1484,18 @@ function formatToolSuccessFallback(toolName) {
 }
 
 
+function tryDecodeBase64Utf8(rawData) {
+    if (typeof rawData !== 'string') return null;
+    try {
+        const buf = Buffer.from(rawData, 'base64');
+        const utf8 = buf.toString('utf8');
+        if (!utf8.includes('\ufffd') && utf8.length > 0) {
+            return utf8;
+        }
+    } catch {}
+    return null;
+}
+
 /**
  * Safely extracts the response payload from a function response or part,
  * resolving nested parts (including base64 decoded data), output fields, and error details.
@@ -1641,39 +1559,13 @@ function extractResponseValue(resp, part, fallbackToolName) {
                     textParts.push(typeof p.content === 'string' ? p.content : JSON.stringify(p.content));
                 } else if (p.inlineData?.data || p.inline_data?.data) {
                     const rawData = p.inlineData?.data || p.inline_data?.data;
-                    let decoded = null;
-                    if (typeof rawData === 'string') {
-                        try {
-                            const buf = Buffer.from(rawData, 'base64');
-                            const utf8 = buf.toString('utf8');
-                            if (!utf8.includes('\ufffd') && utf8.length > 0) {
-                                decoded = utf8;
-                            }
-                        } catch {}
-                    }
-                    textParts.push(decoded || rawData);
+                    textParts.push(tryDecodeBase64Utf8(rawData) || rawData);
                 } else if (p.data !== undefined) {
                     if (typeof p.data === 'string') {
-                        let decoded = null;
-                        try {
-                            const buf = Buffer.from(p.data, 'base64');
-                            const utf8 = buf.toString('utf8');
-                            if (!utf8.includes('\ufffd') && utf8.length > 0) {
-                                decoded = utf8;
-                            }
-                        } catch {}
-                        textParts.push(decoded || p.data);
+                        textParts.push(tryDecodeBase64Utf8(p.data) || p.data);
                     } else if (typeof p.data === 'object' && p.data !== null) {
                         if (typeof p.data.data === 'string') {
-                            let decoded = null;
-                            try {
-                                const buf = Buffer.from(p.data.data, 'base64');
-                                const utf8 = buf.toString('utf8');
-                                if (!utf8.includes('\ufffd') && utf8.length > 0) {
-                                    decoded = utf8;
-                                }
-                            } catch {}
-                            textParts.push(decoded || p.data.data);
+                            textParts.push(tryDecodeBase64Utf8(p.data.data) || p.data.data);
                         } else {
                             const unpackedData = unpackProtobufValue(p.data);
                             if (typeof unpackedData === 'string') {
@@ -1917,233 +1809,236 @@ function prepareToolResponses(parts, contentsOrResolver, itemIndex, consumedCont
     return { consumedParts, fnRespMap };
 }
 
-/**
- * Converts Gemini contents and systemInstruction into Anthropic Messages format.
- */
-function geminiContentsToAnthropic(contents, systemInstruction, options = {}) {
-    const toolResolver = options.toolResolver || (options.toolOutputs ? createToolOutputResolver(options.toolOutputs) : null);
-    let system = '';
-    if (systemInstruction) {
-        if (typeof systemInstruction === 'string') {
-            system = systemInstruction;
-        } else if (Array.isArray(systemInstruction.parts)) {
-            system = systemInstruction.parts.map(p => p.text || '').join('\n');
-        }
+function extractSystemInstructionText(systemInstruction) {
+    if (!systemInstruction) return '';
+    if (typeof systemInstruction === 'string') return systemInstruction;
+    if (Array.isArray(systemInstruction.parts)) {
+        return systemInstruction.parts.map(p => p.text || '').join('\n');
     }
+    return '';
+}
 
-    const rawMessages = [];
+function extractCandidateCallId(item) {
+    const partWithId = item?.parts?.find(p => p?.id || p?.call_id || p?.callId || p?.tool_call_id);
+    return item?.call_id || item?.callId || item?.id || item?.tool_call_id ||
+           partWithId?.id || partWithId?.call_id || partWithId?.callId || partWithId?.tool_call_id;
+}
+
+function formatToolResponseString(respVal, toolName) {
+    let val = respVal;
+    if (isEffectivelyEmpty(val)) {
+        val = formatToolSuccessFallback(toolName);
+    }
+    return typeof val === 'string' ? val : JSON.stringify(val !== undefined ? val : {});
+}
+
+function normalizeGeminiTurns(contents, options = {}, idPrefix = 'call') {
+    const toolResolver = options.toolResolver || (options.toolOutputs ? createToolOutputResolver(options.toolOutputs) : null);
+    const turns = [];
     const knownToolCallIds = new Set();
     const pendingCalls = [];
     const consumedContentIndices = new Set();
     const consumedContentParts = new Set();
 
-    function flushPendingAnthropicToolResults() {
-        if (pendingCalls.length === 0) return;
-        const toolResults = [];
+    function drainPendingCalls(targetArray) {
         while (pendingCalls.length > 0) {
             const call = pendingCalls.shift();
-            let resp = toolResolver ? toolResolver(call.id, call.name) : null;
-            if (isEffectivelyEmpty(resp)) {
-                resp = formatToolSuccessFallback(call.name);
-            }
-            toolResults.push({
-                type: 'tool_result',
-                tool_use_id: call.id,
-                content: typeof resp === 'string' ? resp : JSON.stringify(resp !== undefined ? resp : {})
-            });
-        }
-        if (toolResults.length > 0) {
-            rawMessages.push({
-                role: 'user',
-                content: toolResults
+            const resp = toolResolver ? toolResolver(call.id, call.name) : null;
+            targetArray.push({
+                id: call.id,
+                content: formatToolResponseString(resp, call.name)
             });
         }
     }
 
-    if (Array.isArray(contents)) {
-        for (let cIdx = 0; cIdx < contents.length; cIdx++) {
-            if (consumedContentIndices.has(cIdx)) continue;
-            const item = contents[cIdx];
-            if (!item) continue;
+    if (!Array.isArray(contents)) return turns;
 
-            const role = item.role === 'model' ? 'assistant' : 'user';
+    for (let cIdx = 0; cIdx < contents.length; cIdx++) {
+        if (consumedContentIndices.has(cIdx)) continue;
+        const item = contents[cIdx];
+        if (!item || !Array.isArray(item.parts)) continue;
 
-            if (item.role === 'model') {
-                if (pendingCalls.length > 0 && Array.isArray(item.parts)) {
-                    const hasFnCall = item.parts.some(p => getFunctionCall(p));
-                    if (!hasFnCall) {
-                        const textParts = item.parts.filter(p => typeof p?.text === 'string' && p.text.trim().length > 0 && !p.thought);
-                        const allText = textParts.map(p => p.text).join('\n');
-                        const partWithId = item.parts.find(p => p?.id || p?.call_id || p?.callId || p?.tool_call_id);
-                        const candCallId = item.call_id || item.callId || item.id || item.tool_call_id ||
-                                           partWithId?.id || partWithId?.call_id || partWithId?.callId || partWithId?.tool_call_id;
-                        if (allText && isToolExecutionOutput(allText, candCallId, pendingCalls)) {
-                            const targetCallIndex = candCallId ? pendingCalls.findIndex(c => (c.id || c.callId) === candCallId) : -1;
-                            const targetCall = targetCallIndex !== -1 ? pendingCalls.splice(targetCallIndex, 1)[0] : pendingCalls.shift();
-                            const targetName = targetCall?.name;
-                            const callId = resolveToolCallId({ id: candCallId || targetCall?.id, name: targetName }, [targetCall], knownToolCallIds, 'toolu');
-                            let contentStr = allText;
-                            if (isEffectivelyEmpty(contentStr)) {
-                                contentStr = formatToolSuccessFallback(targetName);
-                            }
-                            const toolResults = [{
-                                type: 'tool_result',
-                                tool_use_id: callId,
-                                content: contentStr
-                            }];
-                            while (pendingCalls.length > 0) {
-                                const call = pendingCalls.shift();
-                                let resp = toolResolver ? toolResolver(call.id, call.name) : null;
-                                if (isEffectivelyEmpty(resp)) {
-                                    resp = formatToolSuccessFallback(call.name);
-                                }
-                                toolResults.push({
-                                    type: 'tool_result',
-                                    tool_use_id: call.id,
-                                    content: typeof resp === 'string' ? resp : JSON.stringify(resp !== undefined ? resp : {})
-                                });
-                            }
-                            rawMessages.push({
-                                role: 'user',
-                                content: toolResults
-                            });
-                            continue;
+        if (item.role === 'model') {
+            if (pendingCalls.length > 0 && !item.parts.some(p => getFunctionCall(p))) {
+                const textParts = item.parts.filter(p => typeof p?.text === 'string' && p.text.trim().length > 0 && !p.thought);
+                const allText = textParts.map(p => p.text).join('\n');
+                const candCallId = extractCandidateCallId(item);
+                if (allText && isToolExecutionOutput(allText, candCallId, pendingCalls)) {
+                    const targetCallIndex = candCallId ? pendingCalls.findIndex(c => (c.id || c.callId) === candCallId) : -1;
+                    const targetCall = targetCallIndex !== -1 ? pendingCalls.splice(targetCallIndex, 1)[0] : pendingCalls.shift();
+                    const targetName = targetCall?.name;
+                    const callId = resolveToolCallId({ id: candCallId || targetCall?.id, name: targetName }, [targetCall], knownToolCallIds, idPrefix);
+                    const toolResults = [{
+                        id: callId,
+                        content: formatToolResponseString(allText, targetName)
+                    }];
+                    drainPendingCalls(toolResults);
+                    turns.push({ role: 'user', toolResults, texts: [], images: [] });
+                    continue;
+                }
+            }
+
+            if (pendingCalls.length > 0) {
+                const flushed = [];
+                drainPendingCalls(flushed);
+                if (flushed.length > 0) {
+                    turns.push({ role: 'user', toolResults: flushed, texts: [], images: [] });
+                }
+            }
+
+            const texts = [];
+            const toolCalls = [];
+            for (const part of item.parts) {
+                const fnCall = getFunctionCall(part);
+                if (part.text && !part.thought && !fnCall) {
+                    texts.push(part.text);
+                }
+                if (fnCall) {
+                    const callId = fnCall.id || `${idPrefix}_${crypto.randomUUID().slice(0, 8)}`;
+                    knownToolCallIds.add(callId);
+                    pendingCalls.push({ id: callId, name: fnCall.name });
+                    toolCalls.push({
+                        id: callId,
+                        name: fnCall.name,
+                        args: fnCall.args
+                    });
+                }
+            }
+            if (texts.length > 0 || toolCalls.length > 0) {
+                turns.push({ role: 'assistant', texts, toolCalls });
+            }
+        } else {
+            const { consumedParts, fnRespMap } = prepareToolResponses(
+                item.parts,
+                contents,
+                cIdx,
+                consumedContentIndices,
+                toolResolver,
+                consumedContentParts
+            );
+
+            const toolResults = [];
+            const texts = [];
+            const images = [];
+            let hasFnResp = false;
+
+            for (const part of item.parts) {
+                if (consumedParts.has(part) || consumedContentParts.has(part)) continue;
+                const fnCall = getFunctionCall(part);
+                const fnResp = fnRespMap.get(part);
+
+                if (fnResp) {
+                    hasFnResp = true;
+                    const callId = resolveToolCallId(fnResp, pendingCalls, knownToolCallIds, idPrefix);
+                    fnResp.id = callId;
+
+                    if (isEffectivelyEmpty(fnResp.response) && toolResolver) {
+                        const hydrated = toolResolver(callId, fnResp.name);
+                        if (hydrated && !isEffectivelyEmpty(hydrated)) {
+                            fnResp.response = hydrated;
                         }
                     }
+
+                    toolResults.push({
+                        id: callId,
+                        content: formatToolResponseString(fnResp.response, fnResp.name)
+                    });
+                } else if (part.text && !part.thought && !fnCall) {
+                    texts.push(part.text);
                 }
 
-                flushPendingAnthropicToolResults();
+                const rawData = part.inlineData || part.inline_data;
+                if (rawData) {
+                    images.push({
+                        mimeType: rawData.mimeType || rawData.mime_type || 'image/jpeg',
+                        data: rawData.data
+                    });
+                }
+            }
 
-                const blocks = [];
-                if (Array.isArray(item.parts)) {
-                    for (const part of item.parts) {
-                        const fnCall = getFunctionCall(part);
-                        if (part.text && !part.thought && !fnCall) {
-                            blocks.push({ type: 'text', text: part.text });
-                        }
-                        if (fnCall) {
-                            const callId = fnCall.id || `toolu_${crypto.randomUUID().slice(0, 8)}`;
-                            knownToolCallIds.add(callId);
-                            pendingCalls.push({ id: callId, name: fnCall.name });
+            if (!hasFnResp && pendingCalls.length > 0 && (texts.length > 0 || images.length > 0)) {
+                const allText = texts.join('\n');
+                const candCallId = extractCandidateCallId(item);
+                if (isToolExecutionOutput(allText, candCallId, pendingCalls)) {
+                    const targetCall = (candCallId && pendingCalls.find(c => (c.id || c.callId) === candCallId)) || pendingCalls[0];
+                    const targetName = targetCall?.name;
+                    const callId = resolveToolCallId({ id: candCallId, name: targetName }, pendingCalls, knownToolCallIds, idPrefix);
+                    toolResults.push({
+                        id: callId,
+                        content: formatToolResponseString(allText, targetName)
+                    });
+                    texts.length = 0;
+                }
+            }
 
-                            let toolInput = fnCall.args || {};
-                            if (typeof toolInput === 'string') {
-                                try {
-                                    toolInput = JSON.parse(toolInput);
-                                } catch {
-                                    toolInput = {};
-                                }
-                            }
+            drainPendingCalls(toolResults);
 
-                            blocks.push({
-                                type: 'tool_use',
-                                id: callId,
-                                name: fnCall.name,
-                                input: toolInput
-                            });
-                        }
+            if (toolResults.length > 0 || texts.length > 0 || images.length > 0) {
+                turns.push({ role: 'user', toolResults, texts, images });
+            }
+        }
+    }
+
+    return turns;
+}
+
+/**
+ * Converts Gemini contents and systemInstruction into Anthropic Messages format.
+ */
+function geminiContentsToAnthropic(contents, systemInstruction, options = {}) {
+    const system = extractSystemInstructionText(systemInstruction);
+    const turns = normalizeGeminiTurns(contents, options, 'toolu');
+    const rawMessages = [];
+
+    for (const turn of turns) {
+        if (turn.role === 'assistant') {
+            const blocks = [];
+            for (const text of turn.texts) {
+                blocks.push({ type: 'text', text });
+            }
+            for (const tc of turn.toolCalls) {
+                let toolInput = tc.args || {};
+                if (typeof toolInput === 'string') {
+                    try {
+                        toolInput = JSON.parse(toolInput);
+                    } catch {
+                        toolInput = {};
                     }
                 }
-                if (blocks.length > 0) {
-                    rawMessages.push({ role, content: blocks });
-                }
-            } else {
-                if (Array.isArray(item.parts)) {
-                    const { consumedParts, fnRespMap } = prepareToolResponses(item.parts, contents, cIdx, consumedContentIndices, toolResolver, consumedContentParts);
-
-                    const toolResults = [];
-                    const userBlocks = [];
-                    let hasFnResp = false;
-
-                    for (const part of item.parts) {
-                        if (consumedParts.has(part) || consumedContentParts.has(part)) continue;
-                        const fnCall = getFunctionCall(part);
-                        const fnResp = fnRespMap.get(part);
-
-                        if (part.text && !part.thought && !fnCall && !fnResp) {
-                            userBlocks.push({ type: 'text', text: part.text });
-                        }
-                        if (fnResp) {
-                            hasFnResp = true;
-                            const callId = resolveToolCallId(fnResp, pendingCalls, knownToolCallIds, 'toolu');
-                            fnResp.id = callId;
-
-                            if (isEffectivelyEmpty(fnResp.response) && toolResolver) {
-                                const hydrated = toolResolver(callId, fnResp.name);
-                                if (hydrated && !isEffectivelyEmpty(hydrated)) {
-                                    fnResp.response = hydrated;
-                                }
-                            }
-
-                            let respVal = fnResp.response;
-                            if (isEffectivelyEmpty(respVal)) {
-                                respVal = formatToolSuccessFallback(fnResp.name);
-                            }
-                            let contentStr = typeof respVal === 'string' ? respVal : JSON.stringify(respVal !== undefined ? respVal : {});
-                            toolResults.push({
-                                type: 'tool_result',
-                                tool_use_id: callId,
-                                content: contentStr
-                            });
-                        }
-                        if (part.inlineData) {
-                            userBlocks.push({
-                                type: 'image',
-                                source: {
-                                    type: 'base64',
-                                    media_type: part.inlineData.mimeType || 'image/jpeg',
-                                    data: part.inlineData.data
-                                }
-                            });
-                        }
+                blocks.push({
+                    type: 'tool_use',
+                    id: tc.id,
+                    name: tc.name,
+                    input: toolInput
+                });
+            }
+            if (blocks.length > 0) {
+                rawMessages.push({ role: 'assistant', content: blocks });
+            }
+        } else {
+            const content = [];
+            for (const tr of turn.toolResults) {
+                content.push({
+                    type: 'tool_result',
+                    tool_use_id: tr.id,
+                    content: tr.content
+                });
+            }
+            for (const text of turn.texts) {
+                content.push({ type: 'text', text });
+            }
+            for (const img of turn.images) {
+                content.push({
+                    type: 'image',
+                    source: {
+                        type: 'base64',
+                        media_type: img.mimeType,
+                        data: img.data
                     }
-
-                    // If this turn had NO functionResponse parts, BUT there are pending tool calls:
-                    if (!hasFnResp && pendingCalls.length > 0 && userBlocks.length > 0) {
-                        const textBlocks = userBlocks.filter(b => b.type === 'text');
-                        const allText = textBlocks.map(b => b.text).join('\n');
-                        const partWithId = item.parts?.find(p => p?.id || p?.call_id || p?.callId || p?.tool_call_id);
-                        const candCallId = item.call_id || item.callId || item.id || item.tool_call_id ||
-                                           partWithId?.id || partWithId?.call_id || partWithId?.callId || partWithId?.tool_call_id;
-                        if (isToolExecutionOutput(allText, candCallId, pendingCalls)) {
-                            const targetCall = (candCallId && pendingCalls.find(c => (c.id || c.callId) === candCallId)) || pendingCalls[0];
-                            const targetName = targetCall?.name;
-                            const callId = resolveToolCallId({ id: candCallId, name: targetName }, pendingCalls, knownToolCallIds, 'toolu');
-                            let contentStr = allText;
-                            if (isEffectivelyEmpty(contentStr)) {
-                                contentStr = formatToolSuccessFallback(targetName);
-                            }
-                            toolResults.push({
-                                type: 'tool_result',
-                                tool_use_id: callId,
-                                content: contentStr
-                            });
-                            const nonTextBlocks = userBlocks.filter(b => b.type !== 'text');
-                            userBlocks.length = 0;
-                            userBlocks.push(...nonTextBlocks);
-                        }
-                    }
-
-                    if (pendingCalls.length > 0) {
-                        while (pendingCalls.length > 0) {
-                            const call = pendingCalls.shift();
-                            let resp = toolResolver ? toolResolver(call.id, call.name) : null;
-                            if (isEffectivelyEmpty(resp)) {
-                                resp = formatToolSuccessFallback(call.name);
-                            }
-                            toolResults.push({
-                                type: 'tool_result',
-                                tool_use_id: call.id,
-                                content: typeof resp === 'string' ? resp : JSON.stringify(resp !== undefined ? resp : {})
-                            });
-                        }
-                    }
-
-                    const combined = [...toolResults, ...userBlocks];
-                    if (combined.length > 0) {
-                        rawMessages.push({ role: 'user', content: combined });
-                    }
-                }
+                });
+            }
+            if (content.length > 0) {
+                rawMessages.push({ role: 'user', content });
             }
         }
     }
@@ -2156,226 +2051,53 @@ function geminiContentsToAnthropic(contents, systemInstruction, options = {}) {
  * Converts Gemini contents and systemInstruction into OpenAI chat completion messages array.
  */
 function geminiContentsToOpenAI(contents, systemInstruction, options = {}) {
-    const toolResolver = options.toolResolver || (options.toolOutputs ? createToolOutputResolver(options.toolOutputs) : null);
     const messages = [];
-    if (systemInstruction) {
-        let sysText = '';
-        if (typeof systemInstruction === 'string') {
-            sysText = systemInstruction;
-        } else if (Array.isArray(systemInstruction.parts)) {
-            sysText = systemInstruction.parts.map(p => p.text || '').join('\n');
-        }
-        if (sysText.trim()) {
-            messages.push({ role: 'system', content: sysText.trim() });
-        }
+    const sysText = extractSystemInstructionText(systemInstruction).trim();
+    if (sysText) {
+        messages.push({ role: 'system', content: sysText });
     }
 
-    const knownToolCallIds = new Set();
-    const pendingCalls = [];
-    const consumedContentIndices = new Set();
-    const consumedContentParts = new Set();
-
-    function flushPendingOpenAIToolResults() {
-        if (pendingCalls.length === 0) return;
-        while (pendingCalls.length > 0) {
-            const call = pendingCalls.shift();
-            let resp = toolResolver ? toolResolver(call.id, call.name) : null;
-            if (isEffectivelyEmpty(resp)) {
-                resp = formatToolSuccessFallback(call.name);
+    const turns = normalizeGeminiTurns(contents, options, 'call');
+    for (const turn of turns) {
+        if (turn.role === 'assistant') {
+            const msg = { role: 'assistant' };
+            if (turn.texts.length > 0) msg.content = turn.texts.join('\n');
+            if (turn.toolCalls.length > 0) {
+                msg.tool_calls = turn.toolCalls.map(tc => ({
+                    id: tc.id,
+                    type: 'function',
+                    function: {
+                        name: tc.name,
+                        arguments: typeof tc.args === 'string' ? tc.args : JSON.stringify(tc.args || {})
+                    }
+                }));
             }
-            messages.push({
-                role: 'tool',
-                tool_call_id: call.id,
-                content: typeof resp === 'string' ? resp : JSON.stringify(resp !== undefined ? resp : {})
-            });
-        }
-    }
-
-    if (Array.isArray(contents)) {
-        for (let cIdx = 0; cIdx < contents.length; cIdx++) {
-            if (consumedContentIndices.has(cIdx)) continue;
-            const item = contents[cIdx];
-            if (!item) continue;
-
-            if (item.role === 'model') {
-                if (pendingCalls.length > 0 && Array.isArray(item.parts)) {
-                    const hasFnCall = item.parts.some(p => getFunctionCall(p));
-                    if (!hasFnCall) {
-                        const textParts = item.parts.filter(p => typeof p?.text === 'string' && p.text.trim().length > 0 && !p.thought);
-                        const allText = textParts.map(p => p.text).join('\n');
-                        const partWithId = item.parts.find(p => p?.id || p?.call_id || p?.callId || p?.tool_call_id);
-                        const candCallId = item.call_id || item.callId || item.id || item.tool_call_id ||
-                                           partWithId?.id || partWithId?.call_id || partWithId?.callId || partWithId?.tool_call_id;
-                        if (allText && isToolExecutionOutput(allText, candCallId, pendingCalls)) {
-                            const targetCallIndex = candCallId ? pendingCalls.findIndex(c => (c.id || c.callId) === candCallId) : -1;
-                            const targetCall = targetCallIndex !== -1 ? pendingCalls.splice(targetCallIndex, 1)[0] : pendingCalls.shift();
-                            const targetName = targetCall?.name;
-                            const callId = resolveToolCallId({ id: candCallId || targetCall?.id, name: targetName }, [targetCall], knownToolCallIds, 'call');
-                            let contentStr = allText;
-                            if (isEffectivelyEmpty(contentStr)) {
-                                contentStr = formatToolSuccessFallback(targetName);
-                            }
-                            messages.push({
-                                role: 'tool',
-                                tool_call_id: callId,
-                                content: contentStr
-                            });
-                            while (pendingCalls.length > 0) {
-                                const call = pendingCalls.shift();
-                                let resp = toolResolver ? toolResolver(call.id, call.name) : null;
-                                if (isEffectivelyEmpty(resp)) {
-                                    resp = formatToolSuccessFallback(call.name);
-                                }
-                                messages.push({
-                                    role: 'tool',
-                                    tool_call_id: call.id,
-                                    content: typeof resp === 'string' ? resp : JSON.stringify(resp !== undefined ? resp : {})
-                                });
-                            }
-                            continue;
-                        }
+            if (msg.content || msg.tool_calls) {
+                messages.push(msg);
+            }
+        } else {
+            for (const tr of turn.toolResults) {
+                messages.push({
+                    role: 'tool',
+                    tool_call_id: tr.id,
+                    content: tr.content
+                });
+            }
+            if (turn.texts.length > 0 || turn.images.length > 0) {
+                if (turn.images.length > 0) {
+                    const content = [];
+                    if (turn.texts.length > 0) {
+                        content.push({ type: 'text', text: turn.texts.join('\n') });
                     }
-                }
-
-                flushPendingOpenAIToolResults();
-
-                const textParts = [];
-                const toolCalls = [];
-
-                if (Array.isArray(item.parts)) {
-                    for (const part of item.parts) {
-                        const fnCall = getFunctionCall(part);
-                        if (part.text && !part.thought && !fnCall) {
-                            textParts.push(part.text);
-                        }
-                        if (fnCall) {
-                            const callId = fnCall.id || `call_${crypto.randomUUID().slice(0, 8)}`;
-                            knownToolCallIds.add(callId);
-                            pendingCalls.push({ id: callId, name: fnCall.name });
-                            toolCalls.push({
-                                id: callId,
-                                type: 'function',
-                                function: {
-                                    name: fnCall.name,
-                                    arguments: typeof fnCall.args === 'string'
-                                        ? fnCall.args
-                                        : JSON.stringify(fnCall.args || {})
-                                }
-                            });
-                        }
+                    for (const img of turn.images) {
+                        content.push({
+                            type: 'image_url',
+                            image_url: { url: `data:${img.mimeType};base64,${img.data}` }
+                        });
                     }
-                }
-
-                const msg = { role: 'assistant' };
-                if (textParts.length > 0) msg.content = textParts.join('\n');
-                if (toolCalls.length > 0) msg.tool_calls = toolCalls;
-                if (msg.content || msg.tool_calls) {
-                    messages.push(msg);
-                }
-            } else {
-                if (Array.isArray(item.parts)) {
-                    const toolMessages = [];
-                    const userTextParts = [];
-                    const userImageParts = [];
-
-                    const { consumedParts, fnRespMap } = prepareToolResponses(item.parts, contents, cIdx, consumedContentIndices, toolResolver, consumedContentParts);
-
-                    let hasFnResp = false;
-                    for (const part of item.parts) {
-                        if (consumedParts.has(part) || consumedContentParts.has(part)) continue;
-                        const fnResp = fnRespMap.get(part);
-                        if (fnResp) {
-                            hasFnResp = true;
-                            const callId = resolveToolCallId(fnResp, pendingCalls, knownToolCallIds, 'call');
-                            fnResp.id = callId;
-
-                            if (isEffectivelyEmpty(fnResp.response) && toolResolver) {
-                                const hydrated = toolResolver(callId, fnResp.name);
-                                if (hydrated && !isEffectivelyEmpty(hydrated)) {
-                                    fnResp.response = hydrated;
-                                }
-                            }
-
-                            let respVal = fnResp.response;
-                            if (isEffectivelyEmpty(respVal)) {
-                                respVal = formatToolSuccessFallback(fnResp.name);
-                            }
-                            toolMessages.push({
-                                role: 'tool',
-                                tool_call_id: callId,
-                                content: typeof respVal === 'string'
-                                    ? respVal
-                                    : JSON.stringify(respVal !== undefined ? respVal : {})
-                            });
-                        } else if (part.text) {
-                            userTextParts.push(part.text);
-                        } else if (part.inlineData || part.inline_data) {
-                            const rawData = part.inlineData || part.inline_data;
-                            userImageParts.push({
-                                type: 'image_url',
-                                image_url: {
-                                    url: `data:${rawData.mimeType || rawData.mime_type || 'image/jpeg'};base64,${rawData.data}`
-                                }
-                            });
-                        }
-                    }
-
-                    // If this turn had NO functionResponse parts, BUT there are pending tool calls:
-                    if (!hasFnResp && pendingCalls.length > 0 && (userTextParts.length > 0 || userImageParts.length > 0)) {
-                        const allText = userTextParts.join('\n');
-                        const partWithId = item.parts?.find(p => p?.id || p?.call_id || p?.callId || p?.tool_call_id);
-                        const candCallId = item.call_id || item.callId || item.id || item.tool_call_id ||
-                                           partWithId?.id || partWithId?.call_id || partWithId?.callId || partWithId?.tool_call_id;
-                        if (isToolExecutionOutput(allText, candCallId, pendingCalls)) {
-                            const targetCall = (candCallId && pendingCalls.find(c => (c.id || c.callId) === candCallId)) || pendingCalls[0];
-                            const targetName = targetCall?.name;
-                            const callId = resolveToolCallId({ id: candCallId, name: targetName }, pendingCalls, knownToolCallIds, 'call');
-                            let respContent = allText;
-                            if (isEffectivelyEmpty(respContent)) {
-                                respContent = formatToolSuccessFallback(targetName);
-                            }
-                            toolMessages.push({
-                                role: 'tool',
-                                tool_call_id: callId,
-                                content: respContent
-                            });
-                            userTextParts.length = 0;
-                        }
-                    }
-
-                    if (pendingCalls.length > 0) {
-                        while (pendingCalls.length > 0) {
-                            const call = pendingCalls.shift();
-                            let resp = toolResolver ? toolResolver(call.id, call.name) : null;
-                            if (isEffectivelyEmpty(resp)) {
-                                resp = formatToolSuccessFallback(call.name);
-                            }
-                            toolMessages.push({
-                                role: 'tool',
-                                tool_call_id: call.id,
-                                content: typeof resp === 'string' ? resp : JSON.stringify(resp !== undefined ? resp : {})
-                            });
-                        }
-                    }
-
-                    // Tool responses must immediately follow the assistant tool_calls in ChatML
-                    for (const tm of toolMessages) {
-                        messages.push(tm);
-                    }
-
-                    // Accompanying user text / media emitted after tool responses
-                    if (userTextParts.length > 0 || userImageParts.length > 0) {
-                        if (userImageParts.length > 0) {
-                            const content = [];
-                            if (userTextParts.length > 0) {
-                                content.push({ type: 'text', text: userTextParts.join('\n') });
-                            }
-                            content.push(...userImageParts);
-                            messages.push({ role: 'user', content });
-                        } else {
-                            messages.push({ role: 'user', content: userTextParts.join('\n') });
-                        }
-                    }
+                    messages.push({ role: 'user', content });
+                } else {
+                    messages.push({ role: 'user', content: turn.texts.join('\n') });
                 }
             }
         }

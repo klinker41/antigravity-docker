@@ -310,7 +310,10 @@ class ModelsManager {
             };
         }).filter(m => m.id.length > 0) : [];
 
-        const providerTimeout = parseInt(providerData.timeout, 10);
+        const rawProviderTimeout = (providerData.timeout === undefined && isUpdate && existing)
+            ? existing.timeout
+            : providerData.timeout;
+        const providerTimeout = parseInt(rawProviderTimeout, 10);
         const cleanProvider = {
             id,
             name: String(providerData.name || id).trim(),

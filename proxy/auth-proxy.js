@@ -30,7 +30,7 @@ const {
     SESSION_TTL_MS
 } = require('./lib/session.js');
 
-const { safeCompare } = require('./lib/security.js');
+const { safeCompare, readRequestBody } = require('./lib/security.js');
 const { isFaviconRequest, getFaviconAsset } = require('./lib/favicon.js');
 const {
     renderLoginPage,
@@ -199,31 +199,13 @@ app.post('/__auth/login', async (c) => {
         return c.html(renderLoginPage(rateCheck.message), 429);
     }
 
-    const contentLength = parseInt(c.req.header('content-length') || '0', 10);
-    if (contentLength > 16 * 1024) {
-        return c.text('Payload Too Large', 413);
-    }
-
     let bodyText = '';
     try {
-        const reader = c.req.raw.body?.getReader();
-        if (reader) {
-            const chunks = [];
-            let total = 0;
-            while (true) {
-                const { done, value } = await reader.read();
-                if (done) break;
-                total += value.length;
-                if (total > 16 * 1024) {
-                    return c.text('Payload Too Large', 413);
-                }
-                chunks.push(value);
-            }
-            bodyText = Buffer.concat(chunks).toString('utf8');
-        } else {
-            bodyText = await c.req.text();
-        }
+        bodyText = await readRequestBody(c.req.raw, 16 * 1024);
     } catch (e) {
+        if (e.message === 'Payload Too Large') {
+            return c.text('Payload Too Large', 413);
+        }
         return c.text('Bad Request', 400);
     }
 
@@ -362,6 +344,7 @@ app.post('/api/models', async (c) => {
     try {
         const body = await c.req.json();
         const saved = modelsManager.saveProvider(body);
+        ensureTranslationProxyStarted(true);
         return c.json({
             ...saved,
             apiKey: maskApiKey(saved.apiKey),
@@ -454,22 +437,34 @@ if (sidecarManager) {
 }
 
 let translationProxy = null;
-const shouldStartTranslation = Boolean(
-    TranslationProxy &&
-    process.env.ENABLE_TRANSLATION_PROXY !== 'false' &&
-    (process.env.ENABLE_TRANSLATION_PROXY === 'true' || (modelsManager && typeof modelsManager.hasEnabledModels === 'function' && modelsManager.hasEnabledModels()))
-);
+function ensureTranslationProxyStarted(forceOnEnabledModels = false) {
+    if (translationProxy && translationProxy.isRunning) return;
+    if (!TranslationProxy) return;
 
-if (shouldStartTranslation) {
-    translationProxy = new TranslationProxy({
-        port: TRANSLATION_PORT,
-        modelsManager,
-        activeConversationModels
-    });
+    const hasModels = Boolean(
+        modelsManager &&
+        typeof modelsManager.hasEnabledModels === 'function' &&
+        modelsManager.hasEnabledModels()
+    );
+    const shouldStart = forceOnEnabledModels
+        ? hasModels
+        : (process.env.ENABLE_TRANSLATION_PROXY !== 'false' && (process.env.ENABLE_TRANSLATION_PROXY === 'true' || hasModels));
+
+    if (!shouldStart) return;
+
+    if (!translationProxy) {
+        translationProxy = new TranslationProxy({
+            port: TRANSLATION_PORT,
+            modelsManager,
+            activeConversationModels
+        });
+    }
     translationProxy.start().catch(err => {
         console.error('[Proxy Gateway] Warning: Translation Proxy failed to start:', err.message);
     });
 }
+
+ensureTranslationProxyStarted(false);
 
 const server = Bun.serve({
     port: LISTEN_PORT,

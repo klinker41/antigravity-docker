@@ -220,6 +220,40 @@ test('Sidecar Manager - CRUD & Persistence', async (t) => {
         const config = sidecarManager.readConfig();
         assert.equal(config.sidecars[testId], undefined);
     });
+
+    await t.test('prevents stopWorker/startWorker race condition when old worker closes after new worker starts', async () => {
+        const raceId = 'test-race-worker';
+        try {
+            await sidecarManager.saveSidecar({
+                id: raceId,
+                displayName: 'Race Worker',
+                command: process.execPath,
+                args: ['-e', 'setTimeout(() => {}, 10000)'],
+                restartPolicy: 'always',
+                enabled: true
+            });
+
+            const firstWorker = sidecarManager.runningWorkers.get(raceId);
+            assert.ok(firstWorker, 'First worker should be running');
+
+            // Stop and immediately start a new worker (as saveSidecar does on update)
+            sidecarManager.stopWorker(raceId);
+            await sidecarManager.startWorker(sidecarManager.getSidecar(raceId));
+
+            const secondWorker = sidecarManager.runningWorkers.get(raceId);
+            assert.ok(secondWorker, 'Second worker should be registered immediately');
+            assert.notEqual(firstWorker, secondWorker);
+
+            // Wait for firstWorker process to close
+            await new Promise(r => setTimeout(r, 250));
+
+            // Second worker must still be tracked in runningWorkers and not overwritten or deleted
+            assert.equal(sidecarManager.runningWorkers.get(raceId), secondWorker);
+            assert.equal(firstWorker.stopped, true);
+        } finally {
+            await sidecarManager.deleteSidecar(raceId);
+        }
+    });
 });
 
 test('Sidecar Manager - HTTP Proxy Integration', async (t) => {

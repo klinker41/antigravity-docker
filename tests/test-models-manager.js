@@ -422,6 +422,19 @@ test('Models Manager - Configuration, CRUD & Provider Connectivity', async (t) =
         const placeholderInvalid = manager.getPlaceholderEnum('custom-openai-m-invalid');
         const modelInvalid = manager.getModelByPlaceholder(placeholderInvalid);
         assert.equal(modelInvalid.timeout, 120000); // Falls back to provider timeout
+
+        // Updating provider without specifying timeout preserves existing.timeout
+        const timeoutProvider = manager.listProviders().find(p => p.name === 'Timeout Provider');
+        const updatedProvider = manager.saveProvider({
+            id: timeoutProvider.id,
+            name: 'Timeout Provider Renamed',
+            type: 'openai',
+            endpoint: 'http://127.0.0.1:11434',
+            models: [
+                { id: 'm-default', label: 'Inherits Provider Timeout' }
+            ]
+        });
+        assert.equal(updatedProvider.timeout, 120000, 'Provider timeout must be preserved when omitted on update');
     });
 
     await t.test('extractSupportsImages correctly identifies vision and non-vision models', () => {

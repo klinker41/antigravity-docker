@@ -23,16 +23,6 @@ setInterval(() => {
     }
 }, 60 * 1000);
 
-// Extract client IP address (only trust reverse proxy X-Forwarded-For if TRUST_PROXY is enabled)
-function getClientIp(req) {
-    const remote = req.socket?.remoteAddress || '127.0.0.1';
-    if (TRUST_PROXY && req.headers['x-forwarded-for']) {
-        const forwarded = req.headers['x-forwarded-for'];
-        return forwarded.split(',')[0].trim();
-    }
-    return remote;
-}
-
 // Check rate limit status for login
 function checkRateLimit(ip) {
     const now = Date.now();
@@ -63,24 +53,23 @@ function recordFailedAttempt(ip) {
     }
 }
 
-// Parse cookies from header string
+// Parse cookies from header string safely
 function parseCookiesFromHeader(cookieHeader) {
     const list = {};
-    if (!cookieHeader) return list;
+    if (!cookieHeader || typeof cookieHeader !== 'string') return list;
 
     cookieHeader.split(';').forEach(cookie => {
         let [name, ...rest] = cookie.split('=');
         name = name?.trim();
         if (!name) return;
         const value = rest.join('=').trim();
-        list[name] = decodeURIComponent(value);
+        try {
+            list[name] = decodeURIComponent(value);
+        } catch {
+            list[name] = value;
+        }
     });
     return list;
-}
-
-// Parse cookies helper
-function parseCookies(req) {
-    return parseCookiesFromHeader(req.headers?.cookie);
 }
 
 // Check if token or session is valid
@@ -121,10 +110,8 @@ module.exports = {
     SESSION_TTL_MS,
     activeSessions,
     loginRateLimiter,
-    getClientIp,
     checkRateLimit,
     recordFailedAttempt,
-    parseCookies,
     parseCookiesFromHeader,
     isAuthenticated,
 };

@@ -155,4 +155,16 @@ test('Container Packaging & Module Resolution (DOCKER-01)', async (t) => {
             }
         }
     });
+
+    await t.test('entrypoint.sh checks for empty projects directory before creating outside-of-project.json', () => {
+        const entrypointContent = fs.readFileSync(path.join(rootDir, 'entrypoint.sh'), 'utf8');
+        const emptyCheckIdx = entrypointContent.indexOf('ls -A "$GEMINI_DIR/config/projects"');
+        const defaultProjCreateIdx = entrypointContent.indexOf('outside-of-project.json');
+        assert.ok(emptyCheckIdx !== -1, 'entrypoint.sh should contain fresh container projects check');
+        assert.ok(defaultProjCreateIdx !== -1, 'entrypoint.sh should create outside-of-project.json');
+        assert.ok(
+            emptyCheckIdx < defaultProjCreateIdx,
+            'Fresh container /workspace project auto-discovery must run before outside-of-project.json is created'
+        );
+    });
 });
