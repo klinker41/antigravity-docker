@@ -130,7 +130,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     npm install -g pnpm yarn && \
     npm cache clean --force && \
     rm -rf /root/.npm && \
-    pip install --no-cache-dir --break-system-packages poetry pipenv virtualenv
+    pip install --no-cache-dir --break-system-packages --ignore-installed poetry pipenv virtualenv
 
 # 2. Install code-server (VS Code Web IDE) and ttyd (Web Terminal)
 RUN curl -fsSL https://code-server.dev/install.sh | sh && \

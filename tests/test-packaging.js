@@ -223,7 +223,7 @@ test('Container Packaging & Module Resolution (DOCKER-01)', async (t) => {
         assert.match(fullStage, /code-server\.dev\/install\.sh/, 'full stage should install code-server');
         assert.match(fullStage, /ttyd/, 'full stage should install ttyd');
         assert.match(fullStage, /build-essential/, 'full stage should install build-essential');
-        assert.match(fullStage, /poetry pipenv virtualenv/, 'full stage should install poetry, pipenv, virtualenv');
+        assert.match(fullStage, /--ignore-installed poetry pipenv virtualenv/, 'full stage should install poetry, pipenv, virtualenv with --ignore-installed');
         assert.match(fullStage, /npm install -g pnpm yarn/, 'full stage should install pnpm and yarn');
         assert.match(fullStage, /ENABLE_IDE="true"/, 'full stage should default ENABLE_IDE to true');
         assert.match(fullStage, /ENABLE_TERMINAL="true"/, 'full stage should default ENABLE_TERMINAL to true');
