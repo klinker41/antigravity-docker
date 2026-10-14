@@ -20,7 +20,7 @@ version: '3.8'
 
 services:
   antigravity:
-    image: jklinker/antigravity-docker:latest
+    image: jklinker/antigravity:latest
     container_name: antigravity
     restart: unless-stopped
     ports:
@@ -97,7 +97,7 @@ docker compose run --rm antigravity setup
 ```bash
 docker run -it --rm \
   -v "<location-of-config>:/home/developer/.gemini" \
-  jklinker/antigravity-docker:latest setup
+  jklinker/antigravity:latest setup
 ```
 
 1. Open the Google sign-in URL shown in the terminal.
@@ -260,19 +260,43 @@ To disable blocking and allow all telemetry, set `BLOCK_TELEMETRY=false` in your
 
 ---
 
+## 📦 Image Variants (`latest` vs `slim`)
+
+`antigravity-docker` provides two image targets from the same multi-stage
+`Dockerfile`:
+
+| Tag | Target | Uncompressed Size | Included |
+| :--- | :--- | :--- | :--- |
+| `jklinker/antigravity:latest` | `full` *(default)* | ~2.1 GB | Antigravity CLI (`agy`), Node.js 26 (`npm`, `pnpm`, `yarn`, `bun`), Python 3 (`uv`, `poetry`, `pipenv`, `virtualenv`, `pip`), C/C++ build toolchain (`build-essential`, `-dev` headers), interactive shells/editors (`zsh`, `tmux`, `vim`, `nano`), VS Code Web IDE (`code-server`), and Host Web Terminal (`ttyd`). |
+| `jklinker/antigravity:slim` | `slim` | ~800 MB | Core headless dev environment (~62% smaller): Antigravity CLI (`agy`), Node.js 26 (`npm`, `bun`), Python 3 (`venv`, standalone `uv`), `git`, `openssh-client`, `curl`, `jq`, and the Bun/Hono web gateway. Omits `code-server`, `ttyd`, `build-essential`, `-dev` headers, interactive editors/shells, and redundant package managers (`ENABLE_IDE=false` and `ENABLE_TERMINAL=false` by default). |
+
+---
+
 ## 🛠️ Building & Pushing to Docker Hub
 
-If you want to build the Docker image from source and push it to Docker Hub:
+### Build & Tag Locally
 
+**1. Build the `slim` image (`--target slim`):**
 ```bash
-docker build -t jklinker/antigravity-docker:latest .
-docker push jklinker/antigravity-docker:latest
+docker build --target slim -t jklinker/antigravity:slim .
+```
+
+**2. Build the full `latest` image (default `full` stage, layers on top of
+`slim`):**
+```bash
+docker build --target full -t jklinker/antigravity:latest .
+```
+
+**3. Push both tags to Docker Hub:**
+```bash
+docker push jklinker/antigravity:slim
+docker push jklinker/antigravity:latest
 ```
 
 > [!TIP]
-> **Multi-Platform Build**: To build and push for multiple architectures (such
-> as `linux/amd64` and `linux/arm64` for Apple Silicon or ARM servers) using
-> Docker Buildx:
+> **Multi-Platform Build (`linux/amd64` + `linux/arm64`)**: To build and push
+> both variants for multiple architectures using Docker Buildx:
 > ```bash
-> docker buildx build --platform linux/amd64,linux/arm64 -t jklinker/antigravity-docker:latest --push .
+> docker buildx build --platform linux/amd64,linux/arm64 --target slim -t jklinker/antigravity:slim --push .
+> docker buildx build --platform linux/amd64,linux/arm64 --target full -t jklinker/antigravity:latest --push .
 > ```

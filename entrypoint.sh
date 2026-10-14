@@ -293,47 +293,57 @@ case "$1" in
         ENABLE_IDE="${ENABLE_IDE:-true}"
         ENABLE_TERMINAL="${ENABLE_TERMINAL:-true}"
 
-        # 1. Start code-server (VS Code Web IDE) on 127.0.0.1:8080 if enabled
+        # 1. Start code-server (VS Code Web IDE) on 127.0.0.1:8080 if enabled and installed
         if [ "$ENABLE_IDE" = "true" ] || [ "$ENABLE_IDE" = "1" ] || [ "$ENABLE_IDE" = "yes" ] || [ "$ENABLE_IDE" = "on" ]; then
-            ASSETS_DIR="/usr/local/share/antigravity/assets"
-            [ ! -d "$ASSETS_DIR" ] && ASSETS_DIR="/workspace/assets"
-            [ ! -d "$ASSETS_DIR" ] && ASSETS_DIR="/workspace/antigravity-docker/assets"
-            if [ -d "$ASSETS_DIR" ]; then
-                if [ -d /usr/lib/code-server/src/browser/media ]; then
-                    cp "$ASSETS_DIR"/favicon.svg /usr/lib/code-server/src/browser/media/favicon.svg 2>/dev/null || true
-                    cp "$ASSETS_DIR"/favicon.svg /usr/lib/code-server/src/browser/media/favicon-dark-support.svg 2>/dev/null || true
-                    cp "$ASSETS_DIR"/favicon.ico /usr/lib/code-server/src/browser/media/favicon.ico 2>/dev/null || true
-                    cp "$ASSETS_DIR"/pwa-icon-192.png /usr/lib/code-server/src/browser/media/pwa-icon-192.png 2>/dev/null || true
-                    cp "$ASSETS_DIR"/pwa-icon-512.png /usr/lib/code-server/src/browser/media/pwa-icon-512.png 2>/dev/null || true
+            if command -v code-server >/dev/null 2>&1; then
+                ASSETS_DIR="/usr/local/share/antigravity/assets"
+                [ ! -d "$ASSETS_DIR" ] && ASSETS_DIR="/workspace/assets"
+                [ ! -d "$ASSETS_DIR" ] && ASSETS_DIR="/workspace/antigravity-docker/assets"
+                if [ -d "$ASSETS_DIR" ]; then
+                    if [ -d /usr/lib/code-server/src/browser/media ]; then
+                        cp "$ASSETS_DIR"/favicon.svg /usr/lib/code-server/src/browser/media/favicon.svg 2>/dev/null || true
+                        cp "$ASSETS_DIR"/favicon.svg /usr/lib/code-server/src/browser/media/favicon-dark-support.svg 2>/dev/null || true
+                        cp "$ASSETS_DIR"/favicon.ico /usr/lib/code-server/src/browser/media/favicon.ico 2>/dev/null || true
+                        cp "$ASSETS_DIR"/pwa-icon-192.png /usr/lib/code-server/src/browser/media/pwa-icon-192.png 2>/dev/null || true
+                        cp "$ASSETS_DIR"/pwa-icon-512.png /usr/lib/code-server/src/browser/media/pwa-icon-512.png 2>/dev/null || true
+                    fi
+                    if [ -d /usr/lib/code-server/lib/vscode/resources/server ]; then
+                        cp "$ASSETS_DIR"/favicon.ico /usr/lib/code-server/lib/vscode/resources/server/favicon.ico 2>/dev/null || true
+                    fi
                 fi
-                if [ -d /usr/lib/code-server/lib/vscode/resources/server ]; then
-                    cp "$ASSETS_DIR"/favicon.ico /usr/lib/code-server/lib/vscode/resources/server/favicon.ico 2>/dev/null || true
-                fi
-            fi
 
-            echo " 🟢 Starting code-server Web IDE on internal port 8080"
-            gosu "$DEVELOPER_USER" code-server \
-                --bind-addr 127.0.0.1:8080 \
-                --auth none \
-                --disable-telemetry \
-                --disable-update-check \
-                "$WORKSPACE_DIR" > /tmp/code-server.log 2>&1 &
+                echo " 🟢 Starting code-server Web IDE on internal port 8080"
+                gosu "$DEVELOPER_USER" code-server \
+                    --bind-addr 127.0.0.1:8080 \
+                    --auth none \
+                    --disable-telemetry \
+                    --disable-update-check \
+                    "$WORKSPACE_DIR" > /tmp/code-server.log 2>&1 &
+            else
+                echo " ⚪ Web IDE binary (code-server) not installed (slim image); forcing ENABLE_IDE=false"
+                ENABLE_IDE="false"
+            fi
         else
             echo " ⚪ Web IDE is DISABLED (ENABLE_IDE=false)"
         fi
 
-        # 2. Start ttyd (Web Terminal) on 127.0.0.1:7681 if enabled
+        # 2. Start ttyd (Web Terminal) on 127.0.0.1:7681 if enabled and installed
         if [ "$ENABLE_TERMINAL" = "true" ] || [ "$ENABLE_TERMINAL" = "1" ] || [ "$ENABLE_TERMINAL" = "yes" ] || [ "$ENABLE_TERMINAL" = "on" ]; then
-            echo " 🟢 Starting ttyd Web Terminal on internal port 7681"
-            gosu "$DEVELOPER_USER" ttyd \
-                -W \
-                -p 7681 \
-                -i 127.0.0.1 \
-                -b /terminal \
-                -t fontSize=14 \
-                -t fontFamily="Google Sans Code, monospace" \
-                -t theme='{"background": "#08090d", "foreground": "#f0f4fc", "cursor": "#38bdf8"}' \
-                /usr/local/bin/host-terminal.sh > /tmp/ttyd.log 2>&1 &
+            if command -v ttyd >/dev/null 2>&1; then
+                echo " 🟢 Starting ttyd Web Terminal on internal port 7681"
+                gosu "$DEVELOPER_USER" ttyd \
+                    -W \
+                    -p 7681 \
+                    -i 127.0.0.1 \
+                    -b /terminal \
+                    -t fontSize=14 \
+                    -t fontFamily="Google Sans Code, monospace" \
+                    -t theme='{"background": "#08090d", "foreground": "#f0f4fc", "cursor": "#38bdf8"}' \
+                    /usr/local/bin/host-terminal.sh > /tmp/ttyd.log 2>&1 &
+            else
+                echo " ⚪ Host Web Terminal binary (ttyd) not installed (slim image); forcing ENABLE_TERMINAL=false"
+                ENABLE_TERMINAL="false"
+            fi
         else
             echo " ⚪ Host Web Terminal is DISABLED (ENABLE_TERMINAL=false)"
         fi
@@ -401,7 +411,7 @@ case "$1" in
             echo " If this is your first run, check the logs or run the setup command:"
             echo "   docker compose run --rm antigravity setup"
             echo " Or via standalone docker run:"
-            echo "   docker run -it --rm -v /path/to/data:/home/developer/.gemini jklinker/antigravity-docker:latest setup"
+            echo "   docker run -it --rm -v /path/to/data:/home/developer/.gemini jklinker/antigravity:latest setup"
             echo " Or open the sign-in URL shown below in your browser."
             echo "==================================================================="
         else

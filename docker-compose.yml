@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
   antigravity:
-    image: jklinker/antigravity-docker:latest
+    image: jklinker/antigravity:latest
     container_name: antigravity
     restart: unless-stopped
     ports:

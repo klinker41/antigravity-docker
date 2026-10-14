@@ -167,4 +167,92 @@ test('Container Packaging & Module Resolution (DOCKER-01)', async (t) => {
             'Fresh container /workspace project auto-discovery must run before outside-of-project.json is created'
         );
     });
+
+    await t.test('Dockerfile defines multi-stage slim and full targets with Slim Dev configuration', () => {
+        const slimStageMatch = dockerfileContent.match(/FROM\s+\$\{BASE_IMAGE\}\s+AS\s+slim([\s\S]*?)FROM\s+slim\s+AS\s+full([\s\S]*)/);
+        assert.ok(slimStageMatch, 'Dockerfile must define FROM ${BASE_IMAGE} AS slim followed by FROM slim AS full');
+
+        const slimStage = slimStageMatch[1]
+            .split('\n')
+            .filter(line => !line.trim().startsWith('#'))
+            .join('\n');
+        const fullStage = slimStageMatch[2]
+            .split('\n')
+            .filter(line => !line.trim().startsWith('#'))
+            .join('\n');
+
+        // Slim stage must include core runtimes (nodejs, bun, python3, uv, agy)
+        assert.match(slimStage, /nodejs/, 'slim stage should install nodejs');
+        assert.match(slimStage, /npm install -g bun/, 'slim stage should install bun');
+        assert.match(slimStage, /python3/, 'slim stage should install python3');
+        assert.match(slimStage, /astral\.sh\/uv\/install\.sh/, 'slim stage should install standalone uv');
+        assert.match(slimStage, /antigravity\.google\/cli\/install\.sh/, 'slim stage should install agy CLI');
+
+        // Slim stage must default ENABLE_IDE and ENABLE_TERMINAL to false
+        assert.match(slimStage, /ENABLE_IDE="false"/, 'slim stage must default ENABLE_IDE to false');
+        assert.match(slimStage, /ENABLE_TERMINAL="false"/, 'slim stage must default ENABLE_TERMINAL to false');
+
+        // Slim stage must NOT include IDE, terminal, C/C++ build toolchain, interactive editors/shells, or redundant package managers
+        for (const excluded of [
+            'code-server',
+            'ttyd',
+            'host-terminal.sh',
+            'build-essential',
+            'libssl-dev',
+            'libffi-dev',
+            'python3-dev',
+            'python3-pip',
+            'poetry',
+            'pipenv',
+            'virtualenv',
+            'npm install -g pnpm',
+            'yarn',
+            'vim',
+            'nano',
+            'zsh',
+            'tmux'
+        ]) {
+            assert.equal(
+                slimStage.includes(excluded),
+                false,
+                `slim stage must not include "${excluded}"`
+            );
+        }
+
+        // Full stage must restore IDE, terminal, build-essential, and default ENABLE_IDE/ENABLE_TERMINAL to true
+        assert.match(fullStage, /code-server\.dev\/install\.sh/, 'full stage should install code-server');
+        assert.match(fullStage, /ttyd/, 'full stage should install ttyd');
+        assert.match(fullStage, /build-essential/, 'full stage should install build-essential');
+        assert.match(fullStage, /poetry pipenv virtualenv/, 'full stage should install poetry, pipenv, virtualenv');
+        assert.match(fullStage, /npm install -g pnpm yarn/, 'full stage should install pnpm and yarn');
+        assert.match(fullStage, /ENABLE_IDE="true"/, 'full stage should default ENABLE_IDE to true');
+        assert.match(fullStage, /ENABLE_TERMINAL="true"/, 'full stage should default ENABLE_TERMINAL to true');
+    });
+
+    await t.test('entrypoint.sh gracefully disables ENABLE_IDE and ENABLE_TERMINAL when binaries are absent in slim image', () => {
+        const entrypointContent = fs.readFileSync(path.join(rootDir, 'entrypoint.sh'), 'utf8');
+        assert.match(entrypointContent, /command -v code-server/, 'entrypoint.sh should check if code-server binary exists');
+        assert.match(entrypointContent, /command -v ttyd/, 'entrypoint.sh should check if ttyd binary exists');
+
+        // Extract the daemon IDE/Terminal startup block and run it in a clean subshell without code-server/ttyd in PATH
+        const startMarker = 'ENABLE_IDE="${ENABLE_IDE:-true}"';
+        const endMarker = 'export AGY_PORT="${TARGET_PORT}"';
+        const startIdx = entrypointContent.indexOf(startMarker);
+        const endIdx = entrypointContent.indexOf(endMarker);
+        assert.ok(startIdx !== -1 && endIdx !== -1 && startIdx < endIdx, 'Could not locate IDE/Terminal block in entrypoint.sh');
+
+        const block = entrypointContent.slice(startIdx, endIdx);
+        const { execFileSync } = require('node:child_process');
+        const output = execFileSync('/bin/bash', ['-c', `
+            export PATH=""
+            export ENABLE_IDE="true"
+            export ENABLE_TERMINAL="true"
+            ${block}
+            echo "FINAL_IDE=$ENABLE_IDE"
+            echo "FINAL_TERMINAL=$ENABLE_TERMINAL"
+        `], { encoding: 'utf8' });
+
+        assert.match(output, /FINAL_IDE=false/, 'ENABLE_IDE should be forced to false when code-server is not in PATH');
+        assert.match(output, /FINAL_TERMINAL=false/, 'ENABLE_TERMINAL should be forced to false when ttyd is not in PATH');
+    });
 });

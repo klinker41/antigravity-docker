@@ -37,7 +37,7 @@ if docker compose version >/dev/null 2>&1; then
 elif command -v docker-compose >/dev/null 2>&1; then
     docker-compose run --rm antigravity bash -c "$TEST_CMD"
 else
-    docker run --rm jklinker/antigravity-docker:latest bash -c "$TEST_CMD"
+    docker run --rm jklinker/antigravity:latest bash -c "$TEST_CMD"
 fi
 
 echo "==================================================================="
