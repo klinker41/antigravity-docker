@@ -27,6 +27,10 @@ test('Custom UI, Viewport & Foldable Layout', async (t) => {
     <div id="root">
       <div role="navigation" aria-label="Sidebar" class="bg-sidebar">
         <div class="px-2">Sidebar Content</div>
+        <div class="flex flex-col gap-1.5 px-2">
+          <button data-testid="new-conversation-button">New Conversation</button>
+          <button data-testid="customizations-button">Customizations</button>
+        </div>
         <div class="flex flex-col gap-px pt-2 px-2">
           <button data-testid="settings-button">Settings</button>
         </div>
@@ -84,6 +88,9 @@ test('Custom UI, Viewport & Foldable Layout', async (t) => {
             assert.ok(css.includes('sidebar-sash'), 'Should size split panes around sidebar-sash');
             assert.ok(css.includes('backdrop-filter: blur'), 'Should include backdrop-filter blur for floating sidebar window');
             assert.ok(css.includes('border-radius: 18px'), 'Should include rounded corners for floating sidebar window');
+            assert.ok(css.includes('sidebar-search-button'), 'Should include styles for sidebar-search-button');
+            assert.ok(css.includes('sidebar-toggle'), 'Should include styles for sidebar-toggle');
+            assert.ok(css.includes('margin-left: auto'), 'Should right-align action buttons container');
         });
 
         await t.test('HTML proxying modifies viewport meta and injects custom css & pre-init script', async () => {
@@ -159,6 +166,10 @@ test('Custom UI, Viewport & Foldable Layout', async (t) => {
                 html.includes('sanitizeDocumentTitle'),
                 'Pre-init script should sanitize document title'
             );
+            assert.ok(
+                html.includes('syncSidebarWidth'),
+                'Pre-init script should sync sidebar width'
+            );
 
             // 5. Verify injected workspace tools script is in <body>
             assert.ok(
@@ -166,8 +177,12 @@ test('Custom UI, Viewport & Foldable Layout', async (t) => {
                 'HTML body should include injected tools script'
             );
             assert.ok(
+                html.includes('Customizations'),
+                'Injected script should target Customizations section in sidebar'
+            );
+            assert.ok(
                 html.includes('settings-button'),
-                'Injected script should target settings-button in sidebar'
+                'Injected script should include settings-button fallback'
             );
         });
     } finally {

@@ -299,16 +299,47 @@ function buildPreInitScript() {
         }
     }
 
+    // 9. Sync sidebar width to CSS custom property --sidebar-width via ResizeObserver
+    function syncSidebarWidth() {
+        var sidebarPane = document.querySelector('div:has(> [data-testid="sidebar-sash"]) > div:first-child');
+        if (sidebarPane && window.ResizeObserver && !sidebarPane.__hasResizeObserver) {
+            sidebarPane.__hasResizeObserver = true;
+            new ResizeObserver(function(entries) {
+                for (var i = 0; i < entries.length; i++) {
+                    var w = entries[i].contentRect ? entries[i].contentRect.width : entries[i].target.getBoundingClientRect().width;
+                    if (w > 50 && document.documentElement) {
+                        document.documentElement.style.setProperty('--sidebar-width', w + 'px');
+                    } else if (document.documentElement) {
+                        document.documentElement.style.removeProperty('--sidebar-width');
+                    }
+                }
+            }).observe(sidebarPane);
+        } else if (sidebarPane && document.documentElement) {
+            var rect = sidebarPane.getBoundingClientRect();
+            if (rect.width > 50) {
+                document.documentElement.style.setProperty('--sidebar-width', rect.width + 'px');
+            } else {
+                document.documentElement.style.removeProperty('--sidebar-width');
+            }
+        }
+    }
+    window.addEventListener('resize', syncSidebarWidth);
+
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', function() {
             applySentenceCapitalization(document.body);
             sanitizeTitleTextNodes();
+            syncSidebarWidth();
         });
     } else {
         applySentenceCapitalization(document.body);
         sanitizeTitleTextNodes();
+        syncSidebarWidth();
     }
-    window.addEventListener('load', sanitizeTitleTextNodes);
+    window.addEventListener('load', function() {
+        sanitizeTitleTextNodes();
+        syncSidebarWidth();
+    });
 })();
 `;
 }
@@ -354,22 +385,59 @@ function buildInjectedScript() {
     }
 
     function tryInjectSidebar() {
-        if (document.getElementById('agy-injected-tools-group')) return;
-
-        // Target the actual Antigravity sidebar navigation
         const sidebar = document.querySelector('[role="navigation"][aria-label="Sidebar"], div.bg-sidebar');
         if (!sidebar) return;
 
-        const toolsEl = createToolsElement();
-        const settingsBtn = sidebar.querySelector('button[data-testid="settings-button"]');
-        if (settingsBtn && settingsBtn.parentElement) {
-            settingsBtn.parentElement.insertBefore(toolsEl, settingsBtn);
-        } else {
-            const footerSection = sidebar.querySelector('div.flex.flex-col.gap-px.pt-2.px-2') || sidebar.lastElementChild;
-            if (footerSection && footerSection !== sidebar) {
-                sidebar.insertBefore(toolsEl, footerSection);
+        let toolsEl = document.getElementById('agy-injected-tools-group');
+        if (!toolsEl) {
+            toolsEl = createToolsElement();
+        }
+
+        // Look for Customizations entry in the sidebar navigation
+        let customizationsEl = null;
+        const candidates = sidebar.querySelectorAll('button, a, div[role="button"]');
+        for (let i = 0; i < candidates.length; i++) {
+            const el = candidates[i];
+            const text = (el.textContent || '').trim();
+            const href = el.getAttribute('href') || '';
+            const testid = el.getAttribute('data-testid') || '';
+            if (
+                text === 'Customizations' ||
+                href.includes('/customizations') ||
+                testid.includes('customization') ||
+                (text.startsWith('Customizations') && text.length < 30)
+            ) {
+                customizationsEl = el;
+                break;
+            }
+        }
+
+        if (customizationsEl) {
+            const target = (customizationsEl.parentElement && customizationsEl.parentElement.classList.contains('flex-col'))
+                ? customizationsEl
+                : (customizationsEl.closest('li, div.flex-grow') || customizationsEl);
+            if (toolsEl.previousElementSibling !== target) {
+                if (target.nextSibling) {
+                    target.parentNode.insertBefore(toolsEl, target.nextSibling);
+                } else {
+                    target.parentNode.appendChild(toolsEl);
+                }
+            }
+            return;
+        }
+
+        // Fallback: settings button or footer section if customizations button not rendered yet
+        if (!document.getElementById('agy-injected-tools-group')) {
+            const settingsBtn = sidebar.querySelector('button[data-testid="settings-button"]');
+            if (settingsBtn && settingsBtn.parentElement) {
+                settingsBtn.parentElement.insertBefore(toolsEl, settingsBtn);
             } else {
-                sidebar.appendChild(toolsEl);
+                const footerSection = sidebar.querySelector('div.flex.flex-col.gap-px.pt-2.px-2') || sidebar.lastElementChild;
+                if (footerSection && footerSection !== sidebar) {
+                    sidebar.insertBefore(toolsEl, footerSection);
+                } else {
+                    sidebar.appendChild(toolsEl);
+                }
             }
         }
     }
@@ -405,9 +473,7 @@ function buildInjectedScript() {
 
     const observer = new MutationObserver(() => {
         enforceFavicon();
-        if (!document.getElementById('agy-injected-tools-group')) {
-            tryInjectSidebar();
-        }
+        tryInjectSidebar();
     });
 
     observer.observe(document.body, { childList: true, subtree: true });

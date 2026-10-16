@@ -159,3 +159,55 @@ div:has(> [data-testid="sidebar-sash"]) > [data-testid="sidebar-sash"]:hover {
   background: rgba(255, 255, 255, 0.08) !important;
 }
 
+/* ==========================================================================
+   5. Sidebar Header & Actions (Right-Aligned Search & Hide Buttons)
+   ========================================================================== */
+
+/* Top header container spanning the sidebar width (strictly when sidebar is open) */
+div.absolute.left-0.top-0:has([data-testid="sidebar-search-button"]),
+div.absolute.left-0.top-0:has([data-testid="sidebar-toggle"][aria-expanded="true"]) {
+  width: var(--sidebar-width, 260px) !important;
+  max-width: var(--sidebar-width, 260px) !important;
+  display: flex !important;
+  align-items: center !important;
+  padding: 10px 14px 0 14px !important;
+  box-sizing: border-box !important;
+  pointer-events: none !important;
+  z-index: 50 !important;
+}
+
+/* Ensure the header inner wrapper fills 100% width and spaces between */
+div.absolute.left-0.top-0:has([data-testid="sidebar-search-button"]) > div:first-child,
+div.absolute.left-0.top-0:has([data-testid="sidebar-toggle"][aria-expanded="true"]) > div:first-child {
+  width: 100% !important;
+  display: flex !important;
+  justify-content: space-between !important;
+  align-items: center !important;
+}
+
+/* Ensure interactive child controls remain clickable */
+div.absolute.left-0.top-0:has([data-testid="sidebar-search-button"]) *,
+div.absolute.left-0.top-0:has([data-testid="sidebar-toggle"][aria-expanded="true"]) * {
+  pointer-events: auto !important;
+}
+
+/* Align action buttons container to the top right corner */
+div.absolute.left-0.top-0 div:has(> [data-testid="sidebar-search-button"]),
+div.absolute.left-0.top-0 div:has(> [data-testid="sidebar-toggle"][aria-expanded="true"]) {
+  margin-left: auto !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: 4px !important;
+}
+
+/* Order: Search icon first, Dock / Hide Sidebar on the far right */
+div.absolute.left-0.top-0 [data-testid="sidebar-search-button"] {
+  order: 1 !important;
+}
+
+div.absolute.left-0.top-0 [data-testid="sidebar-toggle"] {
+  order: 2 !important;
+}
+
+
+

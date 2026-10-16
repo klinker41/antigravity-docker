@@ -249,8 +249,11 @@ optimizations into the Antigravity web app:
   and active conversation/chat occupies the right 50%.
 - **Workspace Tools Menu Placement**: Cleanly positions the Workspace Tools
   navigation group (Sidecar Manager, Custom Models, Web IDE, Host Terminal)
-  within the left sidebar navigation directly above Settings, eliminating
-  awkward placement in unfolded views.
+  directly under the Customizations section in the sidebar navigation.
+- **Top-Right Search & Sidebar Toggle Alignment**: Pushes the conversation
+  search and hide-sidebar toggle buttons to the top right corner of the
+  floating sidebar window card, keeping application branding separated on
+  the left.
 - **Sentence Case Capitalization**: Automatically sets and preserves
   `autocapitalize="sentences"` on the message input box, preventing the mobile
   virtual keyboard from defaulting to lowercase when starting a new prompt.
