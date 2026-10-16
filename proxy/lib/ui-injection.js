@@ -129,8 +129,17 @@ function buildPreInitScript() {
         if (typeof window === 'undefined') return false;
         var w = window.innerWidth;
         var h = window.innerHeight;
-        // Foldable unfolded: wide screen (>=600px) with squarish or wider aspect ratio (>=0.65), or >=768px
-        return (w >= 600 && (w / h) >= 0.65) || w >= 768;
+        // Foldable unfolded: wide screen (>=480px) with squarish or wider aspect ratio (>=0.65), or >=768px
+        return (w >= 480 && (w / h) >= 0.65) || w >= 768;
+    }
+
+    if (isFoldableUnfolded()) {
+        try {
+            var currentSw = localStorage.getItem('sidebarWidth');
+            if (!currentSw || currentSw === '256') {
+                localStorage.setItem('sidebarWidth', String(Math.round(window.innerWidth / 2)));
+            }
+        } catch (e) {}
     }
 
     try {
@@ -301,7 +310,10 @@ function buildPreInitScript() {
 
     // 9. Sync sidebar width to CSS custom property --sidebar-width via ResizeObserver
     function syncSidebarWidth() {
-        var sidebarPane = document.querySelector('div:has(> [data-testid="sidebar-sash"]) > div:first-child');
+        var sidebar = document.querySelector('[role="navigation"][aria-label="Sidebar"]');
+        var sidebarPane = sidebar
+            ? (sidebar.parentElement?.closest('div[style*="container-type"] > div:first-child') || sidebar.parentElement)
+            : null;
         if (sidebarPane && window.ResizeObserver && !sidebarPane.__hasResizeObserver) {
             sidebarPane.__hasResizeObserver = true;
             new ResizeObserver(function(entries) {

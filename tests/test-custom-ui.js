@@ -137,7 +137,11 @@ test('Custom UI, Viewport & Foldable Layout', async (t) => {
                 'HTML should not contain <title>Antigravity CLI</title>'
             );
 
-            // 3. Verify custom.css link is injected in <head>
+            // 3. Verify custom.css link and inlined style are injected in <head>
+            assert.ok(
+                html.includes('<style id="agy-custom-css">'),
+                'HTML head should inline agy-custom-css'
+            );
             assert.ok(
                 html.includes('<link rel="stylesheet" href="/custom.css" />'),
                 'HTML head should link /custom.css'

@@ -1,5 +1,7 @@
 'use strict';
 
+const fs = require('node:fs');
+const path = require('node:path');
 const { replaceFaviconInHtml } = require('./favicon');
 const { renderServiceStartingPage } = require('./pages');
 const { INJECTED_UI_STYLES, buildInjectedScript, buildPreInitScript } = require('./ui-injection');
@@ -215,9 +217,17 @@ async function proxyWebRequest(c, targetPort, targetPath, options = {}) {
                     );
                 }
 
-                // Inject custom CSS stylesheet and head pre-init script
+                // Inject custom CSS stylesheet (both inlined to eliminate cache issues and via link) and head pre-init script
+                let customCss = '';
+                try {
+                    const customCssPath = path.join(__dirname, '..', 'custom.css');
+                    if (fs.existsSync(customCssPath)) {
+                        customCss = fs.readFileSync(customCssPath, 'utf8');
+                    }
+                } catch (e) {}
+
                 const preInitScript = buildPreInitScript ? buildPreInitScript() : '';
-                const headInjection = `\n    <link rel="stylesheet" href="/custom.css" />\n    <script id="agy-pre-init">${preInitScript}</script>\n`;
+                const headInjection = `\n    <style id="agy-custom-css">${customCss}</style>\n    <link rel="stylesheet" href="/custom.css" />\n    <script id="agy-pre-init">${preInitScript}</script>\n`;
                 if (html.includes('</head>')) {
                     html = html.replace('</head>', `${headInjection}</head>`);
                 } else {
