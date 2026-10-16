@@ -31,7 +31,7 @@ input:focus {
    2. Foldable Unfolded 50/50 Split Layout
    ========================================================================== */
 .agy-unfolded {
-  --sidebar-width: 50% !important;
+  --sidebar-width: 50vw !important;
 }
 
 /* Outer split-pane container containing the sidebar sash */
@@ -42,6 +42,21 @@ input:focus {
   flex: 0 0 50% !important;
 }
 
+/* Ensure inner wrapper in split-pane first child stretches to full 100% width and docks left */
+.agy-unfolded div[style*="container-type"]:has([data-testid="sidebar-sash"]) > div:first-child > div {
+  width: 100% !important;
+  max-width: 100% !important;
+  min-width: 100% !important;
+  left: 0 !important;
+  right: 0 !important;
+  position: relative !important;
+}
+
+.agy-unfolded div[style*="container-type"]:has([data-testid="sidebar-sash"]) > div:first-child [role="navigation"][aria-label="Sidebar"] {
+  width: 100% !important;
+  max-width: 100% !important;
+}
+
 .agy-unfolded div[style*="container-type"]:has([data-testid="sidebar-sash"]) > div:last-child {
   width: calc(50% - 1px) !important;
   max-width: calc(50% - 1px) !important;
@@ -49,9 +64,15 @@ input:focus {
   flex: 0 0 calc(50% - 1px) !important;
 }
 
+/* Top header container in unfolded mode spans the full 50vw sidebar */
+.agy-unfolded div.absolute.left-0.top-0:has([data-testid="sidebar-toggle"][aria-expanded="true"]) {
+  width: 50vw !important;
+  max-width: 50vw !important;
+}
+
 @media (min-width: 480px) and (max-width: 1050px) and (min-aspect-ratio: 65/100) and (max-aspect-ratio: 150/100) {
   :root {
-    --sidebar-width: 50% !important;
+    --sidebar-width: 50vw !important;
   }
   div[style*="container-type"]:has([data-testid="sidebar-sash"]) > div:first-child {
     width: 50% !important;
@@ -59,11 +80,27 @@ input:focus {
     min-width: 50% !important;
     flex: 0 0 50% !important;
   }
+  div[style*="container-type"]:has([data-testid="sidebar-sash"]) > div:first-child > div {
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 100% !important;
+    left: 0 !important;
+    right: 0 !important;
+    position: relative !important;
+  }
+  div[style*="container-type"]:has([data-testid="sidebar-sash"]) > div:first-child [role="navigation"][aria-label="Sidebar"] {
+    width: 100% !important;
+    max-width: 100% !important;
+  }
   div[style*="container-type"]:has([data-testid="sidebar-sash"]) > div:last-child {
     width: calc(50% - 1px) !important;
     max-width: calc(50% - 1px) !important;
     min-width: calc(50% - 1px) !important;
     flex: 0 0 calc(50% - 1px) !important;
+  }
+  div.absolute.left-0.top-0:has([data-testid="sidebar-toggle"][aria-expanded="true"]) {
+    width: 50vw !important;
+    max-width: 50vw !important;
   }
 }
 
@@ -90,7 +127,6 @@ input:focus {
    ========================================================================== */
 
 /* Top header container spanning the sidebar width (strictly when sidebar is open) */
-div.absolute.left-0.top-0:has([data-testid="sidebar-search-button"]),
 div.absolute.left-0.top-0:has([data-testid="sidebar-toggle"][aria-expanded="true"]) {
   left: 0 !important;
   top: 0 !important;
@@ -106,7 +142,6 @@ div.absolute.left-0.top-0:has([data-testid="sidebar-toggle"][aria-expanded="true
 }
 
 /* Ensure the header inner wrapper fills 100% width and spaces between */
-div.absolute.left-0.top-0:has([data-testid="sidebar-search-button"]) > div:first-child,
 div.absolute.left-0.top-0:has([data-testid="sidebar-toggle"][aria-expanded="true"]) > div:first-child {
   width: 100% !important;
   display: flex !important;
@@ -115,14 +150,12 @@ div.absolute.left-0.top-0:has([data-testid="sidebar-toggle"][aria-expanded="true
 }
 
 /* Ensure interactive child controls remain clickable */
-div.absolute.left-0.top-0:has([data-testid="sidebar-search-button"]) *,
 div.absolute.left-0.top-0:has([data-testid="sidebar-toggle"][aria-expanded="true"]) * {
   pointer-events: auto !important;
 }
 
 /* Align action buttons container to the top right corner */
-div.absolute.left-0.top-0 div:has(> [data-testid="sidebar-search-button"]),
-div.absolute.left-0.top-0 div:has(> [data-testid="sidebar-toggle"][aria-expanded="true"]) {
+div.absolute.left-0.top-0:has([data-testid="sidebar-toggle"][aria-expanded="true"]) div:has(> [data-testid="sidebar-toggle"]) {
   margin-left: auto !important;
   display: flex !important;
   align-items: center !important;

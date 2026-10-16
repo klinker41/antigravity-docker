@@ -84,9 +84,11 @@ test('Custom UI, Viewport & Foldable Layout', async (t) => {
             const css = await res.text();
             assert.ok(css.includes('--visual-viewport-height'), 'Should define --visual-viewport-height');
             assert.ok(css.includes('.agy-unfolded'), 'Should define .agy-unfolded rules');
-            assert.ok(css.includes('--sidebar-width: 50%'), 'Should configure 50% split width');
+            assert.ok(css.includes('--sidebar-width: 50vw'), 'Should configure 50vw split width');
             assert.ok(css.includes('sidebar-sash'), 'Should size split panes around sidebar-sash');
             assert.ok(css.includes('width: 50% !important'), 'Should enforce 50% split width on split panes');
+            assert.ok(css.includes('width: 100% !important'), 'Should stretch inner wrapper to 100% width');
+            assert.ok(css.includes('width: 50vw !important'), 'Should size unfolded header container to 50vw');
             assert.ok(!css.includes('backdrop-filter'), 'Should not include backdrop-filter glass styling');
             assert.ok(!css.includes('border-radius: 18px'), 'Should not include rounded floating window corners');
             assert.ok(!css.includes('calc(100% - 16px)'), 'Should not inset sidebar height for floating window');
