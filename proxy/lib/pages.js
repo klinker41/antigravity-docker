@@ -1600,6 +1600,16 @@ function renderSidecarsPage() {
                             <label for="commandArgs">Arguments (One per line)</label>
                             <textarea id="commandArgs" placeholder="-c&#10;echo 'Scheduled task run'" rows="2"></textarea>
                         </div>
+
+                        <div class="form-group" style="margin-bottom: 16px;">
+                            <label for="commandModel">Model Tier</label>
+                            <select id="commandModel">
+                                <option value="inherit">Default</option>
+                                <option value="flash">Gemini Flash (fast, default)</option>
+                                <option value="pro">Gemini Pro (deep reasoning)</option>
+                                <option value="flash_lite">Gemini Flash Lite</option>
+                            </select>
+                        </div>
                     </div>
 
                     <!-- TAB 3: Continuous Background Worker -->
@@ -1612,6 +1622,16 @@ function renderSidecarsPage() {
                         <div class="form-group" style="margin-bottom: 16px;">
                             <label for="workerArgs">Worker Arguments (One per line)</label>
                             <textarea id="workerArgs" placeholder="worker.py&#10;--verbose" rows="2"></textarea>
+                        </div>
+
+                        <div class="form-group" style="margin-bottom: 16px;">
+                            <label for="workerModel">Model Tier</label>
+                            <select id="workerModel">
+                                <option value="inherit">Default</option>
+                                <option value="flash">Gemini Flash (fast, default)</option>
+                                <option value="pro">Gemini Pro (deep reasoning)</option>
+                                <option value="flash_lite">Gemini Flash Lite</option>
+                            </select>
                         </div>
 
                         <div class="form-group" style="margin-bottom: 16px;">
@@ -1751,6 +1771,11 @@ function renderSidecarsPage() {
                     projChip = '<span class="chip">📁 Project: <code>' + escProjectId + '</code></span>';
                 }
 
+                let modelChip = '';
+                if (s.model) {
+                    modelChip = '<span class="chip">🧠 ' + escapeHtml(s.model) + '</span>';
+                }
+
                 let nextRunChip = '';
                 if (s.nextRun) {
                     const d = new Date(s.nextRun);
@@ -1792,6 +1817,7 @@ function renderSidecarsPage() {
                     <div class="card-chips">
                         \${detailsChip}
                         \${projChip}
+                        \${modelChip}
                         \${nextRunChip}
                     </div>
 
@@ -1953,12 +1979,14 @@ function renderSidecarsPage() {
                     document.getElementById('commandCronExpr').value = s.cronExpr || '*/15 * * * *';
                     document.getElementById('commandExec').value = s.args ? s.args[1] : '';
                     document.getElementById('commandArgs').value = s.args ? s.args.slice(2).join('\\n') : '';
+                    document.getElementById('commandModel').value = s.model || 'inherit';
                 }
             } else {
                 switchTab('workerTab');
                 document.getElementById('workerCommand').value = s.command || '';
                 document.getElementById('workerArgs').value = (s.args || []).join('\\n');
                 document.getElementById('workerRestartPolicy').value = s.restartPolicy || 'always';
+                document.getElementById('workerModel').value = s.model || 'inherit';
             }
 
             modal.classList.add('active');
@@ -1998,6 +2026,8 @@ function renderSidecarsPage() {
             document.getElementById('sidecarDescription').value = '';
             document.getElementById('sidecarEnabled').checked = true;
             document.getElementById('promptModel').value = 'inherit';
+            document.getElementById('commandModel').value = 'inherit';
+            document.getElementById('workerModel').value = 'inherit';
             document.getElementById('promptContent').value = '';
             promptPreset.value = '0 * * * *';
             promptCronExpr.value = '0 * * * *';
@@ -2040,6 +2070,9 @@ function renderSidecarsPage() {
                 }
 
                 payload.projectId = project;
+                if (model && model !== 'inherit') {
+                    payload.model = model;
+                }
                 const agentArgs = [cron, 'agentapi', 'new-conversation'];
                 if (model && model !== 'inherit') {
                     agentArgs.push('--model=' + model);
@@ -2052,20 +2085,24 @@ function renderSidecarsPage() {
                 const cron = document.getElementById('commandCronExpr').value.trim();
                 const exec = document.getElementById('commandExec').value.trim();
                 const rawArgs = document.getElementById('commandArgs').value.split('\\n').map(s => s.trim()).filter(Boolean);
+                const model = document.getElementById('commandModel').value;
                 if (!exec) {
                     alert('Please specify a command executable.');
                     return;
                 }
+                payload.model = (model && model !== 'inherit') ? model : null;
                 payload.args = [cron, exec, ...rawArgs];
             } else if (activeTab === 'workerTab') {
                 payload.isScheduled = false;
                 const command = document.getElementById('workerCommand').value.trim();
                 const rawArgs = document.getElementById('workerArgs').value.split('\\n').map(s => s.trim()).filter(Boolean);
                 const restartPolicy = document.getElementById('workerRestartPolicy').value;
+                const model = document.getElementById('workerModel').value;
                 if (!command) {
                     alert('Please specify a worker executable.');
                     return;
                 }
+                payload.model = (model && model !== 'inherit') ? model : null;
                 payload.command = command;
                 payload.args = rawArgs;
                 payload.restartPolicy = restartPolicy;

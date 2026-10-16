@@ -226,6 +226,9 @@ Antigravity UI or navigating directly to `/sidecars`.
 - **Comprehensive Logging**: Sidecar output is written to
   `~/.gemini/antigravity/sidecar_data/<id>/logs/` and runtime events appear
   directly in `docker compose logs` for debugging.
+- **Model Selection & Defaults**: Sidecars can specify their preferred model
+  tier (`flash`, `pro`, or `flash_lite`) via `sidecar.json` or the Web UI.
+  When unspecified, sidecars default to `flash`.
 
 ---
 
