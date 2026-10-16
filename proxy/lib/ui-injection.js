@@ -325,6 +325,28 @@ function buildPreInitScript() {
     }
     window.addEventListener('resize', syncSidebarWidth);
 
+    // 10. Disable drag-and-drop project reordering in unfolded mode or touch scrolling
+    function shouldDisableSidebarDnd(e) {
+        var isUnfolded = document.documentElement && document.documentElement.classList.contains('agy-unfolded');
+        var isTouch = e && e.pointerType === 'touch';
+        return isUnfolded || isTouch;
+    }
+
+    document.addEventListener('pointerdown', function(e) {
+        if (!shouldDisableSidebarDnd(e)) return;
+
+        var sidebar = e.target && e.target.closest ? e.target.closest('[role="navigation"][aria-label="Sidebar"], div.bg-sidebar') : null;
+        if (!sidebar) return;
+
+        var scrollContainer = e.target.closest('.overflow-y-auto');
+        if (scrollContainer && sidebar.contains(scrollContainer)) {
+            if (e.target.closest('button, [role="button"], a, [role="menuitem"], input, textarea')) {
+                return;
+            }
+            e.stopPropagation();
+        }
+    }, true);
+
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', function() {
             applySentenceCapitalization(document.body);

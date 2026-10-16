@@ -265,6 +265,9 @@ optimizations into the Antigravity web app:
 - **Clean Application Branding**: Strips `" CLI"` from the browser tab's
   `<title>`, top-left header branding, and runtime `productName`, presenting a
   clean, unified `"Antigravity"` title across the interface.
+- **Touch-Friendly Sidebar Scrolling**: Intercepts accidental drag-and-drop
+  conversation reordering on touch interactions and foldable displays, ensuring
+  smooth list scrolling while preserving desktop mouse-and-keyboard reordering.
 - **Custom User Styles**: Add any custom CSS styling directly to
   `proxy/custom.css`. Styles are served with `no-cache` headers for immediate
   application.

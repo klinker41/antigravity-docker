@@ -104,47 +104,54 @@ input:focus {
 
 /* Ambient backdrop behind split panes */
 div:has(> [data-testid="sidebar-sash"]) {
-  background: radial-gradient(circle at 10% 20%, rgba(66, 133, 244, 0.08), transparent 42%),
-              radial-gradient(circle at 25% 85%, rgba(167, 139, 250, 0.06), transparent 36%),
-              var(--background, #0e1217) !important;
+  background-color: var(--background, #0c1017) !important;
+  background-image: 
+    radial-gradient(circle at 6% 16%, rgba(66, 133, 244, 0.22) 0%, transparent 45%),
+    radial-gradient(circle at 24% 85%, rgba(167, 139, 250, 0.18) 0%, transparent 40%),
+    radial-gradient(circle at 85% 20%, rgba(56, 189, 248, 0.14) 0%, transparent 35%) !important;
+  background-attachment: fixed !important;
 }
 
-/* Outer pane container for floating sidebar: provide insetting margin/padding */
-div:has(> [data-testid="sidebar-sash"]) > div:first-child {
-  padding: 10px 4px 10px 10px !important;
+/* Make split-pane wrappers transparent so the ambient backdrop shines through */
+div:has(> [data-testid="sidebar-sash"]) > div:first-child,
+div:has(> [data-testid="sidebar-sash"]) > div:first-child > div,
+div:has(> [data-testid="sidebar-sash"]) > div:last-child {
   background: transparent !important;
-  box-sizing: border-box !important;
-  display: flex !important;
-  flex-direction: column !important;
 }
 
-/* Floating sidebar window with backdrop blur and soft layered depth */
-div:has(> [data-testid="sidebar-sash"]) [role="navigation"][aria-label="Sidebar"],
-div:has(> [data-testid="sidebar-sash"]) .bg-sidebar {
-  border-radius: 18px !important;
-  background: rgba(18, 22, 31, 0.72) !important;
-  backdrop-filter: blur(28px) saturate(180%) !important;
-  -webkit-backdrop-filter: blur(28px) saturate(180%) !important;
-  border: 1px solid rgba(255, 255, 255, 0.09) !important;
-  box-shadow: 0 16px 40px -12px rgba(0, 0, 0, 0.45), 0 4px 16px -2px rgba(0, 0, 0, 0.25) !important;
+/* Floating sidebar window card with frosted glass blur */
+div:has(> [data-testid="sidebar-sash"]) [role="navigation"][aria-label="Sidebar"] {
+  height: calc(100% - 20px) !important;
+  max-height: calc(100% - 20px) !important;
+  width: calc(100% - 16px) !important;
+  margin: 10px 6px 10px 10px !important;
+  border-radius: 20px !important;
+  background: rgba(20, 26, 38, 0.70) !important;
+  backdrop-filter: blur(28px) saturate(190%) !important;
+  -webkit-backdrop-filter: blur(28px) saturate(190%) !important;
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
+  box-shadow: 0 16px 40px -8px rgba(0, 0, 0, 0.5), inset 0 1px 1px 0 rgba(255, 255, 255, 0.12) !important;
   overflow: hidden !important;
-  height: 100% !important;
-  max-height: 100% !important;
-  margin: 0 !important;
+}
+
+/* Ensure inner elements with bg-sidebar are transparent so glass is visible */
+div:has(> [data-testid="sidebar-sash"]) [role="navigation"][aria-label="Sidebar"] .bg-sidebar {
+  background-color: transparent !important;
 }
 
 /* Light mode floating sidebar window */
 @media (prefers-color-scheme: light) {
   div:has(> [data-testid="sidebar-sash"]) {
-    background: radial-gradient(circle at 10% 20%, rgba(66, 133, 244, 0.05), transparent 42%),
-                radial-gradient(circle at 25% 85%, rgba(167, 139, 250, 0.04), transparent 36%),
-                var(--background, #f8fafc) !important;
+    background-color: #f1f5f9 !important;
+    background-image: 
+      radial-gradient(circle at 6% 16%, rgba(66, 133, 244, 0.14) 0%, transparent 45%),
+      radial-gradient(circle at 24% 85%, rgba(167, 139, 250, 0.10) 0%, transparent 40%),
+      radial-gradient(circle at 85% 20%, rgba(56, 189, 248, 0.08) 0%, transparent 35%) !important;
   }
-  div:has(> [data-testid="sidebar-sash"]) [role="navigation"][aria-label="Sidebar"],
-  div:has(> [data-testid="sidebar-sash"]) .bg-sidebar {
-    background: rgba(255, 255, 255, 0.76) !important;
+  div:has(> [data-testid="sidebar-sash"]) [role="navigation"][aria-label="Sidebar"] {
+    background: rgba(255, 255, 255, 0.75) !important;
     border: 1px solid rgba(0, 0, 0, 0.08) !important;
-    box-shadow: 0 12px 36px -8px rgba(0, 0, 0, 0.09), 0 4px 14px -2px rgba(0, 0, 0, 0.05) !important;
+    box-shadow: 0 12px 36px -8px rgba(0, 0, 0, 0.08), inset 0 1px 1px 0 rgba(255, 255, 255, 0.6) !important;
   }
 }
 
@@ -166,14 +173,17 @@ div:has(> [data-testid="sidebar-sash"]) > [data-testid="sidebar-sash"]:hover {
 /* Top header container spanning the sidebar width (strictly when sidebar is open) */
 div.absolute.left-0.top-0:has([data-testid="sidebar-search-button"]),
 div.absolute.left-0.top-0:has([data-testid="sidebar-toggle"][aria-expanded="true"]) {
-  width: var(--sidebar-width, 260px) !important;
-  max-width: var(--sidebar-width, 260px) !important;
+  left: 10px !important;
+  top: 10px !important;
+  width: calc(var(--sidebar-width, 260px) - 16px) !important;
+  max-width: calc(var(--sidebar-width, 260px) - 16px) !important;
   display: flex !important;
   align-items: center !important;
-  padding: 10px 14px 0 14px !important;
+  padding: 0 12px !important;
   box-sizing: border-box !important;
   pointer-events: none !important;
   z-index: 50 !important;
+  height: 40px !important;
 }
 
 /* Ensure the header inner wrapper fills 100% width and spaces between */
@@ -209,5 +219,24 @@ div.absolute.left-0.top-0 [data-testid="sidebar-toggle"] {
   order: 2 !important;
 }
 
+/* ==========================================================================
+   6. Smooth Touch Scrolling (Disable DnD Drag Interference on Foldable / Touch)
+   ========================================================================== */
+.agy-unfolded [role="navigation"][aria-label="Sidebar"] .overflow-y-auto {
+  touch-action: pan-y !important;
+  overscroll-behavior-y: contain !important;
+}
 
+.agy-unfolded [role="navigation"][aria-label="Sidebar"] .overflow-y-auto * {
+  touch-action: pan-y !important;
+}
 
+@media (pointer: coarse) {
+  [role="navigation"][aria-label="Sidebar"] .overflow-y-auto {
+    touch-action: pan-y !important;
+    overscroll-behavior-y: contain !important;
+  }
+  [role="navigation"][aria-label="Sidebar"] .overflow-y-auto * {
+    touch-action: pan-y !important;
+  }
+}
