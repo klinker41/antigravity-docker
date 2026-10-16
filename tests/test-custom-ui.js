@@ -1,0 +1,152 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const path = require('node:path');
+const http = require('node:http');
+const { spawn } = require('node:child_process');
+const fs = require('node:fs');
+
+test('Custom UI, Viewport & Foldable Layout', async (t) => {
+    const TEST_PROXY_PORT = 16888;
+    const TEST_TARGET_PORT = 16889;
+    const TEST_PASSWORD = 'test-custom-ui-pass';
+
+    // Mock upstream AGY server returning standard Antigravity HTML
+    const mockAgyServer = http.createServer((req, res) => {
+        if (req.url.startsWith('/?useWebSocket=true') || req.url === '/' || req.url === '/index.html') {
+            res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+            res.end(`<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Antigravity</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0" />
+    <link rel="stylesheet" href="/jetbox.css" />
+  </head>
+  <body>
+    <div id="root">
+      <div role="navigation" aria-label="Sidebar" class="bg-sidebar">
+        <div class="px-2">Sidebar Content</div>
+        <div class="flex flex-col gap-px pt-2 px-2">
+          <button data-testid="settings-button">Settings</button>
+        </div>
+      </div>
+      <div class="content-pane">Chat Content</div>
+    </div>
+  </body>
+</html>`);
+            return;
+        }
+        res.writeHead(200, { 'Content-Type': 'text/plain' });
+        res.end('AGY Upstream OK');
+    });
+
+    await new Promise((resolve) => mockAgyServer.listen(TEST_TARGET_PORT, '127.0.0.1', resolve));
+
+    // Spawn proxy instance with test ports
+    const proxyProc = spawn(process.execPath, [path.join(__dirname, '../proxy/auth-proxy.js')], {
+        env: {
+            ...process.env,
+            AGY_PORT: String(TEST_PROXY_PORT),
+            AGY_HUB_PORT: String(TEST_TARGET_PORT),
+            PORT_FILE: '/tmp/test_custom_ui_port_nonexistent',
+            AUTH_PASSWORD: TEST_PASSWORD,
+            INITIAL_TARGET_PORT: String(TEST_TARGET_PORT),
+            ENABLE_IDE: 'false',
+            ENABLE_TERMINAL: 'false',
+        },
+        stdio: ['ignore', 'pipe', 'pipe']
+    });
+
+    try {
+        // Wait for proxy port to be ready
+        let proxyReady = false;
+        for (let i = 0; i < 30; i++) {
+            try {
+                const res = await fetch(`http://127.0.0.1:${TEST_PROXY_PORT}/status`);
+                if (res.status === 200 || res.status === 503) {
+                    proxyReady = true;
+                    break;
+                }
+            } catch (err) {}
+            await new Promise((r) => setTimeout(r, 100));
+        }
+        assert.ok(proxyReady, 'Proxy server failed to start within timeout');
+
+        await t.test('GET /custom.css serves stylesheet unauthenticated', async () => {
+            const res = await fetch(`http://127.0.0.1:${TEST_PROXY_PORT}/custom.css`);
+            assert.equal(res.status, 200);
+            assert.ok(res.headers.get('content-type')?.includes('text/css'));
+            const css = await res.text();
+            assert.ok(css.includes('--visual-viewport-height'), 'Should define --visual-viewport-height');
+            assert.ok(css.includes('.agy-unfolded'), 'Should define .agy-unfolded rules');
+            assert.ok(css.includes('--sidebar-width: 50vw'), 'Should configure 50% split width');
+            assert.ok(css.includes('sidebar-sash'), 'Should size split panes around sidebar-sash');
+        });
+
+        await t.test('HTML proxying modifies viewport meta and injects custom css & pre-init script', async () => {
+            // First authenticate to get session cookie
+            const loginBody = new URLSearchParams({ password: TEST_PASSWORD }).toString();
+            const loginRes = await fetch(`http://127.0.0.1:${TEST_PROXY_PORT}/__auth/login`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: loginBody,
+                redirect: 'manual'
+            });
+            const cookie = loginRes.headers.get('set-cookie');
+            assert.ok(cookie, 'Login should set session cookie');
+
+            const res = await fetch(`http://127.0.0.1:${TEST_PROXY_PORT}/?useWebSocket=true`, {
+                headers: { Cookie: cookie.split(';')[0] }
+            });
+            assert.equal(res.status, 200);
+            const html = await res.text();
+
+            // 1. Verify viewport meta tag has interactive-widget=resizes-content
+            assert.ok(
+                html.includes('interactive-widget=resizes-content'),
+                'HTML should include interactive-widget=resizes-content in viewport meta'
+            );
+
+            // 2. Verify custom.css link is injected in <head>
+            assert.ok(
+                html.includes('<link rel="stylesheet" href="/custom.css" />'),
+                'HTML head should link /custom.css'
+            );
+
+            // 3. Verify pre-init script is injected in <head>
+            assert.ok(
+                html.includes('<script id="agy-pre-init">'),
+                'HTML head should include agy-pre-init script'
+            );
+            assert.ok(
+                html.includes('isFoldableUnfolded'),
+                'Pre-init script should include isFoldableUnfolded detection'
+            );
+            assert.ok(
+                html.includes('--visual-viewport-height'),
+                'Pre-init script should manage --visual-viewport-height'
+            );
+            assert.ok(
+                html.includes('focusin'),
+                'Pre-init script should listen to focusin for smooth input scrolling'
+            );
+            assert.ok(
+                html.includes('autocapitalize') && html.includes('sentences'),
+                'Pre-init script should enforce autocapitalize="sentences" on message box'
+            );
+
+            // 4. Verify injected workspace tools script is in <body>
+            assert.ok(
+                html.includes('id="agy-injected-tools-script"'),
+                'HTML body should include injected tools script'
+            );
+            assert.ok(
+                html.includes('settings-button'),
+                'Injected script should target settings-button in sidebar'
+            );
+        });
+    } finally {
+        proxyProc.kill('SIGTERM');
+        await new Promise((resolve) => mockAgyServer.close(resolve));
+    }
+});

@@ -4,6 +4,7 @@
 import { Hono } from 'hono';
 import { createRequire } from 'node:module';
 import fs from 'node:fs';
+import path from 'node:path';
 import crypto from 'node:crypto';
 
 const require = createRequire(import.meta.url);
@@ -152,6 +153,25 @@ app.use('*', async (c, next) => {
         });
     }
     return next();
+});
+
+// Custom CSS stylesheet serving (ALWAYS UNAUTHENTICATED)
+const CUSTOM_CSS_PATH = path.join(import.meta.dir || __dirname, 'custom.css');
+app.get('/custom.css', (c) => {
+    let cssData = '';
+    try {
+        if (fs.existsSync(CUSTOM_CSS_PATH)) {
+            cssData = fs.readFileSync(CUSTOM_CSS_PATH, 'utf8');
+        }
+    } catch (e) {}
+    return new Response(cssData, {
+        status: 200,
+        headers: {
+            'Content-Type': 'text/css; charset=utf-8',
+            'Cache-Control': 'no-cache, no-store, must-revalidate',
+            'X-Content-Type-Options': 'nosniff'
+        }
+    });
 });
 
 // /status health check endpoint (ALWAYS UNAUTHENTICATED)

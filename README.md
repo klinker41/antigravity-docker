@@ -228,7 +228,35 @@ Antigravity UI or navigating directly to `/sidecars`.
   directly in `docker compose logs` for debugging.
 - **Model Selection & Defaults**: Sidecars can specify their preferred model
   tier (`flash`, `pro`, or `flash_lite`) via `sidecar.json` or the Web UI.
-  When unspecified, sidecars default to `flash`.
+
+---
+
+## 🎨 Custom CSS & Responsive UI Enhancements
+
+The web gateway automatically serves `/custom.css` (located in
+`proxy/custom.css`) and injects modern mobile and foldable viewport
+optimizations into the Antigravity web app:
+
+- **Virtual Keyboard Resizing**: Injects `interactive-widget=resizes-content`
+  into the viewport `<meta>` tag and dynamically syncs the visual viewport
+  height (`--visual-viewport-height`) via the `VisualViewport` API. Prevents
+  on-screen virtual keyboards on mobile devices (e.g., Android Chrome) from
+  covering the prompt text entry box, smoothly scrolling the active input into
+  view.
+- **Foldable Unfolded 50/50 Split**: Detects foldable devices in unfolded mode
+  (e.g., Google Pixel Fold, Samsung Galaxy Z Fold) and configures the desktop
+  split-pane layout so projects and conversation history occupy the left 50%
+  and active conversation/chat occupies the right 50%.
+- **Workspace Tools Menu Placement**: Cleanly positions the Workspace Tools
+  navigation group (Sidecar Manager, Custom Models, Web IDE, Host Terminal)
+  within the left sidebar navigation directly above Settings, eliminating
+  awkward placement in unfolded views.
+- **Sentence Case Capitalization**: Automatically sets and preserves
+  `autocapitalize="sentences"` on the message input box, preventing the mobile
+  virtual keyboard from defaulting to lowercase when starting a new prompt.
+- **Custom User Styles**: Add any custom CSS styling directly to
+  `proxy/custom.css`. Styles are served with `no-cache` headers for immediate
+  application.
 
 ---
 

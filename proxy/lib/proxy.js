@@ -2,7 +2,7 @@
 
 const { replaceFaviconInHtml } = require('./favicon');
 const { renderServiceStartingPage } = require('./pages');
-const { INJECTED_UI_STYLES, buildInjectedScript } = require('./ui-injection');
+const { INJECTED_UI_STYLES, buildInjectedScript, buildPreInitScript } = require('./ui-injection');
 const {
     CUSTOM_PLACEHOLDER_REGEX,
     isCustomPlaceholder,
@@ -202,6 +202,23 @@ async function proxyWebRequest(c, targetPort, targetPath, options = {}) {
                 }
 
                 html = replaceFaviconInHtml(html);
+
+                // Modern viewport handling: interactive-widget=resizes-content for virtual keyboard
+                if (html.includes('name="viewport"') || html.includes("name='viewport'")) {
+                    html = html.replace(
+                        /<meta\s+name=["']viewport["'][^>]*>/i,
+                        '<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, interactive-widget=resizes-content" />'
+                    );
+                }
+
+                // Inject custom CSS stylesheet and head pre-init script
+                const preInitScript = buildPreInitScript ? buildPreInitScript() : '';
+                const headInjection = `\n    <link rel="stylesheet" href="/custom.css" />\n    <script id="agy-pre-init">${preInitScript}</script>\n`;
+                if (html.includes('</head>')) {
+                    html = html.replace('</head>', `${headInjection}</head>`);
+                } else {
+                    html = headInjection + html;
+                }
 
                 const customScript = buildInjectedScript();
                 if (customScript) {

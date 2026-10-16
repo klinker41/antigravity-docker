@@ -113,13 +113,148 @@ const INJECTED_UI_STYLES = `
     opacity: 0.9;
 }
 
-/* Hide injected workspace tools on mobile layouts */
+/* Hide injected workspace tools on narrow folded mobile layouts */
 @media (max-width: 768px) {
-    .agy-injected-tools-group {
+    :root:not(.agy-unfolded) .agy-injected-tools-group {
         display: none !important;
     }
 }
 `;
+
+// Build pre-init script executed in <head> before main.js boots
+function buildPreInitScript() {
+    return `
+(function initAntigravityPreInit() {
+    function isFoldableUnfolded() {
+        if (typeof window === 'undefined') return false;
+        var w = window.innerWidth;
+        var h = window.innerHeight;
+        // Foldable unfolded: wide screen (>=600px) with squarish or wider aspect ratio (>=0.65), or >=768px
+        return (w >= 600 && (w / h) >= 0.65) || w >= 768;
+    }
+
+    try {
+        var realUA = navigator.userAgent;
+        Object.defineProperty(navigator, 'userAgent', {
+            get: function() {
+                if (isFoldableUnfolded()) {
+                    return realUA.replace(/Android[^;)]*/i, 'Linux x86_64').replace(/Mobile\\s*/i, '');
+                }
+                return realUA;
+            },
+            configurable: true
+        });
+    } catch (e) {}
+
+    function updateFoldState() {
+        var unfolded = isFoldableUnfolded();
+        if (document.documentElement) {
+            document.documentElement.classList.toggle('agy-unfolded', unfolded);
+        }
+    }
+    updateFoldState();
+
+    function updateVisualViewport() {
+        if (!window.visualViewport) return;
+        var h = window.visualViewport.height;
+        if (document.documentElement) {
+            document.documentElement.style.setProperty('--visual-viewport-height', h + 'px');
+        }
+    }
+    if (window.visualViewport) {
+        window.visualViewport.addEventListener('resize', updateVisualViewport);
+        window.visualViewport.addEventListener('scroll', updateVisualViewport);
+        updateVisualViewport();
+    }
+
+    var lastUnfoldedState = isFoldableUnfolded();
+    window.addEventListener('resize', function() {
+        updateFoldState();
+        updateVisualViewport();
+        var currentUnfolded = isFoldableUnfolded();
+        if (currentUnfolded !== lastUnfoldedState) {
+            lastUnfoldedState = currentUnfolded;
+            window.location.reload();
+        }
+    });
+
+    // 6. Smooth scroll to prompt box when virtual keyboard opens
+    document.addEventListener('focusin', function(e) {
+        if (e.target && (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT' || e.target.isContentEditable)) {
+            setTimeout(function() {
+                try {
+                    e.target.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
+                } catch (err) {}
+            }, 150);
+            setTimeout(function() {
+                try {
+                    e.target.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
+                } catch (err) {}
+            }, 350);
+        }
+    });
+
+    // 7. Enforce sentence case capitalization on message boxes and text inputs
+    function isMessageOrTextInput(el) {
+        if (!el || typeof el.getAttribute !== 'function') return false;
+        if (el.tagName === 'INPUT') {
+            var type = (el.getAttribute('type') || '').toLowerCase();
+            if (type === 'password' || type === 'email' || type === 'url' || type === 'number') return false;
+        }
+        if (el.closest && el.closest('.monaco-editor, .terminal, .xterm')) return false;
+        return el.isContentEditable || el.getAttribute('role') === 'textbox' || el.tagName === 'TEXTAREA' || (el.getAttribute('aria-label') || '').toLowerCase().includes('message');
+    }
+
+    try {
+        var origSetAttr = HTMLElement.prototype.setAttribute;
+        var origRemAttr = HTMLElement.prototype.removeAttribute;
+
+        HTMLElement.prototype.setAttribute = function(name, value) {
+            if (typeof name === 'string' && name.toLowerCase() === 'autocapitalize' && (value === 'off' || value === 'none')) {
+                if (isMessageOrTextInput(this)) {
+                    return origSetAttr.call(this, name, 'sentences');
+                }
+            }
+            return origSetAttr.call(this, name, value);
+        };
+
+        HTMLElement.prototype.removeAttribute = function(name) {
+            if (typeof name === 'string' && name.toLowerCase() === 'autocapitalize') {
+                if (isMessageOrTextInput(this)) {
+                    return origSetAttr.call(this, name, 'sentences');
+                }
+            }
+            return origRemAttr.call(this, name);
+        };
+    } catch (e) {}
+
+    function applySentenceCapitalization(target) {
+        if (!target) return;
+        var editables = target.querySelectorAll ? target.querySelectorAll('[contenteditable="true"], [role="textbox"], textarea') : [];
+        for (var i = 0; i < editables.length; i++) {
+            var el = editables[i];
+            if (isMessageOrTextInput(el) && el.getAttribute('autocapitalize') !== 'sentences') {
+                el.setAttribute('autocapitalize', 'sentences');
+            }
+        }
+    }
+
+    document.addEventListener('focusin', function(e) {
+        if (e.target && isMessageOrTextInput(e.target)) {
+            e.target.setAttribute('autocapitalize', 'sentences');
+        }
+    }, true);
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', function() {
+            applySentenceCapitalization(document.body);
+        });
+    } else {
+        applySentenceCapitalization(document.body);
+    }
+})();
+`;
+}
 
 // Build dynamically injected script for Left-hand Navigation Tools
 function buildInjectedScript() {
@@ -164,37 +299,20 @@ function buildInjectedScript() {
     function tryInjectSidebar() {
         if (document.getElementById('agy-injected-tools-group')) return;
 
-        const allElements = document.querySelectorAll('button, a, div[role="button"], li, nav, aside');
-        let targetElement = null;
+        // Target the actual Antigravity sidebar navigation
+        const sidebar = document.querySelector('[role="navigation"][aria-label="Sidebar"], div.bg-sidebar');
+        if (!sidebar) return;
 
-        for (const el of allElements) {
-            const text = (el.textContent || '').trim().toLowerCase();
-            const aria = (el.getAttribute('aria-label') || '').toLowerCase();
-            const title = (el.getAttribute('title') || '').toLowerCase();
-            if (
-                text.includes('conversation history') ||
-                text.includes('history') ||
-                aria.includes('history') ||
-                title.includes('history') ||
-                text.includes('new conversation') ||
-                aria.includes('new conversation')
-            ) {
-                targetElement = el;
-                if (text.includes('history') || aria.includes('history')) {
-                    break;
-                }
-            }
-        }
-
-        if (targetElement) {
-            const parent = targetElement.closest('ul, ol, nav, aside, div[class*="sidebar"], div[class*="nav"]') || targetElement.parentElement;
-            if (parent) {
-                const toolsEl = createToolsElement();
-                if (targetElement.nextSibling) {
-                    targetElement.parentNode.insertBefore(toolsEl, targetElement.nextSibling);
-                } else {
-                    targetElement.parentNode.appendChild(toolsEl);
-                }
+        const toolsEl = createToolsElement();
+        const settingsBtn = sidebar.querySelector('button[data-testid="settings-button"]');
+        if (settingsBtn && settingsBtn.parentElement) {
+            settingsBtn.parentElement.insertBefore(toolsEl, settingsBtn);
+        } else {
+            const footerSection = sidebar.querySelector('div.flex.flex-col.gap-px.pt-2.px-2') || sidebar.lastElementChild;
+            if (footerSection && footerSection !== sidebar) {
+                sidebar.insertBefore(toolsEl, footerSection);
+            } else {
+                sidebar.appendChild(toolsEl);
             }
         }
     }
@@ -245,5 +363,6 @@ function buildInjectedScript() {
 
 module.exports = {
     INJECTED_UI_STYLES,
+    buildPreInitScript,
     buildInjectedScript,
 };

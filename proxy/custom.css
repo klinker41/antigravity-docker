@@ -1,0 +1,99 @@
+/* Antigravity Custom UI Stylesheet */
+
+/* ==========================================================================
+   1. Responsive Viewport & Virtual Keyboard Fixes
+   ========================================================================== */
+:root {
+  --visual-viewport-height: 100dvh;
+}
+
+html,
+body,
+#root {
+  height: var(--visual-viewport-height, 100dvh) !important;
+  max-height: var(--visual-viewport-height, 100dvh) !important;
+  overscroll-behavior: none;
+}
+
+.h-\[100dvh\],
+.h-screen {
+  height: var(--visual-viewport-height, 100dvh) !important;
+  max-height: var(--visual-viewport-height, 100dvh) !important;
+}
+
+/* Ensure prompt input box has breathing room when scrolled into view */
+textarea:focus,
+input:focus {
+  scroll-margin-bottom: 24px;
+}
+
+/* ==========================================================================
+   2. Foldable Unfolded 50/50 Split Layout (Projects on Left, Chat on Right)
+   ========================================================================== */
+.agy-unfolded {
+  --sidebar-width: 50vw !important;
+}
+
+/* Antigravity Split-Pane Sizing for Unfolded Screen */
+.agy-unfolded div:has(> [data-testid="sidebar-sash"]) > div:first-child,
+.agy-unfolded div:has(> [data-testid="sidebar-sash"]) > div:nth-child(1) {
+  width: 50% !important;
+  max-width: 50% !important;
+  min-width: 50% !important;
+  flex: 0 0 50% !important;
+}
+
+.agy-unfolded [data-testid="sidebar-sash"] {
+  left: 50% !important;
+  cursor: col-resize !important;
+}
+
+.agy-unfolded div:has(> [data-testid="sidebar-sash"]) > div:last-child,
+.agy-unfolded div:has(> [data-testid="sidebar-sash"]) > div:nth-child(3) {
+  left: 50% !important;
+  width: 50% !important;
+  max-width: 50% !important;
+  flex: 0 0 50% !important;
+}
+
+/* Media query fallback for unfolded foldables (aspect ratio >= 0.68) */
+@media (min-width: 600px) and (min-aspect-ratio: 68/100) and (max-width: 1024px) {
+  :root {
+    --sidebar-width: 50vw !important;
+  }
+  div:has(> [data-testid="sidebar-sash"]) > div:first-child,
+  div:has(> [data-testid="sidebar-sash"]) > div:nth-child(1) {
+    width: 50% !important;
+    max-width: 50% !important;
+    min-width: 50% !important;
+    flex: 0 0 50% !important;
+  }
+  [data-testid="sidebar-sash"] {
+    left: 50% !important;
+  }
+  div:has(> [data-testid="sidebar-sash"]) > div:last-child,
+  div:has(> [data-testid="sidebar-sash"]) > div:nth-child(3) {
+    left: 50% !important;
+    width: 50% !important;
+    max-width: 50% !important;
+    flex: 0 0 50% !important;
+  }
+}
+
+/* ==========================================================================
+   3. Workspace Tools Menu Positioning & Styling
+   ========================================================================== */
+.agy-injected-tools-group {
+  margin: 6px 10px;
+  padding: 8px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.agy-injected-tools-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: rgba(255, 255, 255, 0.4);
+  padding: 2px 8px 4px 8px;
+}
