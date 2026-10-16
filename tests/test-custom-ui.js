@@ -17,8 +17,9 @@ test('Custom UI, Viewport & Foldable Layout', async (t) => {
             res.end(`<!doctype html>
 <html lang="en">
   <head>
+    <script>window.__APP_CONFIG__ = {"productName":"antigravity-cli","csrfToken":"test-token"};</script>
     <meta charset="UTF-8" />
-    <title>Antigravity</title>
+    <title>Antigravity CLI</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0" />
     <link rel="stylesheet" href="/jetbox.css" />
   </head>
@@ -81,6 +82,8 @@ test('Custom UI, Viewport & Foldable Layout', async (t) => {
             assert.ok(css.includes('.agy-unfolded'), 'Should define .agy-unfolded rules');
             assert.ok(css.includes('--sidebar-width: 50vw'), 'Should configure 50% split width');
             assert.ok(css.includes('sidebar-sash'), 'Should size split panes around sidebar-sash');
+            assert.ok(css.includes('backdrop-filter: blur'), 'Should include backdrop-filter blur for floating sidebar window');
+            assert.ok(css.includes('border-radius: 18px'), 'Should include rounded corners for floating sidebar window');
         });
 
         await t.test('HTML proxying modifies viewport meta and injects custom css & pre-init script', async () => {
@@ -107,13 +110,31 @@ test('Custom UI, Viewport & Foldable Layout', async (t) => {
                 'HTML should include interactive-widget=resizes-content in viewport meta'
             );
 
-            // 2. Verify custom.css link is injected in <head>
+            // 2. Verify title and productName are transformed (Antigravity CLI -> Antigravity)
+            assert.ok(
+                html.includes('"productName":"antigravity"'),
+                'HTML should replace productName with antigravity'
+            );
+            assert.ok(
+                !html.includes('"productName":"antigravity-cli"'),
+                'HTML should not contain antigravity-cli'
+            );
+            assert.ok(
+                html.includes('<title>Antigravity</title>'),
+                'HTML should contain <title>Antigravity</title>'
+            );
+            assert.ok(
+                !html.includes('<title>Antigravity CLI</title>'),
+                'HTML should not contain <title>Antigravity CLI</title>'
+            );
+
+            // 3. Verify custom.css link is injected in <head>
             assert.ok(
                 html.includes('<link rel="stylesheet" href="/custom.css" />'),
                 'HTML head should link /custom.css'
             );
 
-            // 3. Verify pre-init script is injected in <head>
+            // 4. Verify pre-init script is injected in <head>
             assert.ok(
                 html.includes('<script id="agy-pre-init">'),
                 'HTML head should include agy-pre-init script'
@@ -134,8 +155,12 @@ test('Custom UI, Viewport & Foldable Layout', async (t) => {
                 html.includes('autocapitalize') && html.includes('sentences'),
                 'Pre-init script should enforce autocapitalize="sentences" on message box'
             );
+            assert.ok(
+                html.includes('sanitizeDocumentTitle'),
+                'Pre-init script should sanitize document title'
+            );
 
-            // 4. Verify injected workspace tools script is in <body>
+            // 5. Verify injected workspace tools script is in <body>
             assert.ok(
                 html.includes('id="agy-injected-tools-script"'),
                 'HTML body should include injected tools script'

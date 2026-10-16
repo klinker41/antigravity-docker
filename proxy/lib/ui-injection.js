@@ -245,13 +245,70 @@ function buildPreInitScript() {
         }
     }, true);
 
+    // 8. Sanitize product name and window title (remove trailing 'CLI')
+    try {
+        if (window.__APP_CONFIG__) {
+            window.__APP_CONFIG__.productName = 'antigravity';
+        }
+        var appConfigVal = window.__APP_CONFIG__;
+        Object.defineProperty(window, '__APP_CONFIG__', {
+            get: function() { return appConfigVal; },
+            set: function(val) {
+                if (val && typeof val === 'object' && val.productName) {
+                    val.productName = val.productName.replace(/-cli$/i, '');
+                }
+                appConfigVal = val;
+            },
+            configurable: true
+        });
+    } catch (e) {}
+
+    function sanitizeDocumentTitle() {
+        if (typeof document !== 'undefined' && document.title && /antigravity\s+cli/i.test(document.title)) {
+            document.title = document.title.replace(/\s+cli\b/gi, '');
+        }
+    }
+    sanitizeDocumentTitle();
+
+    try {
+        var origTitleDesc = Object.getOwnPropertyDescriptor(Document.prototype, 'title') ||
+                            Object.getOwnPropertyDescriptor(HTMLDocument.prototype, 'title');
+        if (origTitleDesc && origTitleDesc.set) {
+            var origSetTitle = origTitleDesc.set;
+            Object.defineProperty(document, 'title', {
+                get: function() { return origTitleDesc.get.call(this); },
+                set: function(val) {
+                    if (typeof val === 'string') {
+                        val = val.replace(/\s+cli\b/gi, '');
+                    }
+                    return origSetTitle.call(this, val);
+                },
+                configurable: true
+            });
+        }
+    } catch (e) {}
+
+    function sanitizeTitleTextNodes() {
+        sanitizeDocumentTitle();
+        var headings = document.querySelectorAll('h1, h2, h3, span, a, div');
+        for (var i = 0; i < headings.length; i++) {
+            var node = headings[i];
+            if (node.childNodes.length === 1 && node.childNodes[0].nodeType === 3 && node.textContent.trim() === 'Antigravity CLI') {
+                node.textContent = 'Antigravity';
+            }
+        }
+    }
+
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', function() {
             applySentenceCapitalization(document.body);
+            sanitizeTitleTextNodes();
         });
     } else {
         applySentenceCapitalization(document.body);
+        sanitizeTitleTextNodes();
     }
+    window.addEventListener('load', sanitizeTitleTextNodes);
 })();
 `;
 }

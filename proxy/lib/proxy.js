@@ -203,6 +203,10 @@ async function proxyWebRequest(c, targetPort, targetPath, options = {}) {
 
                 html = replaceFaviconInHtml(html);
 
+                // Change product name from "antigravity-cli" to "antigravity" and title to "Antigravity"
+                html = html.replace(/"productName"\s*:\s*"antigravity-cli"/g, '"productName":"antigravity"');
+                html = html.replace(/<title>Antigravity(?:\s+CLI)?<\/title>/gi, '<title>Antigravity</title>');
+
                 // Modern viewport handling: interactive-widget=resizes-content for virtual keyboard
                 if (html.includes('name="viewport"') || html.includes("name='viewport'")) {
                     html = html.replace(

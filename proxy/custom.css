@@ -97,3 +97,65 @@ input:focus {
   color: rgba(255, 255, 255, 0.4);
   padding: 2px 8px 4px 8px;
 }
+
+/* ==========================================================================
+   4. Gemini-Style Floating Window Sidebar (Desktop / Split Layout Only)
+   ========================================================================== */
+
+/* Ambient backdrop behind split panes */
+div:has(> [data-testid="sidebar-sash"]) {
+  background: radial-gradient(circle at 10% 20%, rgba(66, 133, 244, 0.08), transparent 42%),
+              radial-gradient(circle at 25% 85%, rgba(167, 139, 250, 0.06), transparent 36%),
+              var(--background, #0e1217) !important;
+}
+
+/* Outer pane container for floating sidebar: provide insetting margin/padding */
+div:has(> [data-testid="sidebar-sash"]) > div:first-child {
+  padding: 10px 4px 10px 10px !important;
+  background: transparent !important;
+  box-sizing: border-box !important;
+  display: flex !important;
+  flex-direction: column !important;
+}
+
+/* Floating sidebar window with backdrop blur and soft layered depth */
+div:has(> [data-testid="sidebar-sash"]) [role="navigation"][aria-label="Sidebar"],
+div:has(> [data-testid="sidebar-sash"]) .bg-sidebar {
+  border-radius: 18px !important;
+  background: rgba(18, 22, 31, 0.72) !important;
+  backdrop-filter: blur(28px) saturate(180%) !important;
+  -webkit-backdrop-filter: blur(28px) saturate(180%) !important;
+  border: 1px solid rgba(255, 255, 255, 0.09) !important;
+  box-shadow: 0 16px 40px -12px rgba(0, 0, 0, 0.45), 0 4px 16px -2px rgba(0, 0, 0, 0.25) !important;
+  overflow: hidden !important;
+  height: 100% !important;
+  max-height: 100% !important;
+  margin: 0 !important;
+}
+
+/* Light mode floating sidebar window */
+@media (prefers-color-scheme: light) {
+  div:has(> [data-testid="sidebar-sash"]) {
+    background: radial-gradient(circle at 10% 20%, rgba(66, 133, 244, 0.05), transparent 42%),
+                radial-gradient(circle at 25% 85%, rgba(167, 139, 250, 0.04), transparent 36%),
+                var(--background, #f8fafc) !important;
+  }
+  div:has(> [data-testid="sidebar-sash"]) [role="navigation"][aria-label="Sidebar"],
+  div:has(> [data-testid="sidebar-sash"]) .bg-sidebar {
+    background: rgba(255, 255, 255, 0.76) !important;
+    border: 1px solid rgba(0, 0, 0, 0.08) !important;
+    box-shadow: 0 12px 36px -8px rgba(0, 0, 0, 0.09), 0 4px 14px -2px rgba(0, 0, 0, 0.05) !important;
+  }
+}
+
+/* Clean sash divider between floating window and conversation */
+div:has(> [data-testid="sidebar-sash"]) > [data-testid="sidebar-sash"] {
+  background: transparent !important;
+  border: none !important;
+  transition: background 0.15s ease;
+}
+
+div:has(> [data-testid="sidebar-sash"]) > [data-testid="sidebar-sash"]:hover {
+  background: rgba(255, 255, 255, 0.08) !important;
+}
+

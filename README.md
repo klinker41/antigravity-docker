@@ -254,6 +254,14 @@ optimizations into the Antigravity web app:
 - **Sentence Case Capitalization**: Automatically sets and preserves
   `autocapitalize="sentences"` on the message input box, preventing the mobile
   virtual keyboard from defaulting to lowercase when starting a new prompt.
+- **Gemini-Style Floating Window Sidebar**: Wraps the sidebar navigation in
+  a floating frosted glass card featuring rounded corners, subtle border,
+  background blur (`backdrop-filter`), layered drop shadows, and soft ambient
+  backdrop lighting when displayed alongside conversations in desktop or
+  unfolded modes (while retaining native full-width styling on mobile).
+- **Clean Application Branding**: Strips `" CLI"` from the browser tab's
+  `<title>`, top-left header branding, and runtime `productName`, presenting a
+  clean, unified `"Antigravity"` title across the interface.
 - **Custom User Styles**: Add any custom CSS styling directly to
   `proxy/custom.css`. Styles are served with `no-cache` headers for immediate
   application.
