@@ -133,14 +133,12 @@ function buildPreInitScript() {
         return (w >= 480 && (w / h) >= 0.65) || w >= 768;
     }
 
-    if (isFoldableUnfolded()) {
-        try {
-            var currentSw = localStorage.getItem('sidebarWidth');
-            if (!currentSw || currentSw === '256') {
-                localStorage.setItem('sidebarWidth', String(Math.round(window.innerWidth / 2)));
-            }
-        } catch (e) {}
-    }
+    try {
+        var currentSw = Number(localStorage.getItem('sidebarWidth'));
+        if (currentSw > 450) {
+            localStorage.removeItem('sidebarWidth');
+        }
+    } catch (e) {}
 
     try {
         var realUA = navigator.userAgent;

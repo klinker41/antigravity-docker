@@ -28,66 +28,10 @@ input:focus {
 }
 
 /* ==========================================================================
-   2. Foldable Unfolded 50/50 Split Layout (Projects on Left, Chat on Right)
+   2. Foldable Unfolded Layout
    ========================================================================== */
 .agy-unfolded {
   --sidebar-width: 50vw !important;
-}
-
-/* Antigravity Split-Pane Sizing for Unfolded Screen */
-.agy-unfolded div[style*="container-type"] > div:first-child,
-.agy-unfolded div:has(> * > * > [role="navigation"][aria-label="Sidebar"]) > div:first-child,
-.agy-unfolded div:has(> * > [data-testid="sidebar-sash"]) > div:first-child {
-  width: 50% !important;
-  max-width: 50% !important;
-  min-width: 50% !important;
-  flex: 0 0 50% !important;
-  left: 0 !important;
-}
-
-.agy-unfolded [data-testid="sidebar-sash"] {
-  left: 50% !important;
-  cursor: col-resize !important;
-}
-
-.agy-unfolded div[style*="container-type"] > div:last-child,
-.agy-unfolded div:has(> * > * > [role="navigation"][aria-label="Sidebar"]) > div:last-child,
-.agy-unfolded div:has(> * > [data-testid="sidebar-sash"]) > div:last-child {
-  width: 50% !important;
-  max-width: 50% !important;
-  min-width: 50% !important;
-  flex: 0 0 50% !important;
-  margin-left: 50% !important;
-  left: 0 !important;
-}
-
-/* Media query fallback for unfolded foldables (aspect ratio >= 0.65) */
-@media (min-width: 480px) and (min-aspect-ratio: 65/100) and (max-width: 1024px) {
-  :root {
-    --sidebar-width: 50vw !important;
-  }
-  div[style*="container-type"] > div:first-child,
-  div:has(> * > * > [role="navigation"][aria-label="Sidebar"]) > div:first-child,
-  div:has(> * > [data-testid="sidebar-sash"]) > div:first-child {
-    width: 50% !important;
-    max-width: 50% !important;
-    min-width: 50% !important;
-    flex: 0 0 50% !important;
-    left: 0 !important;
-  }
-  [data-testid="sidebar-sash"] {
-    left: 50% !important;
-  }
-  div[style*="container-type"] > div:last-child,
-  div:has(> * > * > [role="navigation"][aria-label="Sidebar"]) > div:last-child,
-  div:has(> * > [data-testid="sidebar-sash"]) > div:last-child {
-    width: 50% !important;
-    max-width: 50% !important;
-    min-width: 50% !important;
-    flex: 0 0 50% !important;
-    margin-left: 50% !important;
-    left: 0 !important;
-  }
 }
 
 /* ==========================================================================
@@ -109,44 +53,27 @@ input:focus {
 }
 
 /* ==========================================================================
-   4. Gemini-Style Floating Window Sidebar (Desktop / Split Layout Only)
+   4. Gemini-Style Floating Window Sidebar (Follows User Theme)
    ========================================================================== */
 
-/* Ambient backdrop behind split panes */
-body,
-#root,
-div:has([role="navigation"][aria-label="Sidebar"]),
-div:has([data-testid="sidebar-sash"]) {
-  background-color: var(--background, #0c1017) !important;
-  background-image: 
-    radial-gradient(circle at 6% 16%, rgba(66, 133, 244, 0.22) 0%, transparent 45%),
-    radial-gradient(circle at 24% 85%, rgba(167, 139, 250, 0.18) 0%, transparent 40%),
-    radial-gradient(circle at 85% 20%, rgba(56, 189, 248, 0.14) 0%, transparent 35%) !important;
-  background-attachment: fixed !important;
-}
-
-/* Make split-pane wrappers transparent so the ambient backdrop shines through */
+/* Make split-pane sidebar wrappers transparent so floating card is visible */
 div:has(> [role="navigation"][aria-label="Sidebar"]),
-div:has(> * > [role="navigation"][aria-label="Sidebar"]),
-div:has([data-testid="sidebar-sash"]) > div:first-child,
-div:has([data-testid="sidebar-sash"]) > div:first-child > div {
-  background: transparent !important;
+div:has(> * > [role="navigation"][aria-label="Sidebar"]) {
   background-color: transparent !important;
 }
 
 /* Floating sidebar window card with frosted glass blur */
 [role="navigation"][aria-label="Sidebar"] {
-  height: calc(100% - 20px) !important;
-  max-height: calc(100% - 20px) !important;
+  height: calc(100% - 16px) !important;
+  max-height: calc(100% - 16px) !important;
   width: calc(100% - 16px) !important;
-  margin: 10px 6px 10px 10px !important;
-  border-radius: 20px !important;
-  background: rgba(20, 26, 38, 0.70) !important;
-  background-color: rgba(20, 26, 38, 0.70) !important;
-  backdrop-filter: blur(28px) saturate(190%) !important;
-  -webkit-backdrop-filter: blur(28px) saturate(190%) !important;
-  border: 1px solid rgba(255, 255, 255, 0.12) !important;
-  box-shadow: 0 16px 40px -8px rgba(0, 0, 0, 0.5), inset 0 1px 1px 0 rgba(255, 255, 255, 0.12) !important;
+  margin: 8px !important;
+  border-radius: 18px !important;
+  background-color: color-mix(in srgb, var(--color-sidebar, #141721) 78%, transparent) !important;
+  backdrop-filter: blur(24px) saturate(180%) !important;
+  -webkit-backdrop-filter: blur(24px) saturate(180%) !important;
+  border: 1px solid color-mix(in srgb, var(--border, rgba(255, 255, 255, 0.15)) 40%, transparent) !important;
+  box-shadow: 0 12px 32px -4px rgba(0, 0, 0, 0.35) !important;
   overflow: hidden !important;
 }
 
@@ -156,34 +83,12 @@ div:has([data-testid="sidebar-sash"]) > div:first-child > div {
   background-color: transparent !important;
 }
 
-/* Light mode floating sidebar window */
-@media (prefers-color-scheme: light) {
-  body,
-  #root,
-  div:has([role="navigation"][aria-label="Sidebar"]),
-  div:has([data-testid="sidebar-sash"]) {
-    background-color: #f1f5f9 !important;
-    background-image: 
-      radial-gradient(circle at 6% 16%, rgba(66, 133, 244, 0.14) 0%, transparent 45%),
-      radial-gradient(circle at 24% 85%, rgba(167, 139, 250, 0.10) 0%, transparent 40%),
-      radial-gradient(circle at 85% 20%, rgba(56, 189, 248, 0.08) 0%, transparent 35%) !important;
-  }
-  [role="navigation"][aria-label="Sidebar"] {
-    background: rgba(255, 255, 255, 0.75) !important;
-    background-color: rgba(255, 255, 255, 0.75) !important;
-    border: 1px solid rgba(0, 0, 0, 0.08) !important;
-    box-shadow: 0 12px 36px -8px rgba(0, 0, 0, 0.08), inset 0 1px 1px 0 rgba(255, 255, 255, 0.6) !important;
-  }
-}
-
 /* Clean sash divider between floating window and conversation */
 div.bg-border:has([data-testid="sidebar-sash"]),
-div:has([data-testid="sidebar-sash"]) > div.bg-border,
 [data-testid="sidebar-sash"] {
   background-color: transparent !important;
   border: none !important;
   border-color: transparent !important;
-  transition: background 0.15s ease;
 }
 
 [data-testid="sidebar-sash"]:hover {
