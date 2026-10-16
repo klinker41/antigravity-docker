@@ -204,6 +204,22 @@ test('Custom UI, Viewport & Foldable Layout', async (t) => {
                 html.includes('settings-button'),
                 'Injected script should include settings-button fallback'
             );
+            assert.ok(
+                html.includes('hover:bg-sidebar-muted'),
+                'Injected script buttons should match native hover:bg-sidebar-muted class'
+            );
+            assert.ok(
+                html.includes('text-secondary-foreground'),
+                'Injected script buttons should match native text-secondary-foreground class'
+            );
+            assert.ok(
+                html.includes('shrink-0 flex items-center'),
+                'Injected script buttons should wrap icon in native shrink-0 flex items-center container'
+            );
+            assert.ok(
+                !html.includes('agy-injected-external-icon'),
+                'Injected script buttons should not include external link icon'
+            );
         });
     } finally {
         proxyProc.kill('SIGTERM');

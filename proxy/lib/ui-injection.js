@@ -3,95 +3,85 @@
 const { ENABLE_IDE, ENABLE_TERMINAL } = require('./config');
 
 // SVG icons used in the injected sidebar buttons
-const SIDECAR_ICON_SVG = `<svg class="agy-injected-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>`;
-const MODELS_ICON_SVG = `<svg class="agy-injected-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a4 4 0 0 1 4 4v2a4 4 0 0 1-4 4 4 4 0 0 1-4-4V6a4 4 0 0 1 4-4z"></path><path d="M18 14v1a6 6 0 0 1-12 0v-1"></path><path d="M12 18v4"></path><path d="M8 22h8"></path></svg>`;
-const IDE_ICON_SVG = `<svg class="agy-injected-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg>`;
-const TERMINAL_ICON_SVG = `<svg class="agy-injected-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>`;
-const EXTERNAL_ICON_SVG = `<svg class="agy-injected-external-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>`;
+const SIDECAR_ICON_SVG = `<svg class="agy-injected-btn-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>`;
+const MODELS_ICON_SVG = `<svg class="agy-injected-btn-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a4 4 0 0 1 4 4v2a4 4 0 0 1-4 4 4 4 0 0 1-4-4V6a4 4 0 0 1 4-4z"></path><path d="M18 14v1a6 6 0 0 1-12 0v-1"></path><path d="M12 18v4"></path><path d="M8 22h8"></path></svg>`;
+const IDE_ICON_SVG = `<svg class="agy-injected-btn-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg>`;
+const TERMINAL_ICON_SVG = `<svg class="agy-injected-btn-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>`;
 
 // Injected CSS Styles for Antigravity UI buttons
 const INJECTED_UI_STYLES = `
-/* Google Antigravity Injected Tools Navigation & Floating Dock */
+/* Google Antigravity Injected Tools Navigation */
 .agy-injected-tools-group {
     display: flex;
     flex-direction: column;
-    gap: 4px;
-    margin: 8px 12px;
-    padding: 8px 0;
-    border-top: 1px solid rgba(255, 255, 255, 0.08);
-    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    gap: 6px;
+    margin: 0;
+    padding: 0;
+    border: none;
+    width: 100%;
 }
 
 .agy-injected-tools-label {
-    font-size: 11px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.6px;
-    color: rgba(255, 255, 255, 0.4);
-    padding: 2px 8px 4px 8px;
-    user-select: none;
+    display: none !important;
 }
 
 .agy-injected-btn {
-    display: flex;
+    display: inline-flex;
     align-items: center;
-    gap: 10px;
-    padding: 8px 12px;
+    width: 100%;
+    height: 32px;
+    padding: 4px 8px;
+    gap: 6px;
     border-radius: 8px;
-    color: #e2e8f0;
+    color: var(--secondary-foreground, #9d9d9d);
     text-decoration: none;
-    font-size: 13px;
-    font-weight: 500;
-    transition: all 0.2s ease;
-    background: rgba(255, 255, 255, 0.03);
-    border: 1px solid rgba(255, 255, 255, 0.06);
+    font-size: 14px;
+    font-weight: 400;
+    line-height: 20px;
+    transition: background-color 150ms ease, color 150ms ease;
+    background: transparent;
+    border: none;
     user-select: none;
     cursor: pointer;
+    box-sizing: border-box;
 }
 
 .agy-injected-btn:hover {
-    background: rgba(66, 133, 244, 0.12);
-    border-color: rgba(66, 133, 244, 0.35);
-    color: #ffffff;
-    transform: translateX(2px);
-    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+    background: var(--sidebar-muted, rgba(255, 255, 255, 0.05));
+    color: var(--foreground, #ffffff);
+    transform: none;
+    box-shadow: none;
+    border-color: transparent;
+}
+
+.agy-injected-btn:active {
+    background: var(--sidebar-secondary, rgba(255, 255, 255, 0.08));
 }
 
 .agy-injected-btn-icon {
     width: 16px;
     height: 16px;
     flex-shrink: 0;
-    color: #38bdf8;
-    transition: transform 0.2s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: currentColor;
+    stroke: currentColor;
+    transition: none;
 }
 
 .agy-injected-btn:hover .agy-injected-btn-icon {
-    transform: scale(1.1);
-    color: #60a5fa;
+    color: currentColor;
+    stroke: currentColor;
+    transform: none;
 }
 
-.agy-injected-btn-sidecars .agy-injected-btn-icon {
-    color: #a78bfa;
-}
-
-.agy-injected-btn-sidecars:hover .agy-injected-btn-icon {
-    color: #c4b5fd;
-}
-
-.agy-injected-btn-models .agy-injected-btn-icon {
-    color: #f59e0b;
-}
-
-.agy-injected-btn-models:hover .agy-injected-btn-icon {
-    color: #fbbf24;
-}
-
+.agy-injected-btn-sidecars .agy-injected-btn-icon,
+.agy-injected-btn-models .agy-injected-btn-icon,
+.agy-injected-btn-ide .agy-injected-btn-icon,
 .agy-injected-btn-terminal .agy-injected-btn-icon {
-    color: #4ade80;
-}
-
-.agy-injected-btn-terminal:hover .agy-injected-btn-icon {
-    color: #86efac;
+    color: currentColor;
+    stroke: currentColor;
 }
 
 .agy-injected-btn-text {
@@ -99,18 +89,8 @@ const INJECTED_UI_STYLES = `
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-}
-
-.agy-injected-external-icon {
-    width: 12px;
-    height: 12px;
-    opacity: 0.4;
-    flex-shrink: 0;
-    transition: opacity 0.2s ease;
-}
-
-.agy-injected-btn:hover .agy-injected-external-icon {
-    opacity: 0.9;
+    font-size: 14px;
+    font-weight: 400;
 }
 
 /* Hide injected workspace tools on narrow folded mobile layouts */
@@ -462,31 +442,27 @@ function buildPreInitScript() {
 // Build dynamically injected script for Left-hand Navigation Tools
 function buildInjectedScript() {
     const sidecarButtonHtml = `
-            <a href="/sidecars" target="_blank" rel="noopener noreferrer" class="agy-injected-btn agy-injected-btn-sidecars" title="Open Sidecar Manager in a new tab">
-                ${SIDECAR_ICON_SVG}
-                <span class="agy-injected-btn-text">Sidecar Manager</span>
-                ${EXTERNAL_ICON_SVG}
+            <a href="/sidecars" target="_blank" rel="noopener noreferrer" class="agy-injected-btn agy-injected-btn-sidecars inline-flex items-center transition-colors select-none outline-none cursor-pointer flex-grow w-full justify-start font-normal h-8 min-w-0 gap-1.5 px-2 py-1 rounded-lg bg-transparent text-secondary-foreground hover:bg-sidebar-muted hover:text-foreground" title="Sidecar Manager">
+                <span class="shrink-0 flex items-center">${SIDECAR_ICON_SVG}</span>
+                <span class="truncate text-sm agy-injected-btn-text">Sidecar Manager</span>
             </a>`;
 
     const modelsButtonHtml = `
-            <a href="/models" target="_blank" rel="noopener noreferrer" class="agy-injected-btn agy-injected-btn-models" title="Configure Custom Models">
-                ${MODELS_ICON_SVG}
-                <span class="agy-injected-btn-text">Custom Models</span>
-                ${EXTERNAL_ICON_SVG}
+            <a href="/models" target="_blank" rel="noopener noreferrer" class="agy-injected-btn agy-injected-btn-models inline-flex items-center transition-colors select-none outline-none cursor-pointer flex-grow w-full justify-start font-normal h-8 min-w-0 gap-1.5 px-2 py-1 rounded-lg bg-transparent text-secondary-foreground hover:bg-sidebar-muted hover:text-foreground" title="Custom Models">
+                <span class="shrink-0 flex items-center">${MODELS_ICON_SVG}</span>
+                <span class="truncate text-sm agy-injected-btn-text">Custom Models</span>
             </a>`;
 
     const ideButtonHtml = ENABLE_IDE ? `
-            <a href="/ide/" target="_blank" rel="noopener noreferrer" class="agy-injected-btn agy-injected-btn-ide" title="Open VS Code Web IDE in a new tab">
-                ${IDE_ICON_SVG}
-                <span class="agy-injected-btn-text">Web IDE</span>
-                ${EXTERNAL_ICON_SVG}
+            <a href="/ide/" target="_blank" rel="noopener noreferrer" class="agy-injected-btn agy-injected-btn-ide inline-flex items-center transition-colors select-none outline-none cursor-pointer flex-grow w-full justify-start font-normal h-8 min-w-0 gap-1.5 px-2 py-1 rounded-lg bg-transparent text-secondary-foreground hover:bg-sidebar-muted hover:text-foreground" title="Web IDE">
+                <span class="shrink-0 flex items-center">${IDE_ICON_SVG}</span>
+                <span class="truncate text-sm agy-injected-btn-text">Web IDE</span>
             </a>` : '';
 
     const termButtonHtml = ENABLE_TERMINAL ? `
-            <a href="/terminal/" target="_blank" rel="noopener noreferrer" class="agy-injected-btn agy-injected-btn-terminal" title="Open Host Terminal in a new tab">
-                ${TERMINAL_ICON_SVG}
-                <span class="agy-injected-btn-text">Host Terminal</span>
-                ${EXTERNAL_ICON_SVG}
+            <a href="/terminal/" target="_blank" rel="noopener noreferrer" class="agy-injected-btn agy-injected-btn-terminal inline-flex items-center transition-colors select-none outline-none cursor-pointer flex-grow w-full justify-start font-normal h-8 min-w-0 gap-1.5 px-2 py-1 rounded-lg bg-transparent text-secondary-foreground hover:bg-sidebar-muted hover:text-foreground" title="Host Terminal">
+                <span class="shrink-0 flex items-center">${TERMINAL_ICON_SVG}</span>
+                <span class="truncate text-sm agy-injected-btn-text">Host Terminal</span>
             </a>` : '';
 
     return `
@@ -495,7 +471,7 @@ function buildInjectedScript() {
         const container = document.createElement('div');
         container.id = 'agy-injected-tools-group';
         container.className = 'agy-injected-tools-group';
-        container.innerHTML = \`<div class="agy-injected-tools-label">Workspace Tools</div>${sidecarButtonHtml}${modelsButtonHtml}${ideButtonHtml}${termButtonHtml}\`;
+        container.innerHTML = \`${sidecarButtonHtml}${modelsButtonHtml}${ideButtonHtml}${termButtonHtml}\`;
         return container;
     }
 
