@@ -5,6 +5,7 @@
    ========================================================================== */
 :root {
   --visual-viewport-height: 100dvh;
+  --safe-area-bottom: env(safe-area-inset-bottom, 0px);
 }
 
 html,
@@ -21,10 +22,22 @@ body,
   max-height: var(--visual-viewport-height, 100dvh) !important;
 }
 
+/* Ensure sidebar content (Settings) stays above bottom navigation bar */
+[role="navigation"][aria-label="Sidebar"] {
+  padding-bottom: max(8px, calc(8px + max(var(--safe-area-bottom, 0px), env(safe-area-inset-bottom, 0px)))) !important;
+  box-sizing: border-box !important;
+}
+
+/* Ensure chat prompt box and bottom toolbars stay above bottom navigation bar */
+[data-testid="agent-input-box"] {
+  padding-bottom: max(var(--safe-area-bottom, 0px), env(safe-area-inset-bottom, 0px)) !important;
+  box-sizing: border-box !important;
+}
+
 /* Ensure prompt input box has breathing room when scrolled into view */
 textarea:focus,
 input:focus {
-  scroll-margin-bottom: 24px;
+  scroll-margin-bottom: max(24px, calc(24px + max(var(--safe-area-bottom, 0px), env(safe-area-inset-bottom, 0px))));
 }
 
 /* ==========================================================================

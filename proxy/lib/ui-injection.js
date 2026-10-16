@@ -171,21 +171,74 @@ function buildPreInitScript() {
             document.documentElement.style.setProperty('--visual-viewport-height', h + 'px');
         }
     }
+
+    function updateDynamicBottomPadding() {
+        if (typeof window === 'undefined') return;
+
+        // 1. Probe W3C env(safe-area-inset-bottom)
+        var probe = document.createElement('div');
+        probe.style.cssText = 'position:fixed;bottom:0;left:0;height:env(safe-area-inset-bottom,0px);pointer-events:none;visibility:hidden;z-index:-9999;';
+        (document.body || document.documentElement).appendChild(probe);
+        var inset = probe.getBoundingClientRect().height || 0;
+        probe.remove();
+
+        // 2. Fallback check for mobile touch devices with a system navigation bar
+        if (inset === 0) {
+            var hasTouch = typeof navigator !== 'undefined' && (
+                navigator.maxTouchPoints > 0 ||
+                (window.matchMedia && window.matchMedia('(pointer: coarse)').matches)
+            );
+            var isKeyboardOpen = window.visualViewport && window.visualViewport.height < window.innerHeight * 0.75;
+            if (hasTouch && !isKeyboardOpen && window.screen && window.screen.height && window.screen.availHeight) {
+                var diff = window.screen.height - window.screen.availHeight;
+                if (diff >= 12 && diff <= 72) {
+                    inset = diff;
+                }
+            }
+        }
+
+        var padVal = inset > 0 ? (inset + 'px') : '0px';
+        if (document.documentElement) {
+            document.documentElement.style.setProperty('--safe-area-bottom', padVal);
+        }
+        var layoutContainer = document.querySelector('.h-screen.w-screen') || document.getElementById('root');
+        if (layoutContainer) {
+            layoutContainer.style.setProperty('--safe-area-bottom', padVal);
+        }
+    }
+
     if (window.visualViewport) {
-        window.visualViewport.addEventListener('resize', updateVisualViewport);
-        window.visualViewport.addEventListener('scroll', updateVisualViewport);
+        window.visualViewport.addEventListener('resize', function() {
+            updateVisualViewport();
+            updateDynamicBottomPadding();
+        });
+        window.visualViewport.addEventListener('scroll', function() {
+            updateVisualViewport();
+            updateDynamicBottomPadding();
+        });
         updateVisualViewport();
     }
+    updateDynamicBottomPadding();
 
     var lastUnfoldedState = isFoldableUnfolded();
     window.addEventListener('resize', function() {
         updateFoldState();
         updateVisualViewport();
+        updateDynamicBottomPadding();
         var currentUnfolded = isFoldableUnfolded();
         if (currentUnfolded !== lastUnfoldedState) {
             lastUnfoldedState = currentUnfolded;
             window.location.reload();
         }
+    });
+    window.addEventListener('orientationchange', function() {
+        setTimeout(updateDynamicBottomPadding, 100);
+    });
+    window.addEventListener('focusin', function() {
+        setTimeout(updateDynamicBottomPadding, 150);
+    });
+    window.addEventListener('focusout', function() {
+        setTimeout(updateDynamicBottomPadding, 150);
     });
 
     // 6. Smooth scroll to prompt box when virtual keyboard opens

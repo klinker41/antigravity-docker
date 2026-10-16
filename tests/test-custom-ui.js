@@ -92,6 +92,9 @@ test('Custom UI, Viewport & Foldable Layout', async (t) => {
             assert.ok(!css.includes('backdrop-filter'), 'Should not include backdrop-filter glass styling');
             assert.ok(!css.includes('border-radius: 18px'), 'Should not include rounded floating window corners');
             assert.ok(!css.includes('calc(100% - 16px)'), 'Should not inset sidebar height for floating window');
+            assert.ok(css.includes('--safe-area-bottom'), 'Should define --safe-area-bottom');
+            assert.ok(css.includes('env(safe-area-inset-bottom'), 'Should use env(safe-area-inset-bottom)');
+            assert.ok(css.includes('agent-input-box'), 'Should pad agent-input-box above nav bar');
             assert.ok(css.includes('touch-action: pan-y'), 'Should enforce touch-action pan-y on sidebar for touch scrolling');
             assert.ok(css.includes('sidebar-search-button'), 'Should include styles for sidebar-search-button');
             assert.ok(css.includes('sidebar-toggle'), 'Should include styles for sidebar-toggle');
@@ -182,6 +185,10 @@ test('Custom UI, Viewport & Foldable Layout', async (t) => {
             assert.ok(
                 html.includes('shouldDisableSidebarDnd'),
                 'Pre-init script should intercept DnD on touch and unfolded views'
+            );
+            assert.ok(
+                html.includes('updateDynamicBottomPadding'),
+                'Pre-init script should calculate dynamic bottom nav bar padding'
             );
 
             // 5. Verify injected workspace tools script is in <body>
