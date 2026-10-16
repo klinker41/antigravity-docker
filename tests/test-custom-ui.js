@@ -84,11 +84,12 @@ test('Custom UI, Viewport & Foldable Layout', async (t) => {
             const css = await res.text();
             assert.ok(css.includes('--visual-viewport-height'), 'Should define --visual-viewport-height');
             assert.ok(css.includes('.agy-unfolded'), 'Should define .agy-unfolded rules');
-            assert.ok(css.includes('--sidebar-width: 50vw'), 'Should configure 50% split width');
+            assert.ok(css.includes('--sidebar-width: 50%'), 'Should configure 50% split width');
             assert.ok(css.includes('sidebar-sash'), 'Should size split panes around sidebar-sash');
-            assert.ok(css.includes('backdrop-filter: blur'), 'Should include backdrop-filter blur for floating sidebar window');
-            assert.ok(css.includes('border-radius: 18px'), 'Should include rounded corners for floating sidebar window');
-            assert.ok(css.includes('calc(100% - 16px)'), 'Should inset height for floating sidebar window');
+            assert.ok(css.includes('width: 50% !important'), 'Should enforce 50% split width on split panes');
+            assert.ok(!css.includes('backdrop-filter'), 'Should not include backdrop-filter glass styling');
+            assert.ok(!css.includes('border-radius: 18px'), 'Should not include rounded floating window corners');
+            assert.ok(!css.includes('calc(100% - 16px)'), 'Should not inset sidebar height for floating window');
             assert.ok(css.includes('touch-action: pan-y'), 'Should enforce touch-action pan-y on sidebar for touch scrolling');
             assert.ok(css.includes('sidebar-search-button'), 'Should include styles for sidebar-search-button');
             assert.ok(css.includes('sidebar-toggle'), 'Should include styles for sidebar-toggle');

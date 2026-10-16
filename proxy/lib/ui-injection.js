@@ -129,8 +129,11 @@ function buildPreInitScript() {
         if (typeof window === 'undefined') return false;
         var w = window.innerWidth;
         var h = window.innerHeight;
-        // Foldable unfolded: wide screen (>=480px) with squarish or wider aspect ratio (>=0.65), or >=768px
-        return (w >= 480 && (w / h) >= 0.65) || w >= 768;
+        var hasTouch = typeof navigator !== 'undefined' && (navigator.maxTouchPoints > 0 || (window.matchMedia && window.matchMedia('(pointer: coarse)').matches));
+        var isSquarish = (w / h) >= 0.65 && (w / h) <= 1.5;
+        if (w >= 480 && w <= 1050 && isSquarish) return true;
+        if (hasTouch && w >= 480 && w <= 1150 && (w / h) >= 0.65) return true;
+        return false;
     }
 
     try {
