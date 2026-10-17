@@ -237,55 +237,142 @@ function buildPreInitScript() {
         }
     });
 
-    // 7. Enforce sentence case capitalization on message boxes and text inputs
+    // 7. Enforce sentence case capitalization and Android typo autocorrect on message boxes
     function isMessageOrTextInput(el) {
         if (!el || typeof el.getAttribute !== 'function') return false;
+        if (el.tagName === 'CODE' || el.tagName === 'PRE') return false;
         if (el.tagName === 'INPUT') {
             var type = (el.getAttribute('type') || '').toLowerCase();
-            if (type === 'password' || type === 'email' || type === 'url' || type === 'number') return false;
+            if (type === 'password' || type === 'email' || type === 'url' || type === 'number' || type === 'search' || type === 'hidden') return false;
         }
         if (el.closest && el.closest('.monaco-editor, .terminal, .xterm')) return false;
-        return el.isContentEditable || el.getAttribute('role') === 'textbox' || el.tagName === 'TEXTAREA' || (el.getAttribute('aria-label') || '').toLowerCase().includes('message');
+        var ce = el.getAttribute('contenteditable');
+        var role = el.getAttribute('role');
+        return ce === 'true' || ce === '' || el.contentEditable === 'true' || role === 'textbox' || role === 'combobox' || el.tagName === 'TEXTAREA' || (el.getAttribute('aria-label') || '').toLowerCase().includes('message');
+    }
+
+    var origSetAttr = HTMLElement.prototype.setAttribute;
+    var origRemAttr = HTMLElement.prototype.removeAttribute;
+
+    function enforceInputTypingAttributes(el) {
+        if (!isMessageOrTextInput(el)) return;
+        if (el.getAttribute('autocapitalize') !== 'sentences') {
+            origSetAttr.call(el, 'autocapitalize', 'sentences');
+        }
+        if (el.getAttribute('autocorrect') !== 'on') {
+            origSetAttr.call(el, 'autocorrect', 'on');
+        }
+        if (el.getAttribute('spellcheck') !== 'true') {
+            origSetAttr.call(el, 'spellcheck', 'true');
+        }
+        if (el.getAttribute('autocomplete') !== 'on') {
+            origSetAttr.call(el, 'autocomplete', 'on');
+        }
     }
 
     try {
-        var origSetAttr = HTMLElement.prototype.setAttribute;
-        var origRemAttr = HTMLElement.prototype.removeAttribute;
-
         HTMLElement.prototype.setAttribute = function(name, value) {
-            if (typeof name === 'string' && name.toLowerCase() === 'autocapitalize' && (value === 'off' || value === 'none')) {
-                if (isMessageOrTextInput(this)) {
-                    return origSetAttr.call(this, name, 'sentences');
+            if (typeof name === 'string') {
+                var lower = name.toLowerCase();
+                var strVal = String(value).toLowerCase();
+                if (lower === 'autocapitalize' && (strVal === 'off' || strVal === 'none')) {
+                    if (isMessageOrTextInput(this)) {
+                        return origSetAttr.call(this, name, 'sentences');
+                    }
+                }
+                if (lower === 'autocorrect' && (strVal === 'off' || strVal === 'false' || strVal === 'none')) {
+                    if (isMessageOrTextInput(this)) {
+                        return origSetAttr.call(this, name, 'on');
+                    }
+                }
+                if (lower === 'spellcheck' && (strVal === 'false' || strVal === 'off')) {
+                    if (isMessageOrTextInput(this)) {
+                        return origSetAttr.call(this, name, 'true');
+                    }
+                }
+                if (lower === 'autocomplete' && (strVal === 'off' || strVal === 'none')) {
+                    if (isMessageOrTextInput(this)) {
+                        return origSetAttr.call(this, name, 'on');
+                    }
                 }
             }
-            return origSetAttr.call(this, name, value);
+            var res = origSetAttr.call(this, name, value);
+            if (typeof name === 'string') {
+                var l = name.toLowerCase();
+                if (l === 'contenteditable' || l === 'role' || l === 'aria-label') {
+                    enforceInputTypingAttributes(this);
+                }
+            }
+            return res;
         };
 
         HTMLElement.prototype.removeAttribute = function(name) {
-            if (typeof name === 'string' && name.toLowerCase() === 'autocapitalize') {
-                if (isMessageOrTextInput(this)) {
+            if (typeof name === 'string') {
+                var lower = name.toLowerCase();
+                if (lower === 'autocapitalize' && isMessageOrTextInput(this)) {
                     return origSetAttr.call(this, name, 'sentences');
+                }
+                if (lower === 'autocorrect' && isMessageOrTextInput(this)) {
+                    return origSetAttr.call(this, name, 'on');
+                }
+                if (lower === 'spellcheck' && isMessageOrTextInput(this)) {
+                    return origSetAttr.call(this, name, 'true');
+                }
+                if (lower === 'autocomplete' && isMessageOrTextInput(this)) {
+                    return origSetAttr.call(this, name, 'on');
                 }
             }
             return origRemAttr.call(this, name);
         };
+
+        var ceDesc = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'contentEditable');
+        if (ceDesc && ceDesc.set) {
+            Object.defineProperty(HTMLElement.prototype, 'contentEditable', {
+                get: function() { return ceDesc.get.call(this); },
+                set: function(val) {
+                    var r = ceDesc.set.call(this, val);
+                    if (val === 'true' || val === true || val === '') {
+                        enforceInputTypingAttributes(this);
+                    }
+                    return r;
+                },
+                configurable: true
+            });
+        }
+
+        var scDesc = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'spellcheck');
+        if (scDesc && scDesc.set) {
+            Object.defineProperty(HTMLElement.prototype, 'spellcheck', {
+                get: function() { return scDesc.get.call(this); },
+                set: function(val) {
+                    if (!val && isMessageOrTextInput(this)) {
+                        return scDesc.set.call(this, true);
+                    }
+                    return scDesc.set.call(this, val);
+                },
+                configurable: true
+            });
+        }
     } catch (e) {}
 
     function applySentenceCapitalization(target) {
         if (!target) return;
-        var editables = target.querySelectorAll ? target.querySelectorAll('[contenteditable="true"], [role="textbox"], textarea') : [];
+        var editables = target.querySelectorAll ? target.querySelectorAll('[contenteditable="true"], [role="textbox"], [role="combobox"], [aria-label*="Message"], [aria-label*="message"], textarea') : [];
         for (var i = 0; i < editables.length; i++) {
-            var el = editables[i];
-            if (isMessageOrTextInput(el) && el.getAttribute('autocapitalize') !== 'sentences') {
-                el.setAttribute('autocapitalize', 'sentences');
-            }
+            enforceInputTypingAttributes(editables[i]);
         }
     }
 
+    document.addEventListener('pointerdown', function(e) {
+        if (!e.target) return;
+        var host = e.target.closest ? (e.target.closest('[contenteditable="true"], [role="textbox"], [role="combobox"], textarea, input') || e.target) : e.target;
+        enforceInputTypingAttributes(host);
+    }, true);
+
     document.addEventListener('focusin', function(e) {
-        if (e.target && isMessageOrTextInput(e.target)) {
-            e.target.setAttribute('autocapitalize', 'sentences');
-        }
+        if (!e.target) return;
+        var host = e.target.closest ? (e.target.closest('[contenteditable="true"], [role="textbox"], [role="combobox"], textarea, input') || e.target) : e.target;
+        enforceInputTypingAttributes(host);
     }, true);
 
     // 8. Sanitize product name and window title (remove trailing 'CLI')

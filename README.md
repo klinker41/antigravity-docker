@@ -254,9 +254,10 @@ optimizations into the Antigravity web app:
   search and hide-sidebar toggle buttons to the top right corner of the
   floating sidebar window card, keeping application branding separated on
   the left.
-- **Sentence Case Capitalization**: Automatically sets and preserves
-  `autocapitalize="sentences"` on the message input box, preventing the mobile
-  virtual keyboard from defaulting to lowercase when starting a new prompt.
+- **Sentence Case & Mobile Autocorrect**: Automatically sets and preserves
+  `autocapitalize="sentences"`, `autocorrect="on"`, `spellcheck="true"`, and
+  `autocomplete="on"` on the message input box so Android and mobile virtual
+  keyboards capitalize new sentences and automatically replace typos.
 - **Gemini-Style Floating Window Sidebar**: Wraps the sidebar navigation in
   a floating frosted glass card featuring rounded corners, subtle border,
   background blur (`backdrop-filter`), layered drop shadows, and soft ambient

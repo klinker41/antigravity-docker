@@ -175,6 +175,10 @@ test('Custom UI, Viewport & Foldable Layout', async (t) => {
                 'Pre-init script should enforce autocapitalize="sentences" on message box'
             );
             assert.ok(
+                html.includes('autocorrect') && html.includes('spellcheck') && html.includes('autocomplete'),
+                'Pre-init script should enforce autocorrect="on", spellcheck="true", and autocomplete="on" on message box'
+            );
+            assert.ok(
                 html.includes('sanitizeDocumentTitle'),
                 'Pre-init script should sanitize document title'
             );
@@ -220,6 +224,103 @@ test('Custom UI, Viewport & Foldable Layout', async (t) => {
                 !html.includes('agy-injected-external-icon'),
                 'Injected script buttons should not include external link icon'
             );
+        });
+
+        await t.test('Pre-init script enforces autocorrect, spellcheck, autocomplete, and autocapitalize on prompt inputs', () => {
+            const vm = require('node:vm');
+            const { buildPreInitScript } = require('../proxy/lib/ui-injection');
+
+            class FakeHTMLElement {
+                constructor(tagName = 'DIV') {
+                    this.tagName = tagName;
+                    this._attrs = {};
+                    this.contentEditable = 'inherit';
+                    this.spellcheck = true;
+                }
+                getAttribute(name) {
+                    return Object.prototype.hasOwnProperty.call(this._attrs, name.toLowerCase())
+                        ? this._attrs[name.toLowerCase()]
+                        : null;
+                }
+                setAttribute(name, value) {
+                    this._attrs[name.toLowerCase()] = String(value);
+                }
+                removeAttribute(name) {
+                    delete this._attrs[name.toLowerCase()];
+                }
+                closest() {
+                    return null;
+                }
+            }
+
+            const sandbox = {
+                window: {
+                    innerWidth: 400,
+                    innerHeight: 800,
+                    addEventListener: () => {},
+                    localStorage: { getItem: () => null, removeItem: () => {} },
+                },
+                navigator: { userAgent: 'Mozilla/5.0 (Linux; Android 14)', maxTouchPoints: 5 },
+                document: {
+                    readyState: 'loading',
+                    title: 'Antigravity CLI',
+                    documentElement: {
+                        style: { setProperty: () => {}, removeProperty: () => {} },
+                        classList: { toggle: () => {}, contains: () => false },
+                        appendChild: () => {},
+                    },
+                    addEventListener: () => {},
+                    getElementById: () => null,
+                    querySelector: () => null,
+                    querySelectorAll: () => [],
+                    createElement: () => ({
+                        style: {},
+                        getBoundingClientRect: () => ({ height: 0 }),
+                        remove: () => {},
+                    }),
+                },
+                HTMLElement: FakeHTMLElement,
+                Document: function() {},
+                HTMLDocument: function() {},
+                Object,
+                String,
+                Number,
+                Math,
+                setTimeout,
+            };
+
+            vm.runInNewContext(buildPreInitScript(), sandbox);
+
+            // Simulate Antigravity's Lexical Z$a component mounting a prompt box
+            const promptEl = new FakeHTMLElement('DIV');
+            promptEl.setAttribute('aria-label', 'Message input');
+            promptEl.setAttribute('role', 'combobox');
+            promptEl.setAttribute('autocapitalize', 'off');
+            promptEl.setAttribute('autocorrect', 'off');
+            promptEl.setAttribute('spellcheck', 'false');
+            promptEl.setAttribute('autocomplete', 'off');
+            promptEl.contentEditable = 'true';
+
+            assert.equal(promptEl.getAttribute('autocapitalize'), 'sentences');
+            assert.equal(promptEl.getAttribute('autocorrect'), 'on');
+            assert.equal(promptEl.getAttribute('spellcheck'), 'true');
+            assert.equal(promptEl.getAttribute('autocomplete'), 'on');
+
+            // Simulate Lexical focus() trying to remove attributes
+            promptEl.removeAttribute('autocapitalize');
+            promptEl.removeAttribute('autocorrect');
+            promptEl.removeAttribute('spellcheck');
+            promptEl.removeAttribute('autocomplete');
+
+            assert.equal(promptEl.getAttribute('autocapitalize'), 'sentences');
+            assert.equal(promptEl.getAttribute('autocorrect'), 'on');
+            assert.equal(promptEl.getAttribute('spellcheck'), 'true');
+            assert.equal(promptEl.getAttribute('autocomplete'), 'on');
+
+            // Ensure inline <code> elements keep spellcheck="false" untouched
+            const codeEl = new FakeHTMLElement('CODE');
+            codeEl.setAttribute('spellcheck', 'false');
+            assert.equal(codeEl.getAttribute('spellcheck'), 'false');
         });
     } finally {
         proxyProc.kill('SIGTERM');
