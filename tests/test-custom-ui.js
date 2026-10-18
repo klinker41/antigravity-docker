@@ -402,14 +402,29 @@ test('Custom UI, Viewport & Foldable Layout', async (t) => {
                 }
             }
 
-            // 1. Touch / unfolded pointerdown on a project header (<button data-testid="project-header">) MUST be stopped
+            // 1. Touch / unfolded pointerdown on a project header (<button data-testid="project-header"> wrapped in mE aria-haspopup="menu") MUST be stopped
             let stoppedProject = false;
+            let immediateStoppedProject = false;
             fireDocEvent('pointerdown', {
                 pointerType: 'touch',
-                target: makeTarget(null),
+                target: makeTarget('[aria-haspopup]'),
                 stopPropagation: () => { stoppedProject = true; },
+                stopImmediatePropagation: () => { immediateStoppedProject = true; },
             });
-            assert.equal(stoppedProject, true, 'Should stop pointerdown on project header button during touch/unfolded');
+            assert.equal(stoppedProject, true, 'Should stop pointerdown on project header even when wrapped in aria-haspopup context menu trigger');
+            assert.equal(immediateStoppedProject, true, 'Should stopImmediatePropagation on project header pointerdown');
+
+            // 1b. Subsequent pointermove during sidebar touch scroll MUST also be stopped so window pointermove listeners cannot trigger drag
+            let stoppedMove = false;
+            let immediateStoppedMove = false;
+            fireDocEvent('pointermove', {
+                pointerType: 'touch',
+                target: makeTarget('[aria-haspopup]'),
+                stopPropagation: () => { stoppedMove = true; },
+                stopImmediatePropagation: () => { immediateStoppedMove = true; },
+            });
+            assert.equal(stoppedMove, true, 'Should stop pointermove during active sidebar touch scroll');
+            assert.equal(immediateStoppedMove, true, 'Should stopImmediatePropagation on pointermove during active sidebar touch scroll');
 
             // 2. Touch pointerdown on a [data-no-drag] menu button (e.g. Project options 3-dots menu) should NOT be stopped
             let stoppedMenu = false;
@@ -445,7 +460,7 @@ test('Custom UI, Viewport & Foldable Layout', async (t) => {
             let stoppedPhoneTouch = false;
             fireDocEvent('pointerdown', {
                 pointerType: 'touch',
-                target: makeTarget(null),
+                target: makeTarget('[aria-haspopup]'),
                 stopPropagation: () => { stoppedPhoneTouch = true; },
             });
             assert.equal(stoppedPhoneTouch, true, 'Should stop pointerdown on touch input even when folded');
@@ -467,4 +482,5 @@ test('Custom UI, Viewport & Foldable Layout', async (t) => {
         await new Promise((resolve) => mockAgyServer.close(resolve));
     }
 });
+
 

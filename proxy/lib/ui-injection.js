@@ -494,28 +494,77 @@ function buildPreInitScript() {
         return false;
     }
 
-    document.addEventListener('pointerdown', function(e) {
-        if (!shouldDisableSidebarDnd(e)) return;
-        if (!e.target || typeof e.target.closest !== 'function') return;
+    function isInsideSidebarScrollArea(target) {
+        var el = (target && target.nodeType === 3) ? target.parentElement : target;
+        if (!el || typeof el.closest !== 'function') return null;
 
-        var sidebar = e.target.closest('[role="navigation"][aria-label="Sidebar"], div.bg-sidebar');
-        if (!sidebar) return;
-
-        var scrollContainer = e.target.closest('.overflow-y-auto, [data-sidebar-scroll-container]');
-        if (scrollContainer && sidebar.contains(scrollContainer)) {
-            if (e.target.closest('input, textarea, [contenteditable="true"], [data-no-drag], .popover-trigger-element, [aria-haspopup], [role="menuitem"], [role="menu"]')) {
-                return;
-            }
-            e.stopPropagation();
+        // Allow inline rename inputs and explicit [data-no-drag] / popover menu buttons (do NOT exempt [aria-haspopup] because mE ContextMenu wraps every project-header with aria-haspopup="menu")
+        if (el.closest('input, textarea, [contenteditable="true"], [data-no-drag], .popover-trigger-element, [role="menuitem"], [role="menu"]')) {
+            return null;
         }
-    }, true);
+
+        var directItem = el.closest('[data-project-card], [data-testid="project-header"], [data-sidebar-row-id], [data-testid^="conversation-row-"], [data-testid="conversation-group-header"], [data-sidebar-scroll-container], [data-testid="conversation-list-sidebar"]');
+        if (directItem) return el;
+
+        var sidebar = el.closest('[role="navigation"][aria-label="Sidebar"], div.bg-sidebar');
+        if (!sidebar) return null;
+
+        var scrollContainer = el.closest('.overflow-y-auto, [data-sidebar-scroll-container]');
+        if (scrollContainer && sidebar.contains(scrollContainer)) {
+            return el;
+        }
+        return null;
+    }
+
+    var activeSidebarTouchScroll = false;
+
+    function handleSidebarPointerDownCapture(e) {
+        if (!shouldDisableSidebarDnd(e)) {
+            activeSidebarTouchScroll = false;
+            return;
+        }
+        var el = isInsideSidebarScrollArea(e.target);
+        if (!el) {
+            activeSidebarTouchScroll = false;
+            return;
+        }
+
+        activeSidebarTouchScroll = true;
+        e.stopPropagation();
+        if (typeof e.stopImmediatePropagation === 'function') {
+            e.stopImmediatePropagation();
+        }
+    }
+
+    function handleSidebarPointerMoveCapture(e) {
+        if (!shouldDisableSidebarDnd(e)) return;
+        if (activeSidebarTouchScroll || isInsideSidebarScrollArea(e.target)) {
+            e.stopPropagation();
+            if (typeof e.stopImmediatePropagation === 'function') {
+                e.stopImmediatePropagation();
+            }
+        }
+    }
+
+    function handleSidebarPointerEndCapture() {
+        activeSidebarTouchScroll = false;
+    }
+
+    window.addEventListener('pointerdown', handleSidebarPointerDownCapture, true);
+    document.addEventListener('pointerdown', handleSidebarPointerDownCapture, true);
+    window.addEventListener('pointermove', handleSidebarPointerMoveCapture, true);
+    document.addEventListener('pointermove', handleSidebarPointerMoveCapture, true);
+    window.addEventListener('pointerup', handleSidebarPointerEndCapture, true);
+    window.addEventListener('pointercancel', handleSidebarPointerEndCapture, true);
 
     document.addEventListener('dragstart', function(e) {
         if (!shouldDisableSidebarDnd(e)) return;
-        var sidebar = e.target && e.target.closest ? e.target.closest('[role="navigation"][aria-label="Sidebar"], div.bg-sidebar') : null;
-        if (sidebar) {
+        if (isInsideSidebarScrollArea(e.target)) {
             e.preventDefault();
             e.stopPropagation();
+            if (typeof e.stopImmediatePropagation === 'function') {
+                e.stopImmediatePropagation();
+            }
         }
     }, true);
 
