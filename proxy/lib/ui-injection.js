@@ -485,24 +485,36 @@ function buildPreInitScript() {
     }
     window.addEventListener('resize', syncSidebarWidth);
 
-    // 10. Disable drag-and-drop project reordering in unfolded mode or touch scrolling
+    // 10. Disable drag-and-drop project/conversation reordering in unfolded mode or touch scrolling
     function shouldDisableSidebarDnd(e) {
-        var isUnfolded = document.documentElement && document.documentElement.classList.contains('agy-unfolded');
-        var isTouch = e && e.pointerType === 'touch';
-        return isUnfolded || isTouch;
+        if (e && e.pointerType === 'touch') return true;
+        if (isFoldableUnfolded()) return true;
+        if (document.documentElement && document.documentElement.classList.contains('agy-unfolded')) return true;
+        if (typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(pointer: coarse)').matches && (!e || e.pointerType !== 'mouse')) return true;
+        return false;
     }
 
     document.addEventListener('pointerdown', function(e) {
         if (!shouldDisableSidebarDnd(e)) return;
+        if (!e.target || typeof e.target.closest !== 'function') return;
 
-        var sidebar = e.target && e.target.closest ? e.target.closest('[role="navigation"][aria-label="Sidebar"], div.bg-sidebar') : null;
+        var sidebar = e.target.closest('[role="navigation"][aria-label="Sidebar"], div.bg-sidebar');
         if (!sidebar) return;
 
-        var scrollContainer = e.target.closest('.overflow-y-auto');
+        var scrollContainer = e.target.closest('.overflow-y-auto, [data-sidebar-scroll-container]');
         if (scrollContainer && sidebar.contains(scrollContainer)) {
-            if (e.target.closest('button, [role="button"], a, [role="menuitem"], input, textarea')) {
+            if (e.target.closest('input, textarea, [contenteditable="true"], [data-no-drag], .popover-trigger-element, [aria-haspopup], [role="menuitem"], [role="menu"]')) {
                 return;
             }
+            e.stopPropagation();
+        }
+    }, true);
+
+    document.addEventListener('dragstart', function(e) {
+        if (!shouldDisableSidebarDnd(e)) return;
+        var sidebar = e.target && e.target.closest ? e.target.closest('[role="navigation"][aria-label="Sidebar"], div.bg-sidebar') : null;
+        if (sidebar) {
+            e.preventDefault();
             e.stopPropagation();
         }
     }, true);

@@ -186,21 +186,41 @@ div.absolute.left-0.top-0 [data-testid="sidebar-toggle"] {
 /* ==========================================================================
    5. Smooth Touch Scrolling (Disable DnD Drag Interference on Foldable / Touch)
    ========================================================================== */
-.agy-unfolded [role="navigation"][aria-label="Sidebar"] .overflow-y-auto {
+.agy-unfolded [role="navigation"][aria-label="Sidebar"] .overflow-y-auto,
+.agy-unfolded [role="navigation"][aria-label="Sidebar"] [data-sidebar-scroll-container] {
   touch-action: pan-y !important;
   overscroll-behavior-y: contain !important;
 }
 
-.agy-unfolded [role="navigation"][aria-label="Sidebar"] .overflow-y-auto * {
+.agy-unfolded [role="navigation"][aria-label="Sidebar"] .overflow-y-auto *,
+.agy-unfolded [role="navigation"][aria-label="Sidebar"] [data-sidebar-scroll-container] *,
+.agy-unfolded [data-project-card],
+.agy-unfolded [data-testid="project-header"] {
   touch-action: pan-y !important;
+  -webkit-user-drag: none !important;
+  user-select: none !important;
+}
+
+.agy-unfolded [role="navigation"][aria-label="Sidebar"] :is(.overflow-y-auto, [data-sidebar-scroll-container]) :is(input, textarea, [contenteditable="true"]) {
+  user-select: text !important;
 }
 
 @media (pointer: coarse) {
-  [role="navigation"][aria-label="Sidebar"] .overflow-y-auto {
+  [role="navigation"][aria-label="Sidebar"] .overflow-y-auto,
+  [role="navigation"][aria-label="Sidebar"] [data-sidebar-scroll-container] {
     touch-action: pan-y !important;
     overscroll-behavior-y: contain !important;
   }
-  [role="navigation"][aria-label="Sidebar"] .overflow-y-auto * {
+  [role="navigation"][aria-label="Sidebar"] .overflow-y-auto *,
+  [role="navigation"][aria-label="Sidebar"] [data-sidebar-scroll-container] *,
+  [data-project-card],
+  [data-testid="project-header"] {
     touch-action: pan-y !important;
+    -webkit-user-drag: none !important;
+    user-select: none !important;
+  }
+  [role="navigation"][aria-label="Sidebar"] :is(.overflow-y-auto, [data-sidebar-scroll-container]) :is(input, textarea, [contenteditable="true"]) {
+    user-select: text !important;
   }
 }
+

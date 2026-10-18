@@ -96,6 +96,9 @@ test('Custom UI, Viewport & Foldable Layout', async (t) => {
             assert.ok(css.includes('env(safe-area-inset-bottom'), 'Should use env(safe-area-inset-bottom)');
             assert.ok(css.includes('agent-input-box'), 'Should pad agent-input-box above nav bar');
             assert.ok(css.includes('touch-action: pan-y'), 'Should enforce touch-action pan-y on sidebar for touch scrolling');
+            assert.ok(css.includes('[data-project-card]'), 'Should target [data-project-card] for touch scrolling');
+            assert.ok(css.includes('[data-testid="project-header"]'), 'Should target [data-testid="project-header"] for touch scrolling');
+            assert.ok(css.includes('-webkit-user-drag: none'), 'Should disable -webkit-user-drag on sidebar items');
             assert.ok(css.includes('sidebar-search-button'), 'Should include styles for sidebar-search-button');
             assert.ok(css.includes('sidebar-toggle'), 'Should include styles for sidebar-toggle');
             assert.ok(css.includes('margin-left: auto'), 'Should right-align action buttons container');
@@ -322,8 +325,146 @@ test('Custom UI, Viewport & Foldable Layout', async (t) => {
             codeEl.setAttribute('spellcheck', 'false');
             assert.equal(codeEl.getAttribute('spellcheck'), 'false');
         });
+
+        await t.test('Pre-init script stops pointerdown and dragstart on sidebar project headers and conversation rows on touch/unfolded', () => {
+            const vm = require('node:vm');
+            const { buildPreInitScript } = require('../proxy/lib/ui-injection');
+
+            const docListeners = {};
+            class FakeHTMLElement {}
+
+            let isUnfoldedViewport = true;
+            let isCoarsePointer = true;
+
+            const sandbox = {
+                window: {
+                    get innerWidth() { return isUnfoldedViewport ? 800 : 1440; },
+                    get innerHeight() { return isUnfoldedViewport ? 850 : 900; },
+                    matchMedia: (q) => ({ matches: q === '(pointer: coarse)' ? isCoarsePointer : false }),
+                    addEventListener: () => {},
+                    localStorage: { getItem: () => null, removeItem: () => {} },
+                },
+                navigator: { userAgent: 'Mozilla/5.0 (Linux; Android 14)', maxTouchPoints: 5 },
+                document: {
+                    readyState: 'loading',
+                    title: 'Antigravity',
+                    documentElement: {
+                        style: { setProperty: () => {}, removeProperty: () => {} },
+                        classList: {
+                            toggle: () => {},
+                            contains: (cls) => cls === 'agy-unfolded' && isUnfoldedViewport,
+                        },
+                        appendChild: () => {},
+                    },
+                    addEventListener: (type, fn, capture) => {
+                        if (!docListeners[type]) docListeners[type] = [];
+                        docListeners[type].push({ fn, capture });
+                    },
+                    getElementById: () => null,
+                    querySelector: () => null,
+                    querySelectorAll: () => [],
+                    createElement: () => ({
+                        style: {},
+                        getBoundingClientRect: () => ({ height: 0 }),
+                        remove: () => {},
+                    }),
+                },
+                HTMLElement: FakeHTMLElement,
+                Document: function() {},
+                HTMLDocument: function() {},
+                Object,
+                String,
+                Number,
+                Math,
+                setTimeout,
+            };
+
+            vm.runInNewContext(buildPreInitScript(), sandbox);
+
+            const sidebar = {};
+            const scrollContainer = {};
+            sidebar.contains = (el) => el === scrollContainer;
+
+            function makeTarget(matchedInteractiveSelector = null) {
+                return {
+                    closest: (sel) => {
+                        if (sel.includes('aria-label="Sidebar"')) return sidebar;
+                        if (sel.includes('.overflow-y-auto') || sel.includes('[data-sidebar-scroll-container]')) return scrollContainer;
+                        if (matchedInteractiveSelector && sel.includes(matchedInteractiveSelector)) return {};
+                        return null;
+                    }
+                };
+            }
+
+            function fireDocEvent(type, eventObj) {
+                for (const l of docListeners[type] || []) {
+                    l.fn(eventObj);
+                }
+            }
+
+            // 1. Touch / unfolded pointerdown on a project header (<button data-testid="project-header">) MUST be stopped
+            let stoppedProject = false;
+            fireDocEvent('pointerdown', {
+                pointerType: 'touch',
+                target: makeTarget(null),
+                stopPropagation: () => { stoppedProject = true; },
+            });
+            assert.equal(stoppedProject, true, 'Should stop pointerdown on project header button during touch/unfolded');
+
+            // 2. Touch pointerdown on a [data-no-drag] menu button (e.g. Project options 3-dots menu) should NOT be stopped
+            let stoppedMenu = false;
+            fireDocEvent('pointerdown', {
+                pointerType: 'touch',
+                target: makeTarget('[data-no-drag]'),
+                stopPropagation: () => { stoppedMenu = true; },
+            });
+            assert.equal(stoppedMenu, false, 'Should allow pointerdown on [data-no-drag] menu triggers');
+
+            // 3. Touch pointerdown on an inline rename <input> should NOT be stopped
+            let stoppedInput = false;
+            fireDocEvent('pointerdown', {
+                pointerType: 'touch',
+                target: makeTarget('input'),
+                stopPropagation: () => { stoppedInput = true; },
+            });
+            assert.equal(stoppedInput, false, 'Should allow pointerdown on input elements');
+
+            // 4. Desktop mouse pointerdown (not unfolded, pointer not coarse) should NOT be stopped
+            isUnfoldedViewport = false;
+            isCoarsePointer = false;
+            let stoppedDesktopMouse = false;
+            fireDocEvent('pointerdown', {
+                pointerType: 'mouse',
+                target: makeTarget(null),
+                stopPropagation: () => { stoppedDesktopMouse = true; },
+            });
+            assert.equal(stoppedDesktopMouse, false, 'Should allow mouse drag-and-drop on desktop');
+
+            // 5. Touch pointerdown on phone (folded / coarse pointer) MUST still be stopped
+            isCoarsePointer = true;
+            let stoppedPhoneTouch = false;
+            fireDocEvent('pointerdown', {
+                pointerType: 'touch',
+                target: makeTarget(null),
+                stopPropagation: () => { stoppedPhoneTouch = true; },
+            });
+            assert.equal(stoppedPhoneTouch, true, 'Should stop pointerdown on touch input even when folded');
+
+            // 6. Native dragstart in sidebar on touch/unfolded MUST be prevented and stopped
+            let preventedDragStart = false;
+            let stoppedDragStart = false;
+            fireDocEvent('dragstart', {
+                pointerType: 'touch',
+                target: makeTarget(null),
+                preventDefault: () => { preventedDragStart = true; },
+                stopPropagation: () => { stoppedDragStart = true; },
+            });
+            assert.equal(preventedDragStart, true, 'Should preventDefault on dragstart in sidebar on touch');
+            assert.equal(stoppedDragStart, true, 'Should stopPropagation on dragstart in sidebar on touch');
+        });
     } finally {
         proxyProc.kill('SIGTERM');
         await new Promise((resolve) => mockAgyServer.close(resolve));
     }
 });
+
