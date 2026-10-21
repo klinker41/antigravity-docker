@@ -255,4 +255,40 @@ test('Container Packaging & Module Resolution (DOCKER-01)', async (t) => {
         assert.match(output, /FINAL_IDE=false/, 'ENABLE_IDE should be forced to false when code-server is not in PATH');
         assert.match(output, /FINAL_TERMINAL=false/, 'ENABLE_TERMINAL should be forced to false when ttyd is not in PATH');
     });
+
+    await t.test('entrypoint.sh enables translation proxy by default even when no custom models are configured', () => {
+        const entrypointContent = fs.readFileSync(path.join(rootDir, 'entrypoint.sh'), 'utf8');
+        const startMarker = 'export TRANSLATION_PORT="${TRANSLATION_PORT:-4405}"';
+        const endMarker = 'export AUTH_PASSWORD="${AUTH_PASSWORD:-}"';
+        const startIdx = entrypointContent.indexOf(startMarker);
+        const endIdx = entrypointContent.indexOf(endMarker);
+        assert.ok(startIdx !== -1 && endIdx !== -1 && startIdx < endIdx, 'Could not locate translation proxy block in entrypoint.sh');
+
+        const block = entrypointContent.slice(startIdx, endIdx);
+        const { execFileSync } = require('node:child_process');
+
+        // Default behavior (unset ENABLE_TRANSLATION_PROXY, no custom_models.json)
+        const defaultOutput = execFileSync('/bin/bash', ['-c', `
+            export GEMINI_DIR="/tmp/nonexistent-gemini-dir"
+            unset ENABLE_TRANSLATION_PROXY
+            unset CLOUD_CODE_URL
+            ${block}
+            echo "FINAL_PROXY=$ENABLE_TRANSLATION_PROXY"
+            echo "FINAL_CLOUD_CODE_URL=$CLOUD_CODE_URL"
+        `], { encoding: 'utf8' });
+        assert.match(defaultOutput, /FINAL_PROXY=true/, 'ENABLE_TRANSLATION_PROXY should default to true');
+        assert.match(defaultOutput, /FINAL_CLOUD_CODE_URL=http:\/\/127\.0\.0\.1:4405/, 'CLOUD_CODE_URL should point to translation proxy by default');
+
+        // Explicit opt-out (ENABLE_TRANSLATION_PROXY=false, no custom_models.json)
+        const disabledOutput = execFileSync('/bin/bash', ['-c', `
+            export GEMINI_DIR="/tmp/nonexistent-gemini-dir"
+            export ENABLE_TRANSLATION_PROXY="false"
+            unset CLOUD_CODE_URL
+            ${block}
+            echo "FINAL_PROXY=$ENABLE_TRANSLATION_PROXY"
+            echo "FINAL_CLOUD_CODE_URL=\${CLOUD_CODE_URL:-UNSET}"
+        `], { encoding: 'utf8' });
+        assert.match(disabledOutput, /FINAL_PROXY=false/, 'ENABLE_TRANSLATION_PROXY=false should disable proxy when no custom models exist');
+        assert.match(disabledOutput, /FINAL_CLOUD_CODE_URL=UNSET/, 'CLOUD_CODE_URL should be unset when translation proxy is disabled');
+    });
 });

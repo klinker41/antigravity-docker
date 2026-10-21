@@ -10,6 +10,7 @@ import crypto from 'node:crypto';
 const require = createRequire(import.meta.url);
 
 const {
+    isFeatureEnabled,
     LISTEN_PORT,
     AGY_HUB_PORT,
     AUTH_PASSWORD,
@@ -74,7 +75,7 @@ try {
     }
 }
 
-const TRANSLATION_PORT = process.env.TRANSLATION_PORT
+const TRANSLATION_PORT = (process.env.TRANSLATION_PORT && (LISTEN_PORT === 4400 || process.env.TRANSLATION_PORT !== '4405'))
     ? parseInt(process.env.TRANSLATION_PORT, 10)
     : (LISTEN_PORT === 4400 ? 4405 : (LISTEN_PORT > 0 ? LISTEN_PORT + 5 : 4405));
 
@@ -468,7 +469,7 @@ function ensureTranslationProxyStarted(forceOnEnabledModels = false) {
     );
     const shouldStart = forceOnEnabledModels
         ? hasModels
-        : (process.env.ENABLE_TRANSLATION_PROXY !== 'false' && (process.env.ENABLE_TRANSLATION_PROXY === 'true' || hasModels));
+        : isFeatureEnabled(process.env.ENABLE_TRANSLATION_PROXY, true);
 
     if (!shouldStart) return;
 

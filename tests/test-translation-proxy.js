@@ -458,6 +458,33 @@ test('Translation Proxy - isFetchAvailableModels and injectAvailableModels helpe
     assert.deepEqual(injectAvailableModels(null, mockModelsManager), null);
     assert.deepEqual(injectAvailableModels({}, null), {});
     assert.deepEqual(injectAvailableModels({ foo: 1 }, { getInjectedModels: () => [] }), { foo: 1 });
+
+    // Upgrades tieredModelIds.pro to gemini-4-argon-medium even when modelsManager is null or empty
+    const tieredInput = {
+        models: {
+            'gemini-3.8-flash-tiered': { displayName: null, model: 'MODEL_PLACEHOLDER_M322' },
+            'gemini-4-argon-medium': { displayName: 'Gemini 4 Argon (Medium)', model: 'MODEL_PLACEHOLDER_M418' }
+        },
+        tieredModelIds: {
+            flashLite: ['gemini-3.5-flash-lite'],
+            flash: ['gemini-3.8-flash-tiered'],
+            pro: ['gemini-3.8-flash-tiered']
+        }
+    };
+    const tieredResult = injectAvailableModels(tieredInput, null);
+    assert.deepEqual(tieredResult.tieredModelIds.pro, ['gemini-4-argon-medium']);
+    assert.deepEqual(tieredResult.tieredModelIds.flash, ['gemini-3.8-flash-tiered']);
+
+    // Falls back to gemini-4-argon-high when gemini-4-argon-medium is absent
+    const highFallbackInput = {
+        models: {
+            'gemini-4-argon-high': { displayName: 'Gemini 4 Argon (High)', model: 'MODEL_PLACEHOLDER_M417' }
+        },
+        tieredModelIds: {
+            pro: ['gemini-3.8-flash-tiered']
+        }
+    };
+    assert.deepEqual(injectAvailableModels(highFallbackInput, { getInjectedModels: () => [] }).tieredModelIds.pro, ['gemini-4-argon-high']);
 });
 
 test('Translation Proxy - fetchAvailableModels HTTP Interception and Placeholder Resolution', async (t) => {
@@ -470,7 +497,13 @@ test('Translation Proxy - fetchAvailableModels HTTP Interception and Placeholder
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({
                 models: {
-                    MODEL_PLACEHOLDER_M0: { displayName: 'Gemini 3.8 Flash' }
+                    MODEL_PLACEHOLDER_M0: { displayName: 'Gemini 3.8 Flash' },
+                    'gemini-4-argon-medium': { displayName: 'Gemini 4 Argon (Medium)', model: 'MODEL_PLACEHOLDER_M418' }
+                },
+                tieredModelIds: {
+                    flashLite: ['gemini-3.5-flash-lite'],
+                    flash: ['gemini-3.8-flash-tiered'],
+                    pro: ['gemini-3.8-flash-tiered']
                 },
                 agentModelSorts: [
                     {
@@ -564,6 +597,7 @@ test('Translation Proxy - fetchAvailableModels HTTP Interception and Placeholder
         assert.ok(parsed.models.MODEL_PLACEHOLDER_M592, 'Custom model must be injected');
         assert.equal(parsed.models.MODEL_PLACEHOLDER_M592.displayName, 'Fable 5.1');
         assert.equal(parsed.models.MODEL_PLACEHOLDER_M592.supportsThinking, true);
+        assert.deepEqual(parsed.tieredModelIds.pro, ['gemini-4-argon-medium']);
         assert.ok(parsed.agentModelSorts[0].groups[0].modelIds.includes('MODEL_PLACEHOLDER_M592'));
     });
 

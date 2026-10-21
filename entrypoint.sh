@@ -352,9 +352,8 @@ case "$1" in
         export AGY_HUB_PORT="${AGY_HUB_PORT}"
         export TRANSLATION_PORT="${TRANSLATION_PORT:-4405}"
 
-        # Conditionally enable translation proxy ONLY if custom models are configured.
-        # This ensures agy talks directly to Google CloudCode when no custom models are
-        # active, so a proxy failure cannot break normal operation.
+        # Enable translation proxy by default so model tier overrides (e.g. pro -> Argon)
+        # and custom model providers work out of the box unless explicitly disabled.
         HAS_CUSTOM_MODELS="false"
         if [ -f "$GEMINI_DIR/config/custom_models.json" ]; then
             HAS_CUSTOM_MODELS="$(bun -e '
@@ -369,10 +368,16 @@ case "$1" in
             ' "$GEMINI_DIR/config/custom_models.json" 2>/dev/null || echo "false")"
         fi
 
-        if [ "$HAS_CUSTOM_MODELS" = "true" ] || [ "${ENABLE_TRANSLATION_PROXY:-false}" = "true" ]; then
-            echo " 🧠 Custom Models detected: routing inference via translation proxy on port ${TRANSLATION_PORT}"
-            export CLOUDCODE_UPSTREAM_URL="${CLOUDCODE_UPSTREAM_URL:-https://daily-cloudcode-pa.googleapis.com}"
-            export CLOUD_CODE_URL="${CLOUD_CODE_URL:-http://127.0.0.1:${TRANSLATION_PORT}}"
+        ENABLE_TRANSLATION_PROXY="${ENABLE_TRANSLATION_PROXY:-true}"
+        if [ "$ENABLE_TRANSLATION_PROXY" = "true" ] || [ "$ENABLE_TRANSLATION_PROXY" = "1" ] || [ "$ENABLE_TRANSLATION_PROXY" = "yes" ] || [ "$ENABLE_TRANSLATION_PROXY" = "on" ] || [ "$HAS_CUSTOM_MODELS" = "true" ]; then
+            if [ -n "${CLOUD_CODE_URL:-}" ] && [ "${CLOUD_CODE_URL}" != "http://127.0.0.1:${TRANSLATION_PORT}" ]; then
+                echo " 🧠 Custom CLOUD_CODE_URL specified: ${CLOUD_CODE_URL}"
+                export CLOUDCODE_UPSTREAM_URL="${CLOUDCODE_UPSTREAM_URL:-$CLOUD_CODE_URL}"
+            else
+                echo " 🧠 Translation proxy enabled on port ${TRANSLATION_PORT}"
+                export CLOUDCODE_UPSTREAM_URL="${CLOUDCODE_UPSTREAM_URL:-https://daily-cloudcode-pa.googleapis.com}"
+            fi
+            export CLOUD_CODE_URL="http://127.0.0.1:${TRANSLATION_PORT}"
             export ENABLE_TRANSLATION_PROXY="true"
         elif [ -n "${CLOUD_CODE_URL:-}" ]; then
             echo " 🧠 Custom CLOUD_CODE_URL specified: ${CLOUD_CODE_URL}"
@@ -380,7 +385,7 @@ case "$1" in
             export CLOUD_CODE_URL="http://127.0.0.1:${TRANSLATION_PORT}"
             export ENABLE_TRANSLATION_PROXY="true"
         else
-            echo " ⚪ Custom Models disabled or not configured: standard Google CloudCode active"
+            echo " ⚪ Translation proxy disabled: standard Google CloudCode active"
             unset CLOUD_CODE_URL
             export ENABLE_TRANSLATION_PROXY="false"
         fi

@@ -72,10 +72,21 @@ function isFetchAvailableModels(url) {
 }
 
 /**
- * Injects custom models configured in modelsManager into the fetchAvailableModels JSON response.
+ * Injects custom models configured in modelsManager into the fetchAvailableModels JSON response,
+ * and upgrades tieredModelIds.pro to Gemini 4 Argon when available.
  */
 function injectAvailableModels(data, modelsManager) {
     if (!data || typeof data !== 'object') return data;
+
+    if (data.tieredModelIds && typeof data.tieredModelIds === 'object') {
+        const argonModelId = data.models?.['gemini-4-argon-medium']
+            ? 'gemini-4-argon-medium'
+            : (data.models?.['gemini-4-argon-high'] ? 'gemini-4-argon-high' : null);
+        if (argonModelId) {
+            data.tieredModelIds.pro = [argonModelId];
+        }
+    }
+
     if (!modelsManager) return data;
 
     const injected = modelsManager.getInjectedModels();
@@ -624,7 +635,7 @@ class TranslationProxy {
                         return;
                     }
 
-                    if (proxyRes.statusCode >= 200 && proxyRes.statusCode < 300 && this.modelsManager) {
+                    if (proxyRes.statusCode >= 200 && proxyRes.statusCode < 300) {
                         data = injectAvailableModels(data, this.modelsManager);
                     }
 
