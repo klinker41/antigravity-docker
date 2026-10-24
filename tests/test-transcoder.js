@@ -321,6 +321,53 @@ test('Stream Transcoder - Anthropic & OpenAI Event Normalization', async (t) => 
         assert.equal(normProp.properties.foo.type, 'string');
     });
 
+    await t.test('coerces stringified length and item constraints to numbers in JSON schema', () => {
+        const schema = {
+            type: 'OBJECT',
+            properties: {
+                query: {
+                    type: 'STRING',
+                    minLength: '1',
+                    maxLength: '100'
+                },
+                tags: {
+                    type: 'ARRAY',
+                    minItems: '2',
+                    maxItems: '10',
+                    items: { type: 'STRING' }
+                },
+                unparseable: {
+                    type: 'STRING',
+                    minLength: 'invalid',
+                    maxLength: 'not_a_number',
+                    minItems: 'abc',
+                    maxItems: 'xyz'
+                },
+                alreadyNumeric: {
+                    type: 'STRING',
+                    minLength: 5,
+                    maxLength: 50,
+                    minItems: 1,
+                    maxItems: 20
+                }
+            }
+        };
+
+        const normalized = normalizeJsonSchema(schema);
+        assert.equal(normalized.properties.query.minLength, 1);
+        assert.equal(normalized.properties.query.maxLength, 100);
+        assert.equal(normalized.properties.tags.minItems, 2);
+        assert.equal(normalized.properties.tags.maxItems, 10);
+        assert.equal(normalized.properties.unparseable.minLength, 'invalid');
+        assert.equal(normalized.properties.unparseable.maxLength, 'not_a_number');
+        assert.equal(normalized.properties.unparseable.minItems, 'abc');
+        assert.equal(normalized.properties.unparseable.maxItems, 'xyz');
+        assert.equal(normalized.properties.alreadyNumeric.minLength, 5);
+        assert.equal(normalized.properties.alreadyNumeric.maxLength, 50);
+        assert.equal(normalized.properties.alreadyNumeric.minItems, 1);
+        assert.equal(normalized.properties.alreadyNumeric.maxItems, 20);
+    });
+
     await t.test('correctly maps multiple parallel tool calls to the same function via FIFO queue', () => {
         const geminiParallelContents = [
             {
