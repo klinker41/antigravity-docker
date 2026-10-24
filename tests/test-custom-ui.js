@@ -477,6 +477,172 @@ test('Custom UI, Viewport & Foldable Layout', async (t) => {
             assert.equal(preventedDragStart, true, 'Should preventDefault on dragstart in sidebar on touch');
             assert.equal(stoppedDragStart, true, 'Should stopPropagation on dragstart in sidebar on touch');
         });
+
+        await t.test('Pre-init script converts plain Enter to Shift+Enter (line break) in 50/50 split mode', () => {
+            const vm = require('node:vm');
+            const { buildPreInitScript } = require('../proxy/lib/ui-injection');
+
+            const docListeners = {};
+            class FakeHTMLElement {}
+
+            let isUnfoldedViewport = true;
+            let typeaheadOpenInDom = false;
+
+            const sandbox = {
+                window: {
+                    get innerWidth() { return isUnfoldedViewport ? 800 : 1440; },
+                    get innerHeight() { return isUnfoldedViewport ? 850 : 900; },
+                    matchMedia: () => ({ matches: isUnfoldedViewport }),
+                    addEventListener: () => {},
+                    localStorage: { getItem: () => null, removeItem: () => {} },
+                },
+                navigator: { userAgent: 'Mozilla/5.0 (Linux; Android 14)', maxTouchPoints: 5 },
+                document: {
+                    readyState: 'loading',
+                    title: 'Antigravity',
+                    documentElement: {
+                        style: { setProperty: () => {}, removeProperty: () => {} },
+                        classList: {
+                            toggle: () => {},
+                            contains: (cls) => cls === 'agy-unfolded' && isUnfoldedViewport,
+                        },
+                        appendChild: () => {},
+                    },
+                    addEventListener: (type, fn, capture) => {
+                        if (!docListeners[type]) docListeners[type] = [];
+                        docListeners[type].push({ fn, capture });
+                    },
+                    getElementById: () => null,
+                    querySelector: (sel) => {
+                        if (sel.includes('Typeahead menu') && typeaheadOpenInDom) return {};
+                        return null;
+                    },
+                    querySelectorAll: () => [],
+                    createElement: () => ({
+                        style: {},
+                        getBoundingClientRect: () => ({ height: 0 }),
+                        remove: () => {},
+                    }),
+                },
+                HTMLElement: FakeHTMLElement,
+                Document: function() {},
+                HTMLDocument: function() {},
+                Object,
+                String,
+                Number,
+                Math,
+                setTimeout,
+            };
+
+            vm.runInNewContext(buildPreInitScript(), sandbox);
+
+            function fireKeyDown(eventObj) {
+                for (const l of docListeners['keydown'] || []) {
+                    l.fn(eventObj);
+                }
+            }
+
+            function makePromptTarget(attrs = {}) {
+                const defaultAttrs = {
+                    contenteditable: 'true',
+                    role: 'combobox',
+                    'aria-label': 'Message input',
+                    'aria-expanded': 'false',
+                    ...attrs,
+                };
+                const host = {
+                    tagName: 'DIV',
+                    contentEditable: 'true',
+                    getAttribute: (name) => defaultAttrs[name.toLowerCase()] ?? null,
+                    closest: (sel) => {
+                        if (sel.includes('monaco-editor')) return null;
+                        if (sel.includes('contenteditable')) return host;
+                        return null;
+                    }
+                };
+                return host;
+            }
+
+            // 1. Plain Enter in 50/50 split mode on prompt input -> sets shiftKey = true so Lexical inserts line break
+            const enterEvt1 = {
+                key: 'Enter',
+                shiftKey: false,
+                ctrlKey: false,
+                metaKey: false,
+                altKey: false,
+                target: makePromptTarget(),
+            };
+            fireKeyDown(enterEvt1);
+            assert.equal(enterEvt1.shiftKey, true, 'Plain Enter in 50/50 split mode should set shiftKey=true to add a return');
+
+            // 2. Enter when slash-command / mention typeahead menu is open (aria-expanded="true") -> leaves shiftKey = false
+            const enterEvtMenu = {
+                key: 'Enter',
+                shiftKey: false,
+                ctrlKey: false,
+                metaKey: false,
+                altKey: false,
+                target: makePromptTarget({ 'aria-expanded': 'true' }),
+            };
+            fireKeyDown(enterEvtMenu);
+            assert.equal(enterEvtMenu.shiftKey, false, 'Enter with aria-expanded="true" should not set shiftKey so autocomplete item can be selected');
+
+            // 3. Enter when Typeahead menu listbox is in DOM -> leaves shiftKey = false
+            typeaheadOpenInDom = true;
+            const enterEvtListbox = {
+                key: 'Enter',
+                shiftKey: false,
+                ctrlKey: false,
+                metaKey: false,
+                altKey: false,
+                target: makePromptTarget(),
+            };
+            fireKeyDown(enterEvtListbox);
+            assert.equal(enterEvtListbox.shiftKey, false, 'Enter with Typeahead menu listbox in DOM should not set shiftKey');
+            typeaheadOpenInDom = false;
+
+            // 4. Enter on a single-line <input> (e.g. sidebar rename or search) -> leaves shiftKey = false
+            const inputHost = {
+                tagName: 'INPUT',
+                getAttribute: (name) => name === 'type' ? 'text' : null,
+                closest: () => inputHost,
+            };
+            const enterEvtInput = {
+                key: 'Enter',
+                shiftKey: false,
+                ctrlKey: false,
+                metaKey: false,
+                altKey: false,
+                target: inputHost,
+            };
+            fireKeyDown(enterEvtInput);
+            assert.equal(enterEvtInput.shiftKey, false, 'Enter on <input> should not set shiftKey');
+
+            // 5. Ctrl+Enter in 50/50 split mode -> leaves shiftKey = false so hardware keyboard can still submit
+            const ctrlEnterEvt = {
+                key: 'Enter',
+                shiftKey: false,
+                ctrlKey: true,
+                metaKey: false,
+                altKey: false,
+                target: makePromptTarget(),
+            };
+            fireKeyDown(ctrlEnterEvt);
+            assert.equal(ctrlEnterEvt.shiftKey, false, 'Ctrl+Enter should not set shiftKey');
+
+            // 6. Plain Enter on desktop (not unfolded 50/50 mode) -> leaves shiftKey = false
+            isUnfoldedViewport = false;
+            const desktopEnterEvt = {
+                key: 'Enter',
+                shiftKey: false,
+                ctrlKey: false,
+                metaKey: false,
+                altKey: false,
+                target: makePromptTarget(),
+            };
+            fireKeyDown(desktopEnterEvt);
+            assert.equal(desktopEnterEvt.shiftKey, false, 'Plain Enter on desktop should remain untouched');
+        });
     } finally {
         proxyProc.kill('SIGTERM');
         await new Promise((resolve) => mockAgyServer.close(resolve));

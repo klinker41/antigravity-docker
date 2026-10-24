@@ -568,6 +568,42 @@ function buildPreInitScript() {
         }
     }, true);
 
+    // 11. Make Enter insert a line break instead of sending the message in 50/50 split (unfolded) mode
+    function isUnfoldedSplitMode() {
+        if (isFoldableUnfolded()) return true;
+        if (typeof document !== 'undefined' && document.documentElement && document.documentElement.classList && document.documentElement.classList.contains('agy-unfolded')) {
+            return true;
+        }
+        return false;
+    }
+
+    function handleUnfoldedEnterKeyDownCapture(e) {
+        if (!e || e.key !== 'Enter') return;
+        if (e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
+        if (!isUnfoldedSplitMode()) return;
+
+        var rawTarget = (e.target && e.target.nodeType === 3) ? e.target.parentElement : e.target;
+        var host = (rawTarget && typeof rawTarget.closest === 'function')
+            ? (rawTarget.closest('[contenteditable="true"], [role="textbox"], [role="combobox"], textarea, input') || rawTarget)
+            : rawTarget;
+        if (!host || host.tagName === 'INPUT') return;
+        if (!isMessageOrTextInput(host)) return;
+
+        // Allow Enter to select an item when the slash-command / mention typeahead menu is open
+        if (typeof host.getAttribute === 'function' && host.getAttribute('aria-expanded') === 'true') return;
+        if (typeof document !== 'undefined' && typeof document.querySelector === 'function' && document.querySelector('[aria-label="Typeahead menu"][role="listbox"]')) return;
+
+        try {
+            Object.defineProperty(e, 'shiftKey', {
+                get: function() { return true; },
+                configurable: true
+            });
+        } catch (err) {}
+    }
+
+    window.addEventListener('keydown', handleUnfoldedEnterKeyDownCapture, true);
+    document.addEventListener('keydown', handleUnfoldedEnterKeyDownCapture, true);
+
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', function() {
             applySentenceCapitalization(document.body);
