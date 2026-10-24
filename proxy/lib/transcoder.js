@@ -1273,6 +1273,9 @@ function normalizeJsonSchema(schema, isRoot = true) {
             out.additionalProperties = normalizeJsonSchema(value, false);
         } else if (key === 'required' && Array.isArray(value)) {
             out.required = value.filter(r => typeof r === 'string');
+        } else if ((key === 'minLength' || key === 'maxLength' || key === 'minItems' || key === 'maxItems') && typeof value === 'string') {
+            const parsed = parseInt(value, 10);
+            out[key] = Number.isNaN(parsed) ? value : parsed;
         } else {
             out[key] = value;
         }
